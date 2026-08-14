@@ -3,32 +3,30 @@
 
 #include <stdint.h>
 
-// 页大小
 #define PAGE_SIZE 4096
 #define PAGE_SHIFT 12
 
-// 页表项标志位
-#define PTE_PRESENT   0x001
-#define PTE_WRITE     0x002
-#define PTE_USER      0x004
-#define PTE_GLOBAL    0x100
+#define PTE_PRESENT 0x001
+#define PTE_WRITE   0x002
+#define PTE_USER    0x004
 
-// 内核虚拟地址起始（3GB）
-#define KERNEL_VIRTUAL_BASE 0xC0000000
+/* 内核空间：低 1GB (0x00000000 - 0x3FFFFFFF) */
+#define KERNEL_SPACE_START 0x00000000
+#define KERNEL_SPACE_END   0x40000000   /* 1GB 边界 */
 
-// 初始化分页（在 kmain 中调用）
+/* 用户空间：高 3GB (0x40000000 - 0xFFFFFFFF) */
+#define USER_SPACE_START   0x40000000
+#define USER_SPACE_END     0xFFFFFFFF
+
+/* 内核页目录中，低 1GB 占用前 256 个页表项（0~255） */
+#define KERNEL_PDE_COUNT 256
+
 void vmm_init(void);
 
-// 分配一个物理页并映射到指定虚拟地址
-uint32_t vmm_alloc_page(uint32_t virt);
+/* 创建用户进程页目录（复制内核的前 256 项） */
+uint32_t *vmm_create_process_page_directory(void);
 
-// 释放一个虚拟地址对应的物理页
-void vmm_free_page(uint32_t virt);
-
-// 映射物理地址到虚拟地址（手动）
-void vmm_map_page(uint32_t virt, uint32_t phys, uint32_t flags);
-
-// 获取虚拟地址对应的物理地址
-uint32_t vmm_get_phys(uint32_t virt);
+/* 在用户页目录中映射虚拟地址到物理地址 */
+void vmm_map_user_page(uint32_t *pgd, uint32_t virt, uint32_t phys, uint32_t flags);
 
 #endif

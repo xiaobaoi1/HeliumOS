@@ -1,107 +1,87 @@
 #include <vmm.h>
-#include <memory.h>
+#include <pmm.h>
 #include <printf.h>
-#include <string.h>   // 需要 memset 函数
+#include <stddef.h>
 
-// 页目录和页表的物理地址（由 PMM 分配）
-static uint32_t *page_directory = NULL;
-static uint32_t *page_table_kernel = NULL;
+extern uint32_t page_directory[1024];
 
-// 临时身份映射页表（用于开启分页瞬间）
-static uint32_t *page_table_temp = NULL;
-
-// ---------- 辅助函数 ----------
-// 设置页目录项
-static inline void set_pde(uint32_t *pde, uint32_t phys, uint32_t flags) {
-    *pde = (phys & 0xFFFFF000) | (flags & 0xFFF) | PTE_PRESENT;
-}
-
-// 设置页表项
-static inline void set_pte(uint32_t *pte, uint32_t phys, uint32_t flags) {
-    *pte = (phys & 0xFFFFF000) | (flags & 0xFFF) | PTE_PRESENT;
-}
-
-// ---------- 初始化函数 ----------
 void vmm_init(void) {
-    kprintf("[VMM] Initializing paging...\n");
+    kprintf("[VMM] Paging enabled (identity mapping for kernel).\n");
 
-    // 1. 分配物理页作为页目录
-    uint32_t pd_phys = pmm_alloc_page();
-    if (!pd_phys) {
-        kprintf("[VMM] ERROR: Failed to allocate page directory!\n");
+    uint32_t pd_phys = (uint32_t)page_directory;
+
+    /* 设置递归映射（页目录第 1023 项指向自身） */
+    page_directory[1023] = pd_phys | PTE_PRESENT | PTE_WRITE;
+
+    /* 刷新 TLB */
+    __asm__ volatile("mov %%cr3, %%eax; mov %%eax, %%cr3" :: "a"(pd_phys));
+
+    kprintf("[VMM] Kernel uses low 1GB space (0x00000000 - 0x3FFFFFFF).\n");
+    kprintf("[VMM] User space starts at 0x40000000.\n");
+}
+
+/* 创建用户进程页目录 */
+uint32_t *vmm_create_process_page_directory(void) {
+    /* 1. 分配一个物理页作为新页目录 */
+    uint32_t *new_pgd = (uint32_t*)pmm_alloc_page();
+    if (!new_pgd) {
+        kprintf("[VMM] ERROR: Failed to allocate page directory for process.\n");
+        return NULL;
+    }
+
+    /* 2. 复制内核的前 256 项（低 1GB 映射） */
+    uint32_t *kernel_pgd = (uint32_t*)page_directory;
+    for (int i = 0; i < KERNEL_PDE_COUNT; i++) {
+        new_pgd[i] = kernel_pgd[i];
+    }
+
+    /* 3. 清空用户空间部分（256~1023 项） */
+    for (int i = KERNEL_PDE_COUNT; i < 1024; i++) {
+        new_pgd[i] = 0;
+    }
+
+    kprintf("[VMM] New process page directory created at physical 0x%p.\n", (uint32_t)new_pgd);
+    return new_pgd;
+}
+
+/* 映射用户空间虚拟地址到物理地址（仅用于高 3GB 区域） */
+void vmm_map_user_page(uint32_t *pgd, uint32_t virt, uint32_t phys, uint32_t flags) {
+    if (virt < USER_SPACE_START) {
+        kprintf("[VMM] WARNING: Trying to map kernel space in user page directory.\n");
         return;
     }
-    page_directory = (uint32_t*)pd_phys;  // 注意：此时尚未开启分页，物理地址可直接访问
-    kprintf("[VMM] Page directory at physical %p\n", pd_phys);
 
-    // 2. 清零页目录（所有页表不存在）
-    memset(page_directory, 0, PAGE_SIZE);
+    uint32_t pde_idx = virt >> 22;          /* 高 10 位 */
+    uint32_t pte_idx = (virt >> 12) & 0x3FF; /* 中间 10 位 */
 
-    // 3. 分配物理页作为内核页表（映射 0xC0000000 以上的 4MB 空间）
-    uint32_t pt_phys = pmm_alloc_page();
-    if (!pt_phys) {
-        kprintf("[VMM] ERROR: Failed to allocate kernel page table!\n");
-        return;
-    }
-    page_table_kernel = (uint32_t*)pt_phys;
-    kprintf("[VMM] Kernel page table at physical %p\n", pt_phys);
-    memset(page_table_kernel, 0, PAGE_SIZE);
+    uint32_t *pde = &pgd[pde_idx];
+    uint32_t *ptable = NULL;
 
-    // 4. 建立内核页表映射：虚拟地址 0xC0000000 ~ 0xC03FFFFF 映射到物理 0x00000000 ~ 0x003FFFFF
-    //    注意：内核自身在物理 0x100000，但为了简化，我们暂时映射整个前 4MB
-    for (int i = 0; i < 1024; i++) {
-        uint32_t phys = i * PAGE_SIZE;
-        uint32_t flags = PTE_WRITE;  // 内核可读可写，不设 PTE_USER（仅 Ring 0）
-        set_pte(&page_table_kernel[i], phys, flags);
-    }
-
-    // 5. 将内核页表填入页目录（第 768 项对应 0xC0000000 >> 22）
-    //    768 = 0xC0000000 / 4MB
-    set_pde(&page_directory[768], pt_phys, PTE_WRITE);
-
-    // 6. 建立临时身份映射（用于开启分页瞬间的过渡）
-    //    我们分配另一个物理页作为临时页表，映射低 4MB
-    uint32_t temp_phys = pmm_alloc_page();
-    if (!temp_phys) {
-        kprintf("[VMM] ERROR: Failed to allocate temp page table!\n");
-        return;
-    }
-    page_table_temp = (uint32_t*)temp_phys;
-    kprintf("[VMM] Temp page table at physical %p\n", temp_phys);
-    memset(page_table_temp, 0, PAGE_SIZE);
-
-    // 映射低 4MB（身份映射）
-    for (int i = 0; i < 1024; i++) {
-        uint32_t phys = i * PAGE_SIZE;
-        uint32_t flags = PTE_WRITE;
-        set_pte(&page_table_temp[i], phys, flags);
+    /* 检查页表是否存在 */
+    if (*pde & PTE_PRESENT) {
+        /* 页表已存在，获取其物理地址 */
+        uint32_t ptable_phys = *pde & 0xFFFFF000;
+        ptable = (uint32_t*)ptable_phys;   /* 因为内核是平坦映射，物理地址可直接访问 */
+    } else {
+        /* 分配一个新的页表 */
+        uint32_t ptable_phys = pmm_alloc_page();
+        if (!ptable_phys) {
+            kprintf("[VMM] ERROR: Failed to allocate page table.\n");
+            return;
+        }
+        /* 清零页表（物理地址直接访问） */
+        uint32_t *ptable_virt = (uint32_t*)ptable_phys;
+        for (int i = 0; i < 1024; i++) {
+            ptable_virt[i] = 0;
+        }
+        /* 设置页目录项 */
+        *pde = ptable_phys | PTE_PRESENT | PTE_WRITE | PTE_USER;
+        ptable = ptable_virt;
     }
 
-    // 将临时页表填入页目录第 0 项（对应虚拟地址 0x00000000 ~ 0x003FFFFF）
-    set_pde(&page_directory[0], temp_phys, PTE_WRITE);
+    /* 设置页表项 */
+    ptable[pte_idx] = (phys & 0xFFFFF000) | (flags & 0xFFF) | PTE_PRESENT;
 
-    // 7. 【重要】页目录自我映射（递归映射），方便后续修改页表
-    //    将页目录自身映射到虚拟地址 0xFFFFF000（最后 4KB）
-    set_pde(&page_directory[1023], pd_phys, PTE_WRITE);
-
-    kprintf("[VMM] Page tables initialized.\n");
-}
-
-// ---------- 后续 API 实现（第二阶段再补全） ----------
-uint32_t vmm_alloc_page(uint32_t virt) {
-    // 将在开启分页后实现
-    return 0;
-}
-
-void vmm_free_page(uint32_t virt) {
-    // 将在开启分页后实现
-}
-
-void vmm_map_page(uint32_t virt, uint32_t phys, uint32_t flags) {
-    // 将在开启分页后实现
-}
-
-uint32_t vmm_get_phys(uint32_t virt) {
-    // 将在开启分页后实现
-    return 0;
+    /* 刷新 TLB（可选） */
+    __asm__ volatile("invlpg (%0)" :: "r"(virt));
 }
