@@ -20,10 +20,9 @@ _start:
     ; 设置栈指针 (使用平坦地址，栈在 .bss 段后)
     mov esp, stack_top
 
-    ; 压入 Multiboot2 信息结构指针 (GRUB 传入 EBX)
-    push ebx
-
-    ; 调用内核主函数
+    ; 按照 cdecl 调用约定，参数从右向左压栈
+    push ebx    ; 压入 multiboot2_info 地址 (第二个参数，addr)
+    push eax    ; 压入 magic (第一个参数，magic)
     call kmain
 
     ; 如果 kmain 返回，死循环
