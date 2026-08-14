@@ -103,8 +103,14 @@ void pmm_init(uint32_t multiboot_info_addr) {
                         }
                     }
                 } else {
+                    uint64_t base = entry->addr;
+                    uint64_t len = entry->len;
                     serial_write_string("[PMM] Reserved region, type=");
                     print_hex(entry->type);
+                    serial_write_string(", base=");
+                    print_hex64(base);
+                    serial_write_string(", len=");
+                    print_hex64(len);
                     serial_write_string("\n");
                 }
                 entry_ptr += entry_size; // 按 entry_size 步进
@@ -132,6 +138,15 @@ void pmm_init(uint32_t multiboot_info_addr) {
     uint32_t bitmap_start = (uint32_t)bitmap;
     uint32_t bitmap_end = bitmap_start + BITMAP_SIZE;
     for (uint32_t addr = bitmap_start; addr < bitmap_end; addr += PAGE_SIZE) {
+        uint32_t idx = addr >> PAGE_SHIFT;
+        if (bitmap_test(idx) == 0) {
+            bitmap_set(idx);
+            free_page_count--;
+        }
+    }
+
+    // 5. 强制保留1MB以下的
+    for (uint32_t addr = 0; addr < 0x100000; addr += PAGE_SIZE) {
         uint32_t idx = addr >> PAGE_SHIFT;
         if (bitmap_test(idx) == 0) {
             bitmap_set(idx);

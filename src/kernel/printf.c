@@ -2,6 +2,7 @@
 #include <serial.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 // ---------- 内部字符输出（绑定到串口） ----------
 static void putc(char c) {

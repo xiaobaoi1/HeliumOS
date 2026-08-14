@@ -1,32 +1,37 @@
 #include <screen.h>
 #include <serial.h>
 #include <memory.h>
+#include <printf.h>
 #include <stdint.h>
 
 void kmain(uint32_t magic, uint32_t addr) {
     screen_init();
     serial_init();
 
-    serial_write_string("HeliumOS Kernel started.\n");
+    kprintf("========================================\n");
+    kprintf(" HeliumOS Kernel Started!\n");
+    kprintf("========================================\n");
 
-    // 1. 初始化物理内存管理器（传入 GRUB 的内存信息地址）
+    // 打印 GRUB 传入参数
+    kprintf("Magic: 0x%x, Multiboot2 Info Addr: 0x%x\n", magic, addr);
+
+    // 初始化物理内存管理器
     pmm_init(addr);
 
-    // 2. 测试分配一页
+    // 测试分配一页并打印详细信息
     uint32_t test_page = pmm_alloc_page();
     if (test_page) {
-        serial_write_string("[TEST] Allocated physical page at: 0x");
-        // 简易输出十六进制（后续会用 printf 替代）
-        char hex[9];
-        for (int i = 7; i >= 0; i--) {
-            uint8_t nibble = (test_page >> (i * 4)) & 0xF;
-            hex[7-i] = (nibble < 10) ? ('0' + nibble) : ('A' + nibble - 10);
-        }
-        hex[8] = '\0';
-        serial_write_string(hex);
-        serial_write_string("\n");
+        kprintf("[TEST] Allocated physical page at: 0x%p\n", test_page);
+        kprintf("[TEST] Free pages remaining: %d\n", pmm_get_free_count());
+        
+        // 释放回去
         pmm_free_page(test_page);
+        kprintf("[TEST] Freed page. Free pages: %d\n", pmm_get_free_count());
+    } else {
+        kprintf("[TEST] ERROR: Failed to allocate page!\n");
     }
+
+    kprintf("System ready. Entering idle loop.\n");
 
     while (1) {
         __asm__ volatile("hlt");
