@@ -1,12 +1,15 @@
 #include <screen.h>
 #include <serial.h>
-#include <memory.h>
+#include <pmm.h>
 #include <printf.h>
 #include <stdint.h>
+#include <vmm.h>
 
 void kmain(uint32_t magic, uint32_t addr) {
     screen_init();
+    kprintf("[KERNEL] Screan initialized.\n");
     serial_init();
+    kprintf("[KERNEL] Serial initialized.\n");
 
     kprintf("========================================\n");
     kprintf(" HeliumOS Kernel Started!\n");
@@ -17,11 +20,15 @@ void kmain(uint32_t magic, uint32_t addr) {
 
     // 初始化物理内存管理器
     pmm_init(addr);
+    kprintf("[KERNEL] PMM initialized.\n");
+    vmm_init();
+    kprintf("[KERNEL] VMM initialized.\n");
+
 
     // 测试分配一页并打印详细信息
     uint32_t test_page = pmm_alloc_page();
     if (test_page) {
-        kprintf("[TEST] Allocated physical page at: 0x%p\n", test_page);
+        kprintf("[TEST] Allocated physical page at: %p\n", test_page);
         kprintf("[TEST] Free pages remaining: %d\n", pmm_get_free_count());
         
         // 释放回去
