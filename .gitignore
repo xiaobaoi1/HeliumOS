@@ -1,0 +1,10 @@
+# 编译输出
+build/
+*.o
+*.elf
+*.iso
+*.img
+
+# VS Code 本地配置（可选，如果你不想提交 .vscode 文件夹）
+.vscode/
+.DS_Store
