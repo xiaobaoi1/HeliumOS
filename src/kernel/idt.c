@@ -1,4 +1,5 @@
 #include <idt.h>
+#include <io.h>
 #include <printf.h>
 #include <string.h>
 

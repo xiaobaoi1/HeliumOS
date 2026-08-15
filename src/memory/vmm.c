@@ -85,3 +85,21 @@ void vmm_map_user_page(uint32_t *pgd, uint32_t virt, uint32_t phys, uint32_t fla
     /* 刷新 TLB（可选） */
     __asm__ volatile("invlpg (%0)" :: "r"(virt));
 }
+
+uint32_t vmm_get_phys(uint32_t *pgd, uint32_t virt) {
+    uint32_t pde_idx = virt >> 22;
+    uint32_t pte_idx = (virt >> 12) & 0x3FF;
+
+    uint32_t pde = pgd[pde_idx];
+    if (!(pde & PTE_PRESENT)) {
+        return 0;
+    }
+
+    uint32_t *ptable = (uint32_t*)(pde & 0xFFFFF000);  // 物理地址直接访问（平坦映射）
+    uint32_t pte = ptable[pte_idx];
+    if (!(pte & PTE_PRESENT)) {
+        return 0;
+    }
+
+    return (pte & 0xFFFFF000) + (virt & 0xFFF);
+}

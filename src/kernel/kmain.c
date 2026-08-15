@@ -4,12 +4,13 @@
 #include <vmm.h>
 #include <gdt.h>
 #include <tss.h>
+#include <idt.h>
 #include <task.h>
+#include <ata.h>
+#include <fat32.h>
+#include <elf.h>
 #include <printf.h>
 #include <stdint.h>
-
-/* 硬编码用户程序：jmp $ (死循环) */
-static uint8_t user_program[] = { 0xEB, 0xFE };
 
 void kmain(uint32_t magic, uint32_t addr) {
     screen_init();
@@ -22,45 +23,44 @@ void kmain(uint32_t magic, uint32_t addr) {
     pmm_init(addr);
     gdt_init();
     tss_init();
-
-    /* 初始化虚拟内存管理 */
     vmm_init();
     idt_init();
 
-    /* 创建一个用户进程页目录 */
+    // 初始化 ATA
+    ata_init();
+
+    // 初始化 FAT32（分区从 LBA 2048 开始）
+    fat32_init(2048);
+
+    // 创建用户进程页目录
     uint32_t *user_pgd = vmm_create_process_page_directory();
     if (!user_pgd) {
-        kprintf("[KERNEL] ERROR: Failed to create user page directory.\n");
+        kprintf("[KERNEL] Failed to create user page directory.\n");
         while (1) __asm__ volatile("hlt");
     }
 
-    /* 在用户空间中映射代码页（将硬编码程序放到物理页） */
-    uint32_t code_phys = pmm_alloc_page();
-    if (!code_phys) {
-        kprintf("[KERNEL] ERROR: Failed to allocate code page.\n");
-        while (1) __asm__ volatile("hlt");
+    // 从硬盘加载 proc.elf
+    uint32_t entry_point = load_elf_from_disk("/PROC.ELF", user_pgd);
+    if (!entry_point) {
+        kprintf("[KERNEL] Failed to load /PROC.ELF, fallback to hardcoded program.\n");
+        // 回退到硬编码 jmp $
+        uint32_t code_phys = pmm_alloc_page();
+        if (code_phys) {
+            uint8_t *code_virt = (uint8_t*)code_phys;
+            code_virt[0] = 0xEB;
+            code_virt[1] = 0xFE;
+            vmm_map_user_page(user_pgd, 0x40000000, code_phys, PTE_WRITE | PTE_USER);
+            entry_point = 0x40000000;
+        }
     }
 
-    /* 复制用户程序到物理页（物理地址直接访问） */
-    uint32_t *code_virt = (uint32_t*)code_phys;
-    for (int i = 0; i < sizeof(user_program); i++) {
-        ((uint8_t*)code_virt)[i] = user_program[i];
+    if (entry_point) {
+        struct task *task = task_create(entry_point, user_pgd);
+        if (task) {
+            kprintf("[KERNEL] Running user process at entry 0x%p\n", entry_point);
+            task_run_first(task);
+        }
     }
-
-    /* 在用户页目录中映射代码页到 0x40000000（用户空间起始地址） */
-    vmm_map_user_page(user_pgd, 0x40000000, code_phys, PTE_WRITE | PTE_USER);
-
-    /* 创建进程 */
-    struct task *task = task_create(0x40000000, user_pgd);
-    if (!task) {
-        kprintf("[KERNEL] ERROR: Failed to create task.\n");
-        while (1) __asm__ volatile("hlt");
-    }
-
-    kprintf("[KERNEL] Running first user process...\n");
-
-    /* 切换到用户态运行 */
-    task_run_first(task);
 
     while (1) __asm__ volatile("hlt");
 }
