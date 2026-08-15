@@ -6,6 +6,7 @@
 /* 外部符号：中断入口表（由汇编提供） */
 extern uint32_t isr_entry_table[32];
 extern uint32_t irq_entry_table[16];
+extern uint32_t isr80;  // int 0x80 入口
 
 static struct idt_entry idt[256];
 static struct idt_ptr idt_ptr;
@@ -63,15 +64,18 @@ void idt_init(void) {
     /* 清空IDT */
     memset(idt, 0, sizeof(idt));
 
-    /* 设置异常门 0-31 */
+    /* 设置异常门 0-31 (Ring 0) */
     for (int i = 0; i < 32; i++) {
-        idt_set_gate(i, isr_entry_table[i], 0x08, 0x8E);  // 中断门，Ring 0
+        idt_set_gate(i, isr_entry_table[i], 0x08, 0x8E);
     }
 
-    /* 设置IRQ门 32-47 */
+    /* 设置IRQ门 32-47 (Ring 0) */
     for (int i = 0; i < 16; i++) {
         idt_set_gate(32 + i, irq_entry_table[i], 0x08, 0x8E);
     }
+
+    /* 设置系统调用门 int 0x80 (Ring 3 允许) */
+    idt_set_gate(0x80, (uint32_t)&isr80, 0x08, 0xEE);  // P=1, DPL=3, 32位中断门
 
     /* 加载IDT */
     idt_load();

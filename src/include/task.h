@@ -22,5 +22,6 @@ void task_init(void);
 struct task *task_create(uint32_t entry_point, uint32_t *pgd);
 void task_switch_to(struct task *task);
 void task_run_first(struct task *task);
+uint32_t get_current_pid(void);
 
 #endif

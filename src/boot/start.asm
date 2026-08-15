@@ -1,4 +1,7 @@
-; 启动汇编：身份映射低 4MB，开启分页，原地进入 kmain
+; ====================================================================
+; 启动汇编：Multiboot2 头，身份映射，开启分页，进入 kmain
+; 同时包含所有中断入口（异常、IRQ、系统调用）
+; ====================================================================
 
 %define PAGE_SIZE 4096
 
@@ -23,29 +26,25 @@ _start:
     mov [magic_phys], eax
     mov [addr_phys], ebx
 
-    ; 临时栈
     mov esp, temp_stack_top
 
     ; 建立身份映射页表（0~4MB）
     mov edi, page_directory
     mov esi, page_table_identity
 
-    ; 清零页目录
     mov ecx, PAGE_SIZE / 4
     xor eax, eax
     rep stosd
 
-    ; 填充页表（1024 项）
     mov edi, esi
     xor eax, eax
     mov ecx, 1024
 .identity_loop:
-    or eax, 0x003          ; Present + Write
+    or eax, 0x003
     stosd
     add eax, PAGE_SIZE
     loop .identity_loop
 
-    ; 页目录第 0 项指向页表
     mov edi, page_directory
     mov eax, esi
     or eax, 0x003
@@ -58,9 +57,7 @@ _start:
     or eax, 0x80000000
     mov cr0, eax
 
-    ; 无需远跳转，原地继续（身份映射生效）
-
-    ; 设置正式栈（高一些，避开 .bss）
+    ; 设置正式栈
     mov esp, stack_top
 
     push dword [addr_phys]
@@ -72,12 +69,10 @@ _start:
     jmp $
 
 ; ============================================================
-; 中断处理入口（由IDT调用）
+; 中断入口
 ; ============================================================
 
-section .text
-
-; 宏：定义异常入口（无错误码） 
+; 宏：定义异常入口（无错误码）
 %macro ISR_NOERR 1
 global isr%1
 isr%1:
@@ -87,7 +82,7 @@ isr%1:
     jmp isr_common_stub
 %endmacro
 
-; 宏：定义异常入口（有错误码） 
+; 宏：定义异常入口（有错误码）
 %macro ISR_ERR 1
 global isr%1
 isr%1:
@@ -96,7 +91,7 @@ isr%1:
     jmp isr_common_stub
 %endmacro
 
-; 定义 0-31 号异常 
+; 0-31 号异常
 ISR_NOERR 0
 ISR_NOERR 1
 ISR_NOERR 2
@@ -130,7 +125,7 @@ ISR_NOERR 29
 ISR_NOERR 30
 ISR_NOERR 31
 
-; IRQ 定义 (0-15) 
+; IRQ 入口 (32-47)
 %macro IRQ 2
 global irq%1
 irq%1:
@@ -157,7 +152,15 @@ IRQ 13, 45
 IRQ 14, 46
 IRQ 15, 47
 
-; 通用异常处理（调用C函数 isr_handler） 
+; ===== 系统调用入口 (int 0x80) =====
+global isr80
+isr80:
+    cli
+    push byte 0
+    push byte 0x80
+    jmp syscall_common_stub
+
+; ===== 通用异常处理 =====
 extern isr_handler
 isr_common_stub:
     pusha
@@ -165,13 +168,13 @@ isr_common_stub:
     push es
     push fs
     push gs
-    mov ax, 0x10          ; 内核数据段
+    mov ax, 0x10
     mov ds, ax
     mov es, ax
     mov fs, ax
     mov gs, ax
     cld
-    push esp              ; 传递寄存器结构指针
+    push esp
     call isr_handler
     add esp, 4
     pop gs
@@ -179,10 +182,10 @@ isr_common_stub:
     pop es
     pop ds
     popa
-    add esp, 8            ; 清除错误码和中断号
+    add esp, 8
     iret
 
-; 通用IRQ处理（调用C函数 irq_handler） 
+; ===== 通用 IRQ 处理 =====
 extern irq_handler
 irq_common_stub:
     pusha
@@ -207,9 +210,38 @@ irq_common_stub:
     add esp, 8
     iret
 
+; ===== 系统调用处理 (调用 C 函数) =====
+extern isr_syscall_handler
+syscall_common_stub:
+    pusha
+    push ds
+    push es
+    push fs
+    push gs
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    cld
+    push esp
+    call isr_syscall_handler
+    add esp, 4
+    pop gs
+    pop fs
+    pop es
+    pop ds
+    popa
+    add esp, 8
+    iret
+
+; ============================================================
+; 数据段：中断入口表（供 C 使用）
+; ============================================================
 section .data
 global isr_entry_table
 isr_entry_table:
+    ; 32 个异常入口
     dd isr0, isr1, isr2, isr3, isr4, isr5, isr6, isr7
     dd isr8, isr9, isr10, isr11, isr12, isr13, isr14, isr15
     dd isr16, isr17, isr18, isr19, isr20, isr21, isr22, isr23
@@ -217,18 +249,21 @@ isr_entry_table:
 
 global irq_entry_table
 irq_entry_table:
+    ; 16 个 IRQ 入口
     dd irq0, irq1, irq2, irq3, irq4, irq5, irq6, irq7
     dd irq8, irq9, irq10, irq11, irq12, irq13, irq14, irq15
 
-section .data
-align 4
-magic_phys: dd 0
-addr_phys:  dd 0
+; 系统调用入口单独导出（在 idt.c 中引用）
+global isr80
 
+; ============================================================
+; BSS 段
+; ============================================================
 section .bss
 align 4096
 global page_directory
 page_directory:     resb 4096
+
 global page_table_identity
 page_table_identity: resb 4096
 
@@ -239,3 +274,8 @@ temp_stack_top:
 stack_bottom:
     resb 16384
 stack_top:
+
+section .data
+align 4
+magic_phys: dd 0
+addr_phys:  dd 0

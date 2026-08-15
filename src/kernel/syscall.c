@@ -4,14 +4,6 @@
 #include <task.h>
 #include <stdint.h>
 
-/* 寄存器结构（由汇编传递） */
-struct registers {
-    uint32_t gs, fs, es, ds;
-    uint32_t edi, esi, ebp, esp, ebx, edx, ecx, eax;
-    uint32_t int_no, err_code;
-    uint32_t eip, cs, eflags, user_esp, user_ss;
-};
-
 /* 系统调用：write(int fd, const char *buf, size_t count) */
 static int sys_write(int fd, const char *buf, uint32_t count) {
     if (fd != 1) {  /* 仅支持 stdout */
