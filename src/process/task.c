@@ -7,9 +7,8 @@
 
 static uint32_t next_pid = 1;
 
-/* 创建用户进程 */
 struct task *task_create(uint32_t entry_point, uint32_t *pgd) {
-    struct task *task = (struct task*)pmm_alloc_page();  /* 分配一页存放 PCB */
+    struct task *task = (struct task*)pmm_alloc_page();
     if (!task) {
         kprintf("[TASK] ERROR: Failed to allocate PCB.\n");
         return NULL;
@@ -18,81 +17,78 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd) {
     task->pid = next_pid++;
     task->state = TASK_STATE_READY;
     task->pgd = pgd;
+    task->entry_point = entry_point;
 
-    /* 分配内核栈（物理地址，4KB） */
+    // 内核栈（1页）
     task->kernel_stack_phys = pmm_alloc_page();
     if (!task->kernel_stack_phys) {
         kprintf("[TASK] ERROR: Failed to allocate kernel stack.\n");
         return NULL;
     }
 
-    /* 分配用户栈（物理地址，4KB） */
-    task->user_stack_phys = pmm_alloc_page();
-    if (!task->user_stack_phys) {
-        kprintf("[TASK] ERROR: Failed to allocate user stack.\n");
+    // ===== 用户栈：分配两页物理内存，映射到连续虚拟地址 =====
+    // 虚拟地址范围：0x7FFFC000 ~ 0x7FFFE000（8KB 栈空间）
+    // 栈顶在 0x7FFFE000，向下增长，栈底在 0x7FFFC000
+    // 下方 0x7FFFB000 未映射，作为保护页
+
+    uint32_t stack_phys_low = pmm_alloc_page();   // 映射到 0x7FFFC000
+    uint32_t stack_phys_high = pmm_alloc_page();  // 映射到 0x7FFFD000
+    if (!stack_phys_low || !stack_phys_high) {
+        kprintf("[TASK] ERROR: Failed to allocate user stack pages.\n");
         return NULL;
     }
 
-    /* 用户栈虚拟地址（放在用户空间顶端往下 4KB） */
+    // 用户栈虚拟地址（栈顶）
     task->user_stack_virt = 0x7FFFE000;
-    task->entry_point = entry_point;
+    task->user_stack_phys = stack_phys_high;  // 仅保存高页地址（用于后续释放）
 
-    /* 在用户页目录中映射用户栈 */
-    vmm_map_user_page(pgd, task->user_stack_virt, task->user_stack_phys, PTE_WRITE | PTE_USER);
+    // 映射两页到用户空间
+    vmm_map_user_page(pgd, 0x7FFFC000, stack_phys_low, PTE_WRITE | PTE_USER);
+    vmm_map_user_page(pgd, 0x7FFFD000, stack_phys_high, PTE_WRITE | PTE_USER);
 
-    kprintf("[TASK] Process %d created. Entry: 0x%p, User stack: 0x%p\n",
-            task->pid, entry_point, task->user_stack_virt);
+    kprintf("[TASK] Process %d created. Entry: 0x%p, User stack: 0x%p (8KB, guard page below), Kernel Stack: 0x%p\n",
+            task->pid, entry_point, task->user_stack_virt, task->kernel_stack_phys);
 
     return task;
 }
 
-/* 切换到用户态运行第一个进程 */
 void task_run_first(struct task *task) {
-    if (!task) {
-        kprintf("[TASK] ERROR: No task to run.\n");
-        return;
-    }
+    if (!task) return;
 
-    kprintf("[TASK] Switching to user process %d...\n", task->pid);
+    kprintf("[TASK] Switching to user process %d...(Entry: %p)\n", task->pid, task->entry_point);
 
-    /* 设置 TSS 内核栈（用于中断/系统调用时切换） */
     uint32_t kernel_stack_top = task->kernel_stack_phys + 4096;
     tss_set_kernel_stack(kernel_stack_top);
 
-    /* 切换到进程的页目录 */
     uint32_t pd_phys = (uint32_t)task->pgd;
     __asm__ volatile("mov %0, %%cr3" :: "r"(pd_phys));
 
-    /* 构建中断返回帧（伪造一个从中断返回的现场） */
-    /* 注意：这里直接使用内联汇编跳转到用户态 */
+    // 栈顶（向下增长，初始 esp 指向栈顶）
+    uint32_t user_esp = task->user_stack_virt;
+
+    kprintf("[TASK] Before iret: entry_point=0x%x, user_esp=0x%x, kernel_stack=0x%x\n",
+        task->entry_point, user_esp, kernel_stack_top);
 
     __asm__ volatile(
-        /* 禁用中断 */
         "cli\n"
-
-        /* 设置用户态段寄存器 */
         "mov $0x23, %%ax\n"
         "mov %%ax, %%ds\n"
         "mov %%ax, %%es\n"
         "mov %%ax, %%fs\n"
         "mov %%ax, %%gs\n"
-
-        /* 用 iret 切换到用户态 */
-        "push $0x23\n"              /* SS (用户数据段) */
-        "push %0\n"                 /* ESP (用户栈) */
+        "push $0x23\n"              /* SS */
+        "push %0\n"                 /* ESP */
         "pushf\n"
         "pop %%eax\n"
-        "or $0x200, %%eax\n"        /* 设置 IF 标志 */
-        // "and $0xFFFFFDFF, %%eax\n"
+        "or $0x200, %%eax\n"        /* IF = 1 */
         "push %%eax\n"              /* EFLAGS */
-        "push $0x1B\n"              /* CS (用户代码段) */
-        "push %1\n"                 /* EIP (入口点) */
+        "push $0x1B\n"              /* CS */
+        "push %1\n"                 /* EIP */
         "iret\n"
         :
-        : "r"(task->user_stack_virt + 4096 - 4),  /* ESP (栈顶) */
-          "r"(task->entry_point)                  /* EIP */
+        : "r"(user_esp),
+          "r"(task->entry_point)
         : "eax", "memory"
     );
-
-    /* 永远不会执行到这里 */
+    while (1); /* never reached */
 }

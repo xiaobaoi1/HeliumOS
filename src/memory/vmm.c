@@ -81,6 +81,8 @@ void vmm_map_user_page(uint32_t *pgd, uint32_t virt, uint32_t phys, uint32_t fla
 
     /* 设置页表项 */
     ptable[pte_idx] = (phys & 0xFFFFF000) | (flags & 0xFFF) | PTE_PRESENT;
+    kprintf("[VMM] Map: virt 0x%x -> phys 0x%x, PDE=0x%x, PTE=0x%x\n",
+        virt, phys, *pde, ptable[pte_idx]);
 
     /* 刷新 TLB（可选） */
     __asm__ volatile("invlpg (%0)" :: "r"(virt));
