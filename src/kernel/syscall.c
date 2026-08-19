@@ -25,6 +25,16 @@ uint32_t get_current_pid(void) {
 static void sys_exit(int status) {
     kprintf("[SYSCALL] Process %d exited with status %d\n", 
             get_current_pid(), status);
+    
+    struct task *current = get_current_task();
+    if (current) {
+        task_exit(current);   // 释放资源
+    }
+    
+    // 切换到下一个进程
+    schedule();
+    
+    // 如果 schedule 返回（没有其他进程），进入空闲循环
     while (1) __asm__("cli; hlt");
 }
 

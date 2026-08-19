@@ -127,3 +127,50 @@ struct task *get_ready_queue_head(void) { return ready_queue_head; }
 struct task *get_ready_queue_tail(void) { return ready_queue_tail; }
 void set_ready_queue_head(struct task *h) { ready_queue_head = h; }
 void set_ready_queue_tail(struct task *t) { ready_queue_tail = t; }
+
+
+/* 释放进程的所有资源 */
+void task_exit(struct task *task) {
+    if (!task) return;
+
+    kprintf("[TASK] Process %d exiting...\n", task->pid);
+
+    /* 1. 释放页目录及所有页表（用户空间映射） */
+    if (task->pgd) {
+        // 遍历页目录，释放用户空间（高 3GB）的页表
+        uint32_t *pgd = task->pgd;
+        for (int i = KERNEL_PDE_COUNT; i < 1024; i++) {
+            if (pgd[i] & PTE_PRESENT) {
+                uint32_t pt_phys = pgd[i] & 0xFFFFF000;
+                uint32_t *pt = (uint32_t*)pt_phys;
+                // 释放页表中的物理页
+                for (int j = 0; j < 1024; j++) {
+                    if (pt[j] & PTE_PRESENT) {
+                        uint32_t page_phys = pt[j] & 0xFFFFF000;
+                        pmm_free_page(page_phys);
+                    }
+                }
+                // 释放页表本身
+                pmm_free_page(pt_phys);
+            }
+        }
+        // 释放页目录本身
+        pmm_free_page((uint32_t)task->pgd);
+        task->pgd = NULL;
+    }
+
+    /* 2. 释放内核栈 */
+    if (task->kernel_stack_phys) {
+        pmm_free_page(task->kernel_stack_phys);
+        task->kernel_stack_phys = 0;
+    }
+
+    /* 3. 清空用户栈指针 */
+    task->user_stack_phys = 0;
+
+    /* 4. 释放 PCB 本身 */
+    pmm_free_page((uint32_t)task);
+    set_current_task(0);
+
+    kprintf("[TASK] Process %d resources released.\n", task->pid);
+}

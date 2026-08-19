@@ -38,4 +38,7 @@ void scheduler_start(void) __attribute__((noreturn));
 void enqueue_task(struct task *task);
 struct task *dequeue_task(void);
 
+/* 进程退出（释放资源） */
+void task_exit(struct task *task);
+
 #endif

@@ -27,6 +27,8 @@ void irq_handler(struct registers *regs) {
             if (current->time_slice == 0) {
                 schedule();  // 可能触发 switch_to，不会返回
             }
+        }else{
+            schedule();
         }
     }
 }
