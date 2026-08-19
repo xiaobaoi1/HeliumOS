@@ -40,7 +40,7 @@ uint32_t *vmm_create_process_page_directory(void) {
         new_pgd[i] = 0;
     }
 
-    kprintf("[VMM] New process page directory created at physical 0x%p.\n", (uint32_t)new_pgd);
+    kprintf("[VMM] New process page directory created at physical %p.\n", (uint32_t)new_pgd);
     return new_pgd;
 }
 

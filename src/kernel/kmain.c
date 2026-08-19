@@ -26,41 +26,70 @@ void kmain(uint32_t magic, uint32_t addr) {
     vmm_init();
     idt_init();
 
-    // 初始化 ATA
     ata_init();
-
-    // 初始化 FAT32（分区从 LBA 2048 开始）
     fat32_init(2048);
 
-    // 创建用户进程页目录
-    uint32_t *user_pgd = vmm_create_process_page_directory();
-    if (!user_pgd) {
-        kprintf("[KERNEL] Failed to create user page directory.\n");
-        while (1) __asm__ volatile("hlt");
-    }
+    /* 创建两个进程 */
+    {
+        uint32_t *pgd1 = vmm_create_process_page_directory();
+        if (!pgd1) {
+            kprintf("[KERNEL] Failed to create page directory for process 1.\n");
+            while (1) __asm__("hlt");
+        }
 
-    // 从硬盘加载 proc.elf
-    uint32_t entry_point = load_elf_from_disk("/PROC.ELF", user_pgd);
-    if (!entry_point) {
-        kprintf("[KERNEL] Failed to load /PROC.ELF, fallback to hardcoded program.\n");
-        // 回退到硬编码 jmp $
-        uint32_t code_phys = pmm_alloc_page();
-        if (code_phys) {
-            uint8_t *code_virt = (uint8_t*)code_phys;
-            code_virt[0] = 0xEB;
-            code_virt[1] = 0xFE;
-            vmm_map_user_page(user_pgd, 0x40000000, code_phys, PTE_WRITE | PTE_USER);
-            entry_point = 0x40000000;
+        uint32_t entry1 = load_elf_from_disk("/PROC.ELF", pgd1);
+        if (!entry1) {
+            /* 回退到硬编码 jmp $ */
+            uint32_t phys = pmm_alloc_page();
+            if (phys) {
+                ((uint8_t*)phys)[0] = 0xEB;
+                ((uint8_t*)phys)[1] = 0xFE;
+                vmm_map_user_page(pgd1, 0x40000000, phys, PTE_WRITE | PTE_USER);
+                entry1 = 0x40000000;
+            }
+        }
+
+        if (entry1) {
+            struct task *task = task_create(entry1, pgd1);
+            if (!task) {
+                kprintf("[KERNEL] Failed to create task 1.\n");
+                while (1) __asm__("hlt");
+            }
         }
     }
 
-    if (entry_point) {
-        struct task *task = task_create(entry_point, user_pgd);
-        if (task) {
-            kprintf("[KERNEL] Running user process at entry 0x%p\n", entry_point);
-            task_run_first(task);
+
+    {
+        uint32_t *pgd2 = vmm_create_process_page_directory();
+        if (!pgd2) {
+            kprintf("[KERNEL] Failed to create page directory for process2.\n");
+            while (1) __asm__("hlt");
+        }
+
+        uint32_t entry = load_elf_from_disk("/PROC2.ELF", pgd2);
+        if (!entry) {
+            /* 回退到硬编码 jmp $ */
+            uint32_t phys = pmm_alloc_page();
+            if (phys) {
+                ((uint8_t*)phys)[0] = 0xEB;
+                ((uint8_t*)phys)[1] = 0xFE;
+                vmm_map_user_page(pgd2, 0x40000000, phys, PTE_WRITE | PTE_USER);
+                entry = 0x40000000;
+            }
+        }
+
+        if (entry) {
+            struct task *task = task_create(entry, pgd2);
+            if (!task) {
+                kprintf("[KERNEL] Failed to create task 2.\n");
+                while (1) __asm__("hlt");
+            }
         }
     }
 
-    while (1) __asm__ volatile("hlt");
+    kprintf("[KERNEL] Processes created. Starting scheduler...\n");
+
+    scheduler_start();
+
+    while (1) __asm__("hlt");
 }

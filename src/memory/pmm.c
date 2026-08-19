@@ -3,6 +3,8 @@
 #include <printf.h>
 #include <stddef.h>
 
+// 当前 pmm 只能支持 128MB 的内存
+
 #define PAGE_SIZE 4096
 #define PAGE_SHIFT 12
 #define MAX_PHYS_MEM (128 * 1024 * 1024)  /* QEMU 默认 128MB */

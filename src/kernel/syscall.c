@@ -15,6 +15,12 @@ static int sys_write(int fd, const char *buf, uint32_t count) {
     return count;
 }
 
+uint32_t get_current_pid(void) {
+    /* 简化：因为当前只有单进程，直接返回 1 */
+    /* 未来实现多进程时，需要从 TSS 或全局变量获取 */
+    return get_current_task()->pid;
+}
+
 /* 系统调用：exit(int status) */
 static void sys_exit(int status) {
     kprintf("[SYSCALL] Process %d exited with status %d\n", 
@@ -48,9 +54,9 @@ void syscall_handler(struct registers *regs) {
     regs->eax = ret;
 }
 
-/* 获取当前进程 PID（供 sys_exit 使用） */
-uint32_t get_current_pid(void) {
-    /* 简化：因为当前只有单进程，直接返回 1 */
-    /* 未来实现多进程时，需要从 TSS 或全局变量获取 */
-    return 1;
-}
+// /* 获取当前进程 PID（供 sys_exit 使用） */
+// uint32_t get_current_pid(void) {
+//     /* 简化：因为当前只有单进程，直接返回 1 */
+//     /* 未来实现多进程时，需要从 TSS 或全局变量获取 */
+//     return 1;
+// }

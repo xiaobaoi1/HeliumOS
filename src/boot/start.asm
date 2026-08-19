@@ -21,6 +21,11 @@ header_end:
 section .text
 global _start
 extern kmain
+extern isr_handler
+extern irq_handler
+extern isr_syscall_handler
+extern tss_set_kernel_stack
+extern current_task          ; 新增
 
 _start:
     mov [magic_phys], eax
@@ -77,8 +82,8 @@ _start:
 global isr%1
 isr%1:
     cli
-    push byte 0
-    push byte %1
+    push 0
+    push %1
     jmp isr_common_stub
 %endmacro
 
@@ -87,7 +92,7 @@ isr%1:
 global isr%1
 isr%1:
     cli
-    push byte %1
+    push %1
     jmp isr_common_stub
 %endmacro
 
@@ -130,8 +135,8 @@ ISR_NOERR 31
 global irq%1
 irq%1:
     cli
-    push byte 0
-    push byte %2
+    push 0
+    push %2
     jmp irq_common_stub
 %endmacro
 
@@ -156,13 +161,25 @@ IRQ 15, 47
 global isr80
 isr80:
     cli
-    push byte 0
-    push byte 0x80
+    push 0
+    push 0x80
     jmp syscall_common_stub
 
 ; ===== 通用异常处理 =====
-extern isr_handler
 isr_common_stub:
+    ; 在 pusha 之前保存当前栈指针（指向中断帧底部）
+    push eax
+    push ebx
+    mov eax, [current_task]
+    test eax, eax
+    jz .skip_save_esp_isr
+    mov ebx, esp
+    add ebx, 0x10 ; bad solution
+    mov [eax + 20], ebx          ; kernel_esp 偏移 20
+.skip_save_esp_isr:
+    pop ebx
+    pop eax
+
     pusha
     push ds
     push es
@@ -186,8 +203,20 @@ isr_common_stub:
     iret
 
 ; ===== 通用 IRQ 处理 =====
-extern irq_handler
 irq_common_stub:
+    ; 在 pusha 之前保存当前栈指针（指向中断帧底部）
+    push eax
+    push ebx
+    mov eax, [current_task]
+    test eax, eax
+    jz .skip_save_esp_irq
+    mov ebx, esp
+    add ebx, 0x10 ; bad solution
+    mov [eax + 20], ebx          ; kernel_esp 偏移 20
+.skip_save_esp_irq:
+    pop ebx
+    pop eax
+
     pusha
     push ds
     push es
@@ -211,7 +240,6 @@ irq_common_stub:
     iret
 
 ; ===== 系统调用处理 (调用 C 函数) =====
-extern isr_syscall_handler
 syscall_common_stub:
     pusha
     push ds
@@ -233,6 +261,44 @@ syscall_common_stub:
     pop ds
     popa
     add esp, 8
+    iret
+
+; ============================================================
+; 上下文切换：switch_to(prev, next)
+; 参数：cdecl 约定，[esp+4]=prev, [esp+8]=next
+; ============================================================
+global switch_to
+switch_to:
+    mov eax, [esp+4]   ; prev
+    mov edx, [esp+8]   ; next
+
+    ; 注意：不再保存 esp，因为中断入口已经保存了当前进程的 kernel_esp
+    ; 如果还保存这里，会覆盖入口保存的正确值
+
+    ; 切换到 next 的页目录（偏移 12）
+    mov ecx, [edx + 12]
+    mov cr3, ecx
+
+    ; 更新 TSS.esp0（偏移 16 是 kernel_stack_phys）
+    push edx
+    mov eax, [edx + 16]
+    add eax, 4096
+    push eax
+    call tss_set_kernel_stack
+    add esp, 4
+    pop edx
+
+    ; 切换到 next 的内核栈（偏移 20 是 kernel_esp）
+    mov esp, [edx + 20]
+
+    ; 设置用户段寄存器
+    mov ax, 0x23
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+
+    ; 执行 iret，返回用户态
     iret
 
 ; ============================================================

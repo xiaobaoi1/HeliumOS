@@ -3,6 +3,9 @@
 #include <printf.h>
 #include <string.h>
 
+#define PIT_CHANNEL0 0x40
+#define PIT_CONTROL  0x43
+
 /* 外部符号：中断入口表（由汇编提供） */
 extern uint32_t isr_entry_table[32];
 extern uint32_t irq_entry_table[16];
@@ -24,6 +27,14 @@ static void idt_load(void) {
     idt_ptr.base  = (uint32_t)&idt;
     __asm__ volatile("lidt (%0)" :: "r"(&idt_ptr));
 }
+void pit_set_frequency(uint32_t hz) {
+    if (hz == 0) return;
+    uint32_t divisor = 1193180 / hz;
+    outb(PIT_CONTROL, 0x36);                    // 通道0，低+高字节，方波，二进制
+    outb(PIT_CHANNEL0, divisor & 0xFF);
+    outb(PIT_CHANNEL0, (divisor >> 8) & 0xFF);
+}
+
 
 /* 初始化PIC（8259A）重映射 */
 static void pic_init(void) {
@@ -82,6 +93,9 @@ void idt_init(void) {
 
     /* 初始化PIC */
     pic_init();
+
+    pic_unmask_irq(0);
+    pit_set_frequency(1000);
 
     kprintf("[IDT] Initialization complete.\n");
 }

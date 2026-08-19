@@ -85,6 +85,8 @@ uint32_t load_elf_from_disk(const char *path, uint32_t *pgd) {
             }
         }
     }
+
+    // 测试部分，不需要
     uint32_t test_phys = vmm_get_phys(pgd, 0x40000000);
     kprintf("[ELF] Verification: 0x40000000 -> phys 0x%x\n", test_phys);
     if (test_phys) {
