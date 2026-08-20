@@ -37,33 +37,29 @@
 
 /* 调度核心 */
 void schedule(void) {
+    kprintf("+");
     struct task *current = get_current_task();
-    
-    /* 如果当前进程还在，且时间片未用完，不调度 */
-    if (current && current->time_slice > 0) return;
 
-    /* 如果当前进程还在，重置时间片并放回就绪队列 */
-    if (current) {
-        current->time_slice = TIME_SLICE_TICKS;
-        enqueue_task(current);
+    // 当前进程仍可运行（时间片未用完）
+    if (current && current->time_slice > 0 && current->state == TASK_STATE_RUNNING) {
+        return;
     }
 
-    /* 取出下一个进程 */
-    struct task *next = dequeue_task();
+    // 当前进程时间片用完，重置后放回 READY_QUEUE
+    if (current && current->state == TASK_STATE_RUNNING) {
+        current->time_slice = TIME_SLICE_TICKS;
+        current->state = TASK_STATE_READY;
+        enqueue_task(&ready_queue_head, &ready_queue_tail, current);
+    }
+
+    // 从就绪队列取出下一个进程
+    struct task *next = dequeue_task(&ready_queue_head, &ready_queue_tail);
     if (!next) {
-        /* 没有就绪进程，进入空闲状态 */
-        kprintf("[SCHED] No ready tasks. Idling.\n");
+        kprintf("[SCHED] Idling...\n");
         set_current_task(NULL);
         return;
     }
 
-    /* 如果下一个就是当前进程（单进程情况），继续 */
-    if (next == current) {
-        set_current_task(current);
-        return;
-    }
-
-    /* 切换到下一个进程 */
     set_current_task(next);
     switch_to(current, next);
 }

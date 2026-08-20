@@ -7,28 +7,52 @@
 
 static uint32_t next_pid = 1;
 struct task *current_task = NULL;
-static struct task *ready_queue_head = NULL;
-static struct task *ready_queue_tail = NULL;
 
-/* 队列操作 */
-void enqueue_task(struct task *task) {
-    task->state = TASK_STATE_READY;
+/* 队列头（全局可见） */
+struct task *ready_queue_head = NULL;
+struct task *ready_queue_tail = NULL;
+struct task *waiting_queue_head = NULL;
+struct task *waiting_queue_tail = NULL;
+struct task *zombie_queue_head = NULL;
+struct task *zombie_queue_tail = NULL;
+
+/* 队列操作（通用） */
+void enqueue_task(struct task **head, struct task **tail, struct task *task) {
     task->next = NULL;
-    if (ready_queue_tail) {
-        ready_queue_tail->next = task;
-        ready_queue_tail = task;
+    if (*tail) {
+        (*tail)->next = task;
+        *tail = task;
     } else {
-        ready_queue_head = ready_queue_tail = task;
+        *head = *tail = task;
     }
 }
 
-struct task *dequeue_task(void) {
-    if (!ready_queue_head) return NULL;
-    struct task *task = ready_queue_head;
-    ready_queue_head = task->next;
-    if (!ready_queue_head) ready_queue_tail = NULL;
+struct task *dequeue_task(struct task **head, struct task **tail) {
+    if (!*head) return NULL;
+    struct task *task = *head;
+    *head = task->next;
+    if (!*head) *tail = NULL;
     task->next = NULL;
     return task;
+}
+
+void remove_task_from_queue(struct task **head, struct task **tail, struct task *task) {
+    if (!*head) return;
+    if (*head == task) {
+        *head = task->next;
+        if (!*head) *tail = NULL;
+        task->next = NULL;
+        return;
+    }
+    struct task *prev = *head;
+    while (prev->next && prev->next != task) {
+        prev = prev->next;
+    }
+    if (prev->next == task) {
+        prev->next = task->next;
+        if (prev->next == NULL) *tail = prev;
+        task->next = NULL;
+    }
 }
 
 /* 创建进程 */
@@ -45,6 +69,7 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd) {
     task->pgd = pgd;
     task->entry_point = entry_point;
     task->next = NULL;
+    task->parent = get_current_task();  // 父进程可能是 NULL（内核）
 
     /* 内核栈（1页） */
     task->kernel_stack_phys = pmm_alloc_page();
@@ -67,18 +92,16 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd) {
     vmm_map_user_page(pgd, 0x7FFFC000, stack_low, PTE_WRITE | PTE_USER);
     vmm_map_user_page(pgd, 0x7FFFD000, stack_high, PTE_WRITE | PTE_USER);
 
-    /* 构造初始内核栈（用于首次调度） */
-    /* 栈布局：[返回地址] [entry_point] [user_esp] */
-    // 构造 iret 帧
+    /* 构造 iret 帧 */
     uint32_t *stack_top = (uint32_t*)(task->kernel_stack_phys + 4096);
-    *(--stack_top) = 0x23;                       // SS
-    *(--stack_top) = task->user_stack_virt;      // ESP
-    *(--stack_top) = 0x200 | 0x2;                // EFLAGS (IF=1)
-    *(--stack_top) = 0x1B;                       // CS
-    *(--stack_top) = task->entry_point;          // EIP
-    task->kernel_esp = (uint32_t)stack_top;      // 指向EIP（正确）
+    *(--stack_top) = 0x23;
+    *(--stack_top) = task->user_stack_virt;
+    *(--stack_top) = 0x200 | 0x2;
+    *(--stack_top) = 0x1B;
+    *(--stack_top) = task->entry_point;
+    task->kernel_esp = (uint32_t)stack_top;
 
-    enqueue_task(task);
+    enqueue_task(&ready_queue_head, &ready_queue_tail, task);
 
     kprintf("[TASK] Process %d created. Entry: %p, Kernel stack: %p\n",
             task->pid, entry_point, task->kernel_stack_phys);
@@ -98,7 +121,7 @@ void set_current_task(struct task *task) {
 
 /* 启动调度器 */
 void scheduler_start(void) {
-    struct task *first = dequeue_task();
+    struct task *first = dequeue_task(&ready_queue_head, &ready_queue_tail);
     if (!first) {
         while (1) __asm__("cli; hlt");
     }
@@ -122,55 +145,57 @@ void scheduler_start(void) {
     while (1) __asm__("cli; hlt");
 }
 
-/* 供 scheduler.c 使用的队列操作（外部可见） */
-struct task *get_ready_queue_head(void) { return ready_queue_head; }
-struct task *get_ready_queue_tail(void) { return ready_queue_tail; }
-void set_ready_queue_head(struct task *h) { ready_queue_head = h; }
-void set_ready_queue_tail(struct task *t) { ready_queue_tail = t; }
-
-
-/* 释放进程的所有资源 */
-void task_exit(struct task *task) {
+/* 进程退出 */
+void task_exit(struct task *task, int status) {
     if (!task) return;
 
-    kprintf("[TASK] Process %d exiting...\n", task->pid);
+    kprintf("[TASK] Process %d exiting with status %d\n", task->pid, status);
 
-    /* 1. 释放页目录及所有页表（用户空间映射） */
+    task->exit_status = status;
+    task->state = TASK_STATE_ZOMBIE;
+
+    /* 释放用户空间（页表及物理页） */
     if (task->pgd) {
-        // 遍历页目录，释放用户空间（高 3GB）的页表
         uint32_t *pgd = task->pgd;
         for (int i = KERNEL_PDE_COUNT; i < 1024; i++) {
             if (pgd[i] & PTE_PRESENT) {
                 uint32_t pt_phys = pgd[i] & 0xFFFFF000;
                 uint32_t *pt = (uint32_t*)pt_phys;
-                // 释放页表中的物理页
                 for (int j = 0; j < 1024; j++) {
                     if (pt[j] & PTE_PRESENT) {
-                        uint32_t page_phys = pt[j] & 0xFFFFF000;
-                        pmm_free_page(page_phys);
+                        pmm_free_page(pt[j] & 0xFFFFF000);
                     }
                 }
-                // 释放页表本身
                 pmm_free_page(pt_phys);
             }
         }
-        // 释放页目录本身
         pmm_free_page((uint32_t)task->pgd);
         task->pgd = NULL;
     }
 
-    /* 2. 释放内核栈 */
+    /* 释放内核栈 */
     if (task->kernel_stack_phys) {
         pmm_free_page(task->kernel_stack_phys);
         task->kernel_stack_phys = 0;
     }
 
-    /* 3. 清空用户栈指针 */
+    /* 清空用户栈指针 */
     task->user_stack_phys = 0;
 
-    /* 4. 释放 PCB 本身 */
-    pmm_free_page((uint32_t)task);
-    set_current_task(0);
+    /* 从就绪队列移除（如果还在） */
+    remove_task_from_queue(&ready_queue_head, &ready_queue_tail, task);
 
-    kprintf("[TASK] Process %d resources released.\n", task->pid);
+    /* 加入僵尸队列 */
+    enqueue_task(&zombie_queue_head, &zombie_queue_tail, task);
+
+    /* 唤醒父进程（如果父进程在等待） */
+    if (task->parent && task->parent->state == TASK_STATE_WAITING) {
+        remove_task_from_queue(&waiting_queue_head, &waiting_queue_tail, task->parent);
+        task->parent->state = TASK_STATE_READY;
+        enqueue_task(&ready_queue_head, &ready_queue_tail, task->parent);
+        kprintf("[TASK] Woke up parent process %d\n", task->parent->pid);
+    }
+
+    set_current_task(NULL);
+    schedule();  // 让出 CPU
 }

@@ -2,10 +2,11 @@ section .text
 global _start
 
 _start:
-    mov ecx, 10
+    mov ecx, 5          ; 循环次数
 .loop:
     push ecx
-    mov eax, 1          ; SYS_WRITE
+    ; write(1, msg, len)
+    mov eax, 1
     mov ebx, 1
     mov ecx, msg
     mov edx, msglen
@@ -14,10 +15,11 @@ _start:
     dec ecx
     jnz .loop
 
-    mov eax, 2          ; SYS_EXIT
+    ; exit(0)
+    mov eax, 2
     mov ebx, 0
     int 0x80
 
 section .data
-msg: db 'Hello from user process!', 10
+msg: db 'P1: Hello', 10
 msglen equ $ - msg

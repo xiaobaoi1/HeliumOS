@@ -3,13 +3,15 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <screen.h>
 
 // ---------- 内部字符输出（绑定到串口） ----------
 static void putc(char c) {
     // 换行符自动补充回车，确保终端显示正确
     if (c == '\n') {
-        serial_write_char('\r');
+        // screen_write_char('\n');
     }
+    // screen_write_char(c);
     serial_write_char(c);
 }
 

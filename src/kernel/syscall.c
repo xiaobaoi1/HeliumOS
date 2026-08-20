@@ -4,43 +4,87 @@
 #include <task.h>
 #include <stdint.h>
 
-/* 系统调用：write(int fd, const char *buf, size_t count) */
+/* 系统调用 write */
 static int sys_write(int fd, const char *buf, uint32_t count) {
-    if (fd != 1) {  /* 仅支持 stdout */
-        return -1;
-    }
+    if (fd != 1) return -1;
     for (uint32_t i = 0; i < count; i++) {
         serial_write_char(buf[i]);
     }
     return count;
 }
 
-uint32_t get_current_pid(void) {
-    /* 简化：因为当前只有单进程，直接返回 1 */
-    /* 未来实现多进程时，需要从 TSS 或全局变量获取 */
-    return get_current_task()->pid;
-}
-
-/* 系统调用：exit(int status) */
+/* 系统调用 exit */
 static void sys_exit(int status) {
-    kprintf("[SYSCALL] Process %d exited with status %d\n", 
-            get_current_pid(), status);
-    
+    kprintf("[SYSCALL] Process %d exiting with status %d\n", get_current_task()->pid, status);
     struct task *current = get_current_task();
     if (current) {
-        task_exit(current);   // 释放资源
+        task_exit(current, status);
     }
-    
-    // 切换到下一个进程
-    schedule();
-    
-    // 如果 schedule 返回（没有其他进程），进入空闲循环
     while (1) __asm__("cli; hlt");
 }
 
-/* 系统调用分发器（由中断处理函数调用） */
+/* 辅助：检查子进程是否存在（遍历所有队列） */
+static int has_child(struct task *parent, int pid) {
+    // 检查就绪队列
+    struct task *t = ready_queue_head;
+    while (t) {
+        if (t->parent == parent && (pid == -1 || t->pid == (uint32_t)pid)) return 1;
+        t = t->next;
+    }
+    // 检查僵尸队列
+    t = zombie_queue_head;
+    while (t) {
+        if (t->parent == parent && (pid == -1 || t->pid == (uint32_t)pid)) return 1;
+        t = t->next;
+    }
+    // 检查等待队列
+    t = waiting_queue_head;
+    while (t) {
+        if (t->parent == parent && (pid == -1 || t->pid == (uint32_t)pid)) return 1;
+        t = t->next;
+    }
+    // 检查当前进程（可能是运行中的子进程）
+    struct task *cur = get_current_task();
+    if (cur && cur->parent == parent && (pid == -1 || cur->pid == (uint32_t)pid)) {
+        return 1;
+    }
+    return 0;
+}
+
+/* 系统调用 waitpid */
+static int sys_waitpid(int pid, int *status) {
+    struct task *current = get_current_task();
+    if (!current) return -1;
+
+    while (1) {
+        // 查找僵尸子进程
+        struct task *zombie = zombie_queue_head;
+        while (zombie) {
+            if (zombie->parent == current && (pid == -1 || zombie->pid == (uint32_t)pid)) {
+                int child_pid = zombie->pid;
+                if (status) *status = zombie->exit_status;
+                remove_task_from_queue(&zombie_queue_head, &zombie_queue_tail, zombie);
+                pmm_free_page((uint32_t)zombie);
+                return child_pid;
+            }
+            zombie = zombie->next;
+        }
+
+        // 检查是否有匹配的子进程（还在运行）
+        if (!has_child(current, pid)) {
+            return -1;  // 没有这个子进程
+        }
+
+        // 子进程还在运行，父进程等待
+        current->state = TASK_STATE_WAITING;
+        remove_task_from_queue(&ready_queue_head, &ready_queue_tail, current);
+        enqueue_task(&waiting_queue_head, &waiting_queue_tail, current);
+        schedule();  // 让出 CPU，醒来后重新循环
+    }
+}
+
+/* 系统调用分发器 */
 void syscall_handler(struct registers *regs) {
-    /* 参数：eax = 调用号，ebx/ecx/edx = 参数 */
     uint32_t syscall_no = regs->eax;
     uint32_t arg1 = regs->ebx;
     uint32_t arg2 = regs->ecx;
@@ -55,18 +99,16 @@ void syscall_handler(struct registers *regs) {
         case SYS_EXIT:
             sys_exit((int)arg1);
             break;
+        case SYS_WAITPID:
+            ret = sys_waitpid((int)arg1, (int*)arg2);
+            break;
+        case SYS_GETPID:
+            ret = get_current_task()->pid;
+            break;
         default:
             kprintf("[SYSCALL] Unknown syscall %d\n", syscall_no);
             ret = -1;
     }
 
-    /* 返回值放在 eax 中（由调用者通过寄存器读取） */
     regs->eax = ret;
 }
-
-// /* 获取当前进程 PID（供 sys_exit 使用） */
-// uint32_t get_current_pid(void) {
-//     /* 简化：因为当前只有单进程，直接返回 1 */
-//     /* 未来实现多进程时，需要从 TSS 或全局变量获取 */
-//     return 1;
-// }
