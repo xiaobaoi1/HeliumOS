@@ -22,6 +22,9 @@ nasm -f elf32 user/syscall.asm -o user/syscall.o
 gcc -m32 -nostdlib -fno-builtin -static -mno-red-zone -fno-stack-protector -c user/shell.c -o user/shell.o
 ld -m elf_i386 -T user/linker.ld -o user/shell.elf user/shell.o user/syscall.o
 
+gcc -m32 -nostdlib -fno-builtin -static -mno-red-zone -fno-stack-protector -c user/test_fs.c -o user/test_fs.o
+ld -m elf_i386 -T user/linker.ld -o user/test_fs.elf user/test_fs.o user/syscall.o
+
 
 # nasm -f elf32 user/shell.asm -o user/shell.o
 # ld -m elf_i386 -T user/linker.ld -o user/shell.elf user/shell.o

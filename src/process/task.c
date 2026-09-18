@@ -107,20 +107,7 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd) {
     task->wait_target = NULL;
     task->sleep_ticks = 0;
 
-    /* 初始化 cwd */
-    struct task *parent = get_current_task();
-    if (parent && parent->cwd_volume[0] != '\0') {
-        strcpy(task->cwd_volume, parent->cwd_volume);
-        strcpy(task->cwd_path, parent->cwd_path);
-    } else {
-        struct volume *def = volume_get_default();
-        if (def) {
-            strcpy(task->cwd_volume, def->name);
-        } else {
-            task->cwd_volume[0] = '\0';
-        }
-        strcpy(task->cwd_path, "/");
-    }
+    
 
     // 内核栈
     task->kernel_stack_phys = pmm_alloc_page();
@@ -143,9 +130,32 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd) {
     vmm_map_user_page(pgd, 0x7FFFC000, stack_low, PTE_WRITE | PTE_USER);
     vmm_map_user_page(pgd, 0x7FFFD000, stack_high, PTE_WRITE | PTE_USER);
 
+
+    // 堆
     task->heap_base = 0x50000000;
     task->heap_brk = 0x50000000;
     task->heap_limit = 0x60000000;
+
+
+    /* 初始化 cwd */
+    struct task *parent = task->parent;
+    if (parent && parent->cwd_volume[0] != '\0') {
+        strcpy(task->cwd_volume, parent->cwd_volume);
+        strcpy(task->cwd_path, parent->cwd_path);
+    } else {
+        struct volume *def = volume_get_default();
+        if (def) {
+            strcpy(task->cwd_volume, def->name);
+        } else {
+            task->cwd_volume[0] = '\0';
+        }
+        strcpy(task->cwd_path, "/");
+    }
+
+    /* 清空 fs 句柄表 */
+    for (int i = 0; i < FS_MAX_HANDLES; i++) {
+        task->fs_handles[i].used = 0;
+    }
 
     /* 构造内核栈（与中断布局一致） */
     uint32_t *stack_top = (uint32_t*)(task->kernel_stack_phys + 4096);
@@ -228,6 +238,9 @@ void task_exit(struct task *task, int status) {
     kprintf("[TASK] Process %d exiting with status %d\n", task->pid, status);
 
     task->exit_status = status;
+
+    /* 释放文件系统句柄 */
+    fs_release_all(task);
 
     /* 释放用户空间 */
     if (task->pgd) {

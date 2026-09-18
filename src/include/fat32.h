@@ -2,6 +2,7 @@
 #define FAT32_H
 
 #include <stdint.h>
+#include <volume.h>
 
 #define SECTOR_SIZE 512
 #define FAT32_SIGNATURE 0xAA55
@@ -76,6 +77,15 @@ struct fat32_volume {
     uint8_t  valid;                   /* 挂载成功标志 */
 };
 
+/* 目录迭代句柄 */
+struct fat32_dir {
+    uint32_t start_cluster;
+    uint32_t cur_cluster;
+    uint32_t sector;         /* 簇内扇区号 */
+    uint32_t entry;          /* 扇区内目录项索引 */
+    uint8_t  valid;
+};
+
 /* ★ 挂载一个 FAT32 分区 */
 struct fat32_volume *fat32_mount(uint32_t partition_lba);
 
@@ -88,5 +98,15 @@ int fat32_open_file(struct fat32_volume *vol, const char *path,
 
 int fat32_read_file(struct fat32_volume *vol, struct fat32_file *file,
                     uint8_t *buffer, uint32_t offset, uint32_t size);
+
+/* 目录操作 */
+int  fat32_opendir(struct fat32_volume *vol, const char *path,
+                   struct fat32_dir *dir);
+int  fat32_readdir(struct fat32_volume *vol, struct fat32_dir *dir,
+                   struct dirent *out);
+void fat32_closedir(struct fat32_volume *vol, struct fat32_dir *dir);
+
+/* 判断某路径是否是目录 */
+int  fat32_is_dir(struct fat32_volume *vol, const char *path);
 
 #endif

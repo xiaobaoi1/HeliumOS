@@ -17,6 +17,20 @@
 /* ========== 内存管理 (21~29) ========== */
 #define SYS_BRK        21
 
+/* ========== 文件系统 (31~39) ========== */
+#define SYS_FS_OPEN       31
+#define SYS_FS_READ       32
+#define SYS_FS_WRITE      33
+#define SYS_FS_SEEK       34
+#define SYS_FS_CLOSE      35
+#define SYS_FS_OPENDIR    36
+#define SYS_FS_READDIR    37
+#define SYS_FS_CLOSEDIR   38
+
+/* ========== 进程环境 (61~69) ========== */
+#define SYS_GETCWD        61
+#define SYS_CHDIR         62
+
 /* 系统调用处理函数声明 */
 void syscall_handler(struct registers *regs);
 

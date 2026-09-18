@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <volume.h>
+#include <fat32.h>
 
 /* 每进程最大句柄数 */
 #define FS_MAX_HANDLES   32
@@ -18,25 +19,20 @@
 #define FS_OBJ_FILE      1
 #define FS_OBJ_DIR       2
 
-/* 目录项（对用户友好） */
-#define DIRENT_NAME_MAX  256
-struct dirent {
-    char     name[DIRENT_NAME_MAX];
-    uint8_t  attributes;         /* bit4 = 目录 */
-    uint8_t  reserved[3];
-    uint32_t size;
-};
+typedef int fd_t;
+
+/* 前向声明，避免和 task.h 循环包含 */
+struct task;
 
 /* 每进程的句柄槽位 */
 struct fs_handle {
     uint8_t         used;
     uint8_t         obj_type;    /* FS_OBJ_FILE / FS_OBJ_DIR */
-    uint8_t         fs_type;     /* VOL_FS_FAT32 ... */
+    uint8_t         fs_type;     /* VOL_FS_FAT32 */
     uint8_t         reserved;
     uint32_t        offset;
     struct volume  *vol;
     union {
-        void              *ptr;      /* 保留 */
         struct fat32_file  fat32_file;
         struct fat32_dir   fat32_dir;
     } u;
@@ -44,7 +40,7 @@ struct fs_handle {
 
 /* ---------- 生命周期 ---------- */
 void fs_init(void);
-void fs_release_all(struct task *task);   /* 进程退出时调用 */
+void fs_release_all(struct task *task);
 
 /* ---------- 文件 API ---------- */
 fd_t fs_open(const char *path, int flags);

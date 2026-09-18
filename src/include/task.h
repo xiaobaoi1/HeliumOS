@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <volume.h>
 #include <path.h>
+#include <fs.h>
 
 /* 进程状态 */
 #define TASK_STATE_READY         0   /* 就绪 */
@@ -48,6 +49,9 @@ struct task {
     /* cwd（当前工作目录） */
     char cwd_volume[VOL_NAME_LEN];
     char cwd_path[PATH_MAX_LEN];
+
+        /* 资源句柄表 */
+    struct fs_handle fs_handles[FS_MAX_HANDLES];
 };
 
 void enqueue_task(struct task **head, struct task **tail, struct task *task);

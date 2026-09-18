@@ -21,6 +21,15 @@ struct volume {
     void    *fs_private;          /* 具体文件系统的上下文（FAT32 BPB 等） */
 };
 
+/* 目录项（所有文件系统通用） */
+#define DIRENT_NAME_MAX  256
+struct dirent {
+    char     name[DIRENT_NAME_MAX];
+    uint8_t  attributes;         /* bit4 = 目录 */
+    uint8_t  reserved[3];
+    uint32_t size;
+};
+
 /* 初始化卷子系统 */
 void volume_init(void);
 

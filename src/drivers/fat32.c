@@ -227,3 +227,197 @@ int fat32_read_file(struct fat32_volume *vol, struct fat32_file *file,
     }
     return size;
 }
+
+/* ---------- 判断是否是目录 ---------- */
+int fat32_is_dir(struct fat32_volume *vol, const char *path) {
+    if (!vol || !vol->valid) return 0;
+
+    /* 根目录视为目录 */
+    if (path[0] == '\0' || (path[0] == '/' && path[1] == '\0')) {
+        return 1;
+    }
+
+    if (path[0] == '/') path++;
+
+    uint32_t current_cluster = vol->root_cluster;
+    char token[64];
+
+    while (*path) {
+        int i = 0;
+        while (path[i] && path[i] != '/' && i < 63) {
+            token[i] = path[i];
+            i++;
+        }
+        token[i] = '\0';
+        if (path[i] == '/') path += i + 1;
+        else path += i;
+
+        int is_last = (*path == '\0');
+        int found = 0;
+        uint32_t cluster = current_cluster;
+
+        while (cluster < 0x0FFFFFF8 && !found) {
+            int sectors = vol->bpb.sectors_per_cluster;
+            int eps = vol->bpb.bytes_per_sector / sizeof(struct fat32_dir_entry);
+
+            for (int s = 0; s < sectors && !found; s++) {
+                uint8_t sector[SECTOR_SIZE];
+                read_sector_from_cluster(vol, cluster, s, sector);
+                struct fat32_dir_entry *entries = (struct fat32_dir_entry*)sector;
+
+                for (int j = 0; j < eps; j++) {
+                    struct fat32_dir_entry *e = &entries[j];
+                    if (e->name[0] == 0x00) break;
+                    if (e->name[0] == 0xE5) continue;
+
+                    char name[13];
+                    int k = 0;
+                    for (int m = 0; m < 8 && e->name[m] != ' '; m++) name[k++] = e->name[m];
+                    name[k] = '\0';
+                    for (int m = 0; name[m]; m++)
+                        if (name[m] >= 'A' && name[m] <= 'Z') name[m] += 32;
+
+                    char tl[64];
+                    for (int m = 0; token[m]; m++)
+                        tl[m] = (token[m] >= 'A' && token[m] <= 'Z') ? token[m] + 32 : token[m];
+                    tl[strlen(token)] = '\0';
+
+                    if (strcmp(name, tl) == 0) {
+                        found = 1;
+                        if (is_last) {
+                            return (e->attributes & 0x10) ? 1 : 0;
+                        }
+                        if (!(e->attributes & 0x10)) return 0;
+                        current_cluster = (e->cluster_high << 16) | e->cluster_low;
+                        break;
+                    }
+                }
+            }
+            if (!found) cluster = get_next_cluster(vol, cluster);
+        }
+        if (!found) return 0;
+    }
+    return 0;
+}
+
+/* ---------- 目录迭代 ---------- */
+int fat32_opendir(struct fat32_volume *vol, const char *path,
+                  struct fat32_dir *dir) {
+    if (!vol || !vol->valid || !dir) return EINVAL;
+
+    uint32_t cluster;
+
+    /* 根目录 */
+    if (path[0] == '\0' || (path[0] == '/' && path[1] == '\0')) {
+        cluster = vol->root_cluster;
+    } else {
+        /* 逐级查找目录 */
+        if (path[0] == '/') path++;
+        uint32_t cur = vol->root_cluster;
+        char token[64];
+
+        while (*path) {
+            int i = 0;
+            while (path[i] && path[i] != '/' && i < 63) {
+                token[i] = path[i];
+                i++;
+            }
+            token[i] = '\0';
+            if (path[i] == '/') path += i + 1;
+            else path += i;
+
+            int found = 0;
+            uint32_t c = cur;
+            while (c < 0x0FFFFFF8 && !found) {
+                int sectors = vol->bpb.sectors_per_cluster;
+                int eps = vol->bpb.bytes_per_sector / sizeof(struct fat32_dir_entry);
+                for (int s = 0; s < sectors && !found; s++) {
+                    uint8_t sector[SECTOR_SIZE];
+                    read_sector_from_cluster(vol, c, s, sector);
+                    struct fat32_dir_entry *entries = (struct fat32_dir_entry*)sector;
+                    for (int j = 0; j < eps; j++) {
+                        struct fat32_dir_entry *e = &entries[j];
+                        if (e->name[0] == 0x00) break;
+                        if (e->name[0] == 0xE5) continue;
+                        if (!(e->attributes & 0x10)) continue;
+
+                        char name[13];
+                        int k = 0;
+                        for (int m = 0; m < 8 && e->name[m] != ' '; m++) name[k++] = e->name[m];
+                        name[k] = '\0';
+                        for (int m = 0; name[m]; m++)
+                            if (name[m] >= 'A' && name[m] <= 'Z') name[m] += 32;
+                        char tl[64];
+                        for (int m = 0; token[m]; m++)
+                            tl[m] = (token[m] >= 'A' && token[m] <= 'Z') ? token[m]+32 : token[m];
+                        tl[strlen(token)] = '\0';
+                        if (strcmp(name, tl) == 0) {
+                            found = 1;
+                            cur = (e->cluster_high << 16) | e->cluster_low;
+                            break;
+                        }
+                    }
+                }
+                if (!found) c = get_next_cluster(vol, c);
+            }
+            if (!found) return ENOENT;
+        }
+        cluster = cur;
+    }
+
+    dir->start_cluster = cluster;
+    dir->cur_cluster = cluster;
+    dir->sector = 0;
+    dir->entry = 0;
+    dir->valid = 1;
+    return OK;
+}
+
+int fat32_readdir(struct fat32_volume *vol, struct fat32_dir *dir,
+                  struct dirent *out) {
+    if (!vol || !vol->valid || !dir || !out || !dir->valid) return EINVAL;
+
+    while (dir->cur_cluster < 0x0FFFFFF8) {
+        int sectors = vol->bpb.sectors_per_cluster;
+        int eps = vol->bpb.bytes_per_sector / sizeof(struct fat32_dir_entry);
+
+        while (dir->sector < (uint32_t)sectors) {
+            uint8_t sector[SECTOR_SIZE];
+            read_sector_from_cluster(vol, dir->cur_cluster, dir->sector, sector);
+            struct fat32_dir_entry *entries = (struct fat32_dir_entry*)sector;
+
+            while (dir->entry < (uint32_t)eps) {
+                struct fat32_dir_entry *e = &entries[dir->entry++];
+
+                if (e->name[0] == 0x00) return 0;             /* 目录结束 */
+                if (e->name[0] == 0xE5) continue;             /* 已删除 */
+                if ((e->attributes & 0x0F) == 0x0F) continue; /* LFN */
+                if (e->name[0] == '.') continue;              /* . / .. */
+
+                int k = 0;
+                for (int m = 0; m < 8 && e->name[m] != ' ' && k < DIRENT_NAME_MAX - 2; m++)
+                    out->name[k++] = e->name[m];
+                if (e->ext[0] != ' ' && k < DIRENT_NAME_MAX - 2) {
+                    out->name[k++] = '.';
+                    for (int m = 0; m < 3 && e->ext[m] != ' ' && k < DIRENT_NAME_MAX - 1; m++)
+                        out->name[k++] = e->ext[m];
+                }
+                out->name[k] = '\0';
+                out->attributes = e->attributes;
+                out->size = e->file_size;
+                return 1;
+            }
+            dir->sector++;
+            dir->entry = 0;
+        }
+        dir->cur_cluster = get_next_cluster(vol, dir->cur_cluster);
+        dir->sector = 0;
+        dir->entry = 0;
+    }
+    return 0;
+}
+
+void fat32_closedir(struct fat32_volume *vol, struct fat32_dir *dir) {
+    (void)vol;
+    if (dir) dir->valid = 0;
+}

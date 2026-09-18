@@ -9,6 +9,7 @@
 #include <screen.h>
 #include <stddef.h>
 #include <errno.h>
+#include <fs.h>
 
 /* 系统调用 write */
 static int sys_write(int fd, const char *buf, uint32_t count) {
@@ -232,6 +233,40 @@ void syscall_handler(struct registers *regs) {
             break;
         case SYS_SLEEP:
             ret = sys_sleep(arg1);
+            break;
+        
+
+
+        /* ---------- 文件系统 ---------- */
+        case SYS_FS_OPEN:
+            ret = fs_open((const char*)arg1, arg2);
+            break;
+        case SYS_FS_READ:
+            ret = fs_read(arg1, (void*)arg2, arg3);
+            break;
+        case SYS_FS_WRITE:
+            ret = fs_write(arg1, (const void*)arg2, arg3);
+            break;
+        case SYS_FS_SEEK:
+            ret = fs_seek(arg1, arg2);
+            break;
+        case SYS_FS_CLOSE:
+            ret = fs_close(arg1);
+            break;
+        case SYS_FS_OPENDIR:
+            ret = fs_opendir((const char*)arg1);
+            break;
+        case SYS_FS_READDIR:
+            ret = fs_readdir(arg1, (struct dirent*)arg2);
+            break;
+        case SYS_FS_CLOSEDIR:
+            ret = fs_closedir(arg1);
+            break;
+        case SYS_GETCWD:
+            ret = fs_getcwd((char*)arg1, arg2);
+            break;
+        case SYS_CHDIR:
+            ret = fs_chdir((const char*)arg1);
             break;
         default:
             kprintf("[SYSCALL] Unknown syscall %d\n", syscall_no);
