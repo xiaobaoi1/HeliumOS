@@ -6,7 +6,7 @@
 #define SECTOR_SIZE 512
 #define FAT32_SIGNATURE 0xAA55
 
-/* FAT32 BPB (BIOS Parameter Block) - 位于 LBA 2048 的引导扇区 */
+/* BPB（不变） */
 struct fat32_bpb {
     uint8_t  jump_code[3];
     uint8_t  oem_name[8];
@@ -23,7 +23,6 @@ struct fat32_bpb {
     uint32_t hidden_sectors;
     uint32_t total_sectors_32;
 
-    // FAT32 扩展部分
     uint32_t fat_size_32;
     uint16_t ext_flags;
     uint16_t fs_version;
@@ -41,7 +40,7 @@ struct fat32_bpb {
     uint16_t signature;
 } __attribute__((packed));
 
-/* FAT32 目录项 (短文件名) */
+/* 目录项（不变） */
 struct fat32_dir_entry {
     uint8_t  name[8];
     uint8_t  ext[3];
@@ -58,7 +57,7 @@ struct fat32_dir_entry {
     uint32_t file_size;
 } __attribute__((packed));
 
-/* 文件句柄，用于跟踪打开的文件 */
+/* 文件句柄（不变） */
 struct fat32_file {
     uint32_t first_cluster;
     uint32_t current_cluster;
@@ -67,8 +66,27 @@ struct fat32_file {
     uint8_t  buffer[SECTOR_SIZE];
 };
 
-void fat32_init(uint32_t partition_lba);
-int fat32_open_file(const char *path, struct fat32_file *file);
-int fat32_read_file(struct fat32_file *file, uint8_t *buffer, uint32_t offset, uint32_t size);
+/* ★ 新增：FAT32 卷上下文。每个挂载点一个 */
+struct fat32_volume {
+    struct fat32_bpb bpb;             /* 卷的 BPB */
+    uint32_t partition_start_lba;     /* 分区起始 LBA */
+    uint32_t fat_start_lba;           /* FAT 表起始 LBA */
+    uint32_t data_start_lba;          /* 数据区起始 LBA */
+    uint32_t root_cluster;            /* 根目录簇号 */
+    uint8_t  valid;                   /* 挂载成功标志 */
+};
+
+/* ★ 挂载一个 FAT32 分区 */
+struct fat32_volume *fat32_mount(uint32_t partition_lba);
+
+/* ★ 获取第一个挂载的卷（兼容旧代码 / 单卷系统） */
+struct fat32_volume *fat32_get_default(void);
+
+/* ★ 所有操作都带 vol 参数 */
+int fat32_open_file(struct fat32_volume *vol, const char *path,
+                    struct fat32_file *file);
+
+int fat32_read_file(struct fat32_volume *vol, struct fat32_file *file,
+                    uint8_t *buffer, uint32_t offset, uint32_t size);
 
 #endif

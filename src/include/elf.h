@@ -2,6 +2,8 @@
 #define ELF_H
 
 #include <stdint.h>
+#include <fat32.h>
+
 
 #define ELF_MAGIC 0x464C457F  // "\x7FELF"
 
@@ -41,6 +43,9 @@ struct elf_program_header {
     uint32_t align;
 } __attribute__((packed));
 
+uint32_t load_elf_from_disk(struct fat32_volume *vol, const char *path,
+                            uint32_t *pgd);
+                            
 #define PT_LOAD 1
 
 #endif

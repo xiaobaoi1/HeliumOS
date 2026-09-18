@@ -8,17 +8,13 @@
 static uint32_t next_pid = 1;
 struct task *current_task = NULL;
 
-/* 队列头（全局可见） */
+/* 两个队列 */
 struct task *ready_queue_head = NULL;
 struct task *ready_queue_tail = NULL;
-struct task *waiting_queue_head = NULL;
-struct task *waiting_queue_tail = NULL;
-struct task *zombie_queue_head = NULL;
-struct task *zombie_queue_tail = NULL;
-struct task *sleep_queue_head = NULL;
-struct task *sleep_queue_tail = NULL;
+struct task *blocked_list_head = NULL;
+struct task *blocked_list_tail = NULL;
 
-/* 队列操作（通用） */
+/* ---------- 队列操作 ---------- */
 void enqueue_task(struct task **head, struct task **tail, struct task *task) {
     task->next = NULL;
     if (*tail) {
@@ -57,7 +53,43 @@ void remove_task_from_queue(struct task **head, struct task **tail, struct task 
     }
 }
 
-/* 创建进程 */
+/* ---------- 阻塞与唤醒 ---------- */
+void block_current(uint32_t new_state) {
+    struct task *cur = get_current_task();
+    if (!cur) return;
+
+    /* 从就绪队列移除（可能在也可能不在） */
+    remove_task_from_queue(&ready_queue_head, &ready_queue_tail, cur);
+
+    cur->state = new_state;
+    enqueue_task(&blocked_list_head, &blocked_list_tail, cur);
+}
+
+void unblock_task(struct task *t, uint32_t new_state) {
+    if (!t) return;
+
+    /* 从 blocked_list 移除 */
+    remove_task_from_queue(&blocked_list_head, &blocked_list_tail, t);
+
+    t->state = new_state;
+    enqueue_task(&ready_queue_head, &ready_queue_tail, t);
+}
+
+void wake_up_waiters(struct task *target) {
+    if (!target) return;
+
+    for (struct task *t = blocked_list_head; t; ) {
+        struct task *next = t->next;
+        if (t->state == TASK_STATE_WAITING_CHILD &&
+            (t->wait_target == NULL || t->wait_target == target)) {
+            t->wait_target = NULL;
+            unblock_task(t, TASK_STATE_READY);
+        }
+        t = next;
+    }
+}
+
+/* ---------- 进程创建 ---------- */
 struct task *task_create(uint32_t entry_point, uint32_t *pgd) {
     struct task *task = (struct task*)pmm_alloc_page();
     if (!task) {
@@ -71,16 +103,32 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd) {
     task->pgd = pgd;
     task->entry_point = entry_point;
     task->next = NULL;
-    task->parent = get_current_task();  // 父进程可能是 NULL（内核）
+    task->parent = get_current_task();
+    task->wait_target = NULL;
+    task->sleep_ticks = 0;
 
-    /* 内核栈（1页） */
+    /* 初始化 cwd */
+    struct task *parent = get_current_task();
+    if (parent && parent->cwd_volume[0] != '\0') {
+        strcpy(task->cwd_volume, parent->cwd_volume);
+        strcpy(task->cwd_path, parent->cwd_path);
+    } else {
+        struct volume *def = volume_get_default();
+        if (def) {
+            strcpy(task->cwd_volume, def->name);
+        } else {
+            task->cwd_volume[0] = '\0';
+        }
+        strcpy(task->cwd_path, "/");
+    }
+
+    // 内核栈
     task->kernel_stack_phys = pmm_alloc_page();
     if (!task->kernel_stack_phys) {
         kprintf("[TASK] ERROR: Failed to allocate kernel stack.\n");
         return NULL;
     }
 
-    /* 用户栈（2页） */
     uint32_t stack_low = pmm_alloc_page();
     uint32_t stack_high = pmm_alloc_page();
     if (!stack_low || !stack_high) {
@@ -88,33 +136,32 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd) {
         return NULL;
     }
 
+    // 用户栈
     task->user_stack_virt = 0x7FFFE000;
     task->user_stack_phys = stack_high;
 
     vmm_map_user_page(pgd, 0x7FFFC000, stack_low, PTE_WRITE | PTE_USER);
     vmm_map_user_page(pgd, 0x7FFFD000, stack_high, PTE_WRITE | PTE_USER);
 
-    // 初始化 堆
     task->heap_base = 0x50000000;
     task->heap_brk = 0x50000000;
     task->heap_limit = 0x60000000;
 
-
-
-    // 在 task_create 中，替换栈构造部分
+    /* 构造内核栈（与中断布局一致） */
     uint32_t *stack_top = (uint32_t*)(task->kernel_stack_phys + 4096);
 
-    // 1. iret 帧（先压入，位于最高地址）
-    *(--stack_top) = 0x23;                   // SS
-    *(--stack_top) = task->user_stack_virt;  // ESP
-    *(--stack_top) = 0x200 | 0x2;            // EFLAGS
-    *(--stack_top) = 0x1B;                   // CS
-    *(--stack_top) = task->entry_point;      // EIP
+    /* iret 帧 */
+    *(--stack_top) = 0x23;
+    *(--stack_top) = task->user_stack_virt;
+    *(--stack_top) = 0x200 | 0x2;
+    *(--stack_top) = 0x1B;
+    *(--stack_top) = task->entry_point;
 
-    *(--stack_top) = 0;  // 错误码
-    *(--stack_top) = 0;  // 中断号
+    /* 错误码 + 中断号占位 */
+    *(--stack_top) = 0;
+    *(--stack_top) = 0;
 
-    // 2. pusha 数据（按 pusha 压栈顺序：eax, ecx, edx, ebx, esp, ebp, esi, edi）
+    /* pusha 数据 */
     *(--stack_top) = 0;  // eax
     *(--stack_top) = 0;  // ecx
     *(--stack_top) = 0;  // edx
@@ -124,13 +171,13 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd) {
     *(--stack_top) = 0;  // esi
     *(--stack_top) = 0;  // edi
 
-    // 3. 段寄存器（按压栈顺序 ds, es, fs, gs）
-    *(--stack_top) = 0x23;  // ds
-    *(--stack_top) = 0x23;  // es
-    *(--stack_top) = 0x23;  // fs
-    *(--stack_top) = 0x23;  // gs
+    /* 段寄存器 */
+    *(--stack_top) = 0x23;
+    *(--stack_top) = 0x23;
+    *(--stack_top) = 0x23;
+    *(--stack_top) = 0x23;
 
-    task->kernel_esp = (uint32_t)stack_top;  // 指向 gs 的地址
+    task->kernel_esp = (uint32_t)stack_top;
 
     enqueue_task(&ready_queue_head, &ready_queue_tail, task);
 
@@ -140,17 +187,13 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd) {
     return task;
 }
 
-/* 获取/设置当前进程 */
-struct task *get_current_task(void) {
-    return current_task;
-}
+struct task *get_current_task(void) { return current_task; }
 
 void set_current_task(struct task *task) {
     current_task = task;
     if (task) task->state = TASK_STATE_RUNNING;
 }
 
-/* 启动调度器 */
 void scheduler_start(void) {
     struct task *first = dequeue_task(&ready_queue_head, &ready_queue_tail);
     if (!first) {
@@ -178,16 +221,15 @@ void scheduler_start(void) {
     while (1) __asm__("cli; hlt");
 }
 
-/* 进程退出 */
+/* ---------- 进程退出 ---------- */
 void task_exit(struct task *task, int status) {
     if (!task) return;
 
     kprintf("[TASK] Process %d exiting with status %d\n", task->pid, status);
 
     task->exit_status = status;
-    task->state = TASK_STATE_ZOMBIE;
 
-    /* 释放用户空间（页表及物理页） */
+    /* 释放用户空间 */
     if (task->pgd) {
         uint32_t *pgd = task->pgd;
         for (int i = KERNEL_PDE_COUNT; i < 1024; i++) {
@@ -206,29 +248,22 @@ void task_exit(struct task *task, int status) {
         task->pgd = NULL;
     }
 
-    /* 释放内核栈 */
     if (task->kernel_stack_phys) {
         pmm_free_page(task->kernel_stack_phys);
         task->kernel_stack_phys = 0;
     }
-
-    /* 清空用户栈指针 */
     task->user_stack_phys = 0;
 
-    /* 从就绪队列移除（如果还在）*/
+    /* 从就绪队列移除 */
     remove_task_from_queue(&ready_queue_head, &ready_queue_tail, task);
 
-    /* 加入僵尸队列 */
-    enqueue_task(&zombie_queue_head, &zombie_queue_tail, task);
+    /* 转入 ZOMBIE：加入 blocked_list */
+    task->state = TASK_STATE_ZOMBIE;
+    enqueue_task(&blocked_list_head, &blocked_list_tail, task);
 
-    /* 唤醒父进程（如果父进程在等待） */
-    if (task->parent && task->parent->state == TASK_STATE_WAITING) {
-        remove_task_from_queue(&waiting_queue_head, &waiting_queue_tail, task->parent);
-        task->parent->state = TASK_STATE_READY;
-        enqueue_task(&ready_queue_head, &ready_queue_tail, task->parent);
-        kprintf("[TASK] Woke up parent process %d\n", task->parent->pid);
-    }
+    /* 唤醒所有等待它的进程 */
+    wake_up_waiters(task);
 
     set_current_task(NULL);
-    schedule();  // 让出 CPU
+    schedule();
 }

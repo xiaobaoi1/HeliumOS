@@ -8,11 +8,7 @@
 #include <keyboard.h>
 #include <screen.h>
 #include <stddef.h>
-
-// 外部变量（在 isr.c 中定义）
-extern int kb_head, kb_tail;
-extern char kb_buffer[];
-extern struct task *kb_waiting_task;
+#include <errno.h>
 
 /* 系统调用 write */
 static int sys_write(int fd, const char *buf, uint32_t count) {
@@ -48,28 +44,13 @@ static void sys_exit(int status) {
 
 /* 辅助：检查子进程是否存在（遍历所有队列） */
 static int has_child(struct task *parent, int pid) {
-    // 检查就绪队列
-    struct task *t = ready_queue_head;
-    while (t) {
-        if (t->parent == parent && (pid == -1 || t->pid == (uint32_t)pid)) return 1;
-        t = t->next;
+    for (struct task *t = ready_queue_head; t; t = t->next) {
+        if (t->parent == parent && (pid == -1 || t->pid == (uint32_t)pid))
+            return 1;
     }
-    // 检查僵尸队列
-    t = zombie_queue_head;
-    while (t) {
-        if (t->parent == parent && (pid == -1 || t->pid == (uint32_t)pid)) return 1;
-        t = t->next;
-    }
-    // 检查等待队列
-    t = waiting_queue_head;
-    while (t) {
-        if (t->parent == parent && (pid == -1 || t->pid == (uint32_t)pid)) return 1;
-        t = t->next;
-    }
-    // 检查当前进程（可能是运行中的子进程）
-    struct task *cur = get_current_task();
-    if (cur && cur->parent == parent && (pid == -1 || cur->pid == (uint32_t)pid)) {
-        return 1;
+    for (struct task *t = blocked_list_head; t; t = t->next) {
+        if (t->parent == parent && (pid == -1 || t->pid == (uint32_t)pid))
+            return 1;
     }
     return 0;
 }
@@ -80,29 +61,29 @@ static int sys_waitpid(int pid, int *status) {
     if (!current) return -1;
 
     while (1) {
-        // 查找僵尸子进程
-        struct task *zombie = zombie_queue_head;
-        while (zombie) {
-            if (zombie->parent == current && (pid == -1 || zombie->pid == (uint32_t)pid)) {
-                int child_pid = zombie->pid;
-                if (status) *status = zombie->exit_status;
-                remove_task_from_queue(&zombie_queue_head, &zombie_queue_tail, zombie);
-                pmm_free_page((uint32_t)zombie);
+        /* 找已退出的子进程 */
+        for (struct task *t = blocked_list_head; t; t = t->next) {
+            if (t->state == TASK_STATE_ZOMBIE &&
+                t->parent == current &&
+                (pid == -1 || t->pid == (uint32_t)pid)) {
+                int child_pid = t->pid;
+                if (status) *status = t->exit_status;
+
+                remove_task_from_queue(&blocked_list_head, &blocked_list_tail, t);
+                pmm_free_page((uint32_t)t);
                 return child_pid;
             }
-            zombie = zombie->next;
         }
 
-        // 检查是否有匹配的子进程（还在运行）
+        /* 没有匹配的子进程（且没有活着的），直接返回 */
         if (!has_child(current, pid)) {
-            return -1;  // 没有这个子进程
+            return -1;
         }
 
-        // 子进程还在运行，父进程等待
-        current->state = TASK_STATE_WAITING;
-        remove_task_from_queue(&ready_queue_head, &ready_queue_tail, current);
-        enqueue_task(&waiting_queue_head, &waiting_queue_tail, current);
-        schedule();  // 让出 CPU，醒来后重新循环
+        /* 阻塞，等待子进程退出 */
+        current->wait_target = NULL;   /* 等任意子进程；精确等一个的话需要找指针 */
+        block_current(TASK_STATE_WAITING_CHILD);
+        schedule();
     }
 }
 
@@ -177,7 +158,13 @@ static int sys_spawn(const char *path) {
     if (!pgd_child) return -1;
 
     // 2. 加载 ELF 获取入口点
-    uint32_t entry = load_elf_from_disk(path_buf, pgd_child);
+    struct resolved_path rp;
+    if (resolve_path(path_buf, &rp) != OK) return -1;
+
+    struct fat32_volume *vol = (struct fat32_volume*)rp.vol->fs_private;
+    if (!vol) return -1;
+
+    uint32_t entry = load_elf_from_disk(vol, rp.path, pgd_child);
     if (!entry) {
         // 加载失败，释放页目录（简化：暂不处理）
         pmm_free_page((uint32_t)pgd_child);
@@ -206,19 +193,9 @@ static int sys_sleep(uint32_t ms) {
     if (!cur) return -1;
     if (ms == 0) return 0;
 
-    // 计算滴答数（假设时钟频率 1000Hz，即 1ms 对应 1 个 tick）
-    // 但我们的 pit_set_frequency(1000) 已经设为 1000Hz，所以直接使用 ms
     cur->sleep_ticks = ms;
-
-    // 将进程从就绪队列移除（如果还在）
-    remove_task_from_queue(&ready_queue_head, &ready_queue_tail, cur);
-    cur->state = TASK_STATE_WAITING;
-    // 加入睡眠队列
-    enqueue_task(&sleep_queue_head, &sleep_queue_tail, cur);
-
-    // 让出 CPU
+    block_current(TASK_STATE_SLEEPING);
     schedule();
-    // 唤醒后继续执行（sleep_ticks 已减为 0）
     return 0;
 }
 

@@ -37,6 +37,7 @@ uint8_t screen_get_bg(void);
 
 /* 快捷打印：设置颜色 → 打印 → 恢复 */
 void screen_write_string_colored(const char *str, uint8_t fg, uint8_t bg);
+void screen_write_char_colored(const char c, uint8_t fg, uint8_t bg);
 
 /* 光标 */
 void screen_set_cursor(int x, int y);

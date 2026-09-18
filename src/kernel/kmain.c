@@ -12,28 +12,72 @@
 #include <printf.h>
 #include <stdint.h>
 #include <stddef.h>
+#include <heap.h>
+#include <path.h>
 
-void create_idle_task(){
+/* ---------- 内部辅助：从一个 ELF 路径创建进程 ---------- */
+
+static struct task *create_task_from_elf(struct fat32_volume *vol,
+                                          const char *path) {
+    /* 1. 创建页目录 */
     uint32_t *pgd = vmm_create_process_page_directory();
     if (!pgd) {
-        kprintf("[KERNEL] Failed to create page directory for idle.\n");
-        while (1) __asm__("hlt");
+        kprintf("[KERNEL] Failed to create page directory for %s\n", path);
+        return NULL;
     }
 
-    uint32_t entry = load_elf_from_disk("/IDLE.ELF", pgd);
+    /* 2. 加载 ELF */
+    uint32_t entry = load_elf_from_disk(vol, path, pgd);
     if (!entry) {
-        kprintf("[KERNEL] Failed to find entry point for idle.\n");
+        kprintf("[KERNEL] Failed to load %s\n", path);
+        /* 释放页目录？这里简化处理，暂不释放 */
+        return NULL;
+    }
+
+    /* 3. 创建 PCB */
+    struct task *task = task_create(entry, pgd);
+    if (!task) {
+        kprintf("[KERNEL] Failed to create task for %s\n", path);
+        return NULL;
+    }
+
+    return task;
+}
+
+/* ---------- 创建 IDLE 进程 ---------- */
+
+void create_idle_task(struct fat32_volume *vol) {
+    struct task *task = create_task_from_elf(vol, "/IDLE.ELF");
+    if (!task) {
+        kprintf("[KERNEL] FATAL: cannot create idle task\n");
         while (1) __asm__("hlt");
     }
 
-    if (entry) {
-        struct task *task = task_create(entry, pgd);
-        task->time_slice = 1;
-        if (!task) {
-            kprintf("[KERNEL] Failed to create idle.\n");
-            while (1) __asm__("hlt");
-        }
+    /* IDLE 的任务：尽量少占 CPU
+     * - time_slice 设为 1，让它很快被抢占
+     * - 用户程序内部用 pause 指令空转
+     */
+    task->time_slice = 1;
+
+    kprintf("[KERNEL] IDLE task created (pid=%d)\n", task->pid);
+}
+
+/* ---------- 创建 SHELL 进程 ---------- */
+
+void create_shell_task(struct fat32_volume *vol) {
+    struct task *task = create_task_from_elf(vol, "/SHELL.ELF");
+    if (!task) {
+        kprintf("[KERNEL] FATAL: cannot create shell task\n");
+        while (1) __asm__("hlt");
     }
+
+    /* SHELL 是交互进程，给它正常时间片
+     * 但注意：它不能太大，否则输入回显会卡
+     * 默认 10 ticks = 10ms @1000Hz，够用
+     */
+    /* task->time_slice 已在 task_create 中初始化为 TIME_SLICE_TICKS */
+
+    kprintf("[KERNEL] SHELL task created (pid=%d)\n", task->pid);
 }
 
 void kmain(uint32_t magic, uint32_t addr) {
@@ -45,15 +89,27 @@ void kmain(uint32_t magic, uint32_t addr) {
     kprintf("========================================\n");
 
     pmm_init(addr);
+    heap_init();
     gdt_init();
     tss_init();
     vmm_init();
     idt_init();
 
-    ata_init();
-    fat32_init(2048);
+    volume_init();
 
-    create_idle_task();
+    ata_init();
+    // fat32_init(2048);
+
+    /* 挂载 FAT32 并注册为 SYS 卷 */
+    struct fat32_volume *sys_vol = fat32_mount(2048);
+    if (!sys_vol) {
+        kprintf("[KERNEL] Failed to mount FAT32\n");
+        while (1) __asm__("hlt");
+    }
+    volume_register("SYS", VOL_FS_FAT32, 2048, 128 * 1024, sys_vol);
+
+    create_idle_task(sys_vol);
+    create_shell_task(sys_vol);
 
     // {
     //     uint32_t *pgd1 = vmm_create_process_page_directory();
@@ -79,28 +135,28 @@ void kmain(uint32_t magic, uint32_t addr) {
     // struct task *p, *c;
 
     
-    {
-        uint32_t *pgd2 = vmm_create_process_page_directory();
-        if (!pgd2) {
-            kprintf("[KERNEL] Failed to create page directory for process2.\n");
-            while (1) __asm__("hlt");
-        }
+    // {
+    //     uint32_t *pgd2 = vmm_create_process_page_directory();
+    //     if (!pgd2) {
+    //         kprintf("[KERNEL] Failed to create page directory for process2.\n");
+    //         while (1) __asm__("hlt");
+    //     }
 
-        uint32_t entry = load_elf_from_disk("/SHELL.ELF", pgd2);
-        if (!entry) {
-            kprintf("[KERNEL] Failed to find entry point for process2.\n");
-            while (1) __asm__("hlt");
-        }
+    //     uint32_t entry = load_elf_from_disk("/SHELL.ELF", pgd2);
+    //     if (!entry) {
+    //         kprintf("[KERNEL] Failed to find entry point for process2.\n");
+    //         while (1) __asm__("hlt");
+    //     }
 
-        if (entry) {
-            struct task *task = task_create(entry, pgd2);
-            // c = task;
-            if (!task) {
-                kprintf("[KERNEL] Failed to create task 2.\n");
-                while (1) __asm__("hlt");
-            }
-        }
-    }
+    //     if (entry) {
+    //         struct task *task = task_create(entry, pgd2);
+    //         // c = task;
+    //         if (!task) {
+    //             kprintf("[KERNEL] Failed to create task 2.\n");
+    //             while (1) __asm__("hlt");
+    //         }
+    //     }
+    // }
     // {
     //     uint32_t *pgd3 = vmm_create_process_page_directory();
     //     if (!pgd3) {
@@ -125,6 +181,39 @@ void kmain(uint32_t magic, uint32_t addr) {
     // }
     
     // c->parent = p;
+
+
+    // 临时测试
+    void *p1 = kmalloc(16);
+    void *p2 = kmalloc(16);
+    void *p3 = kmalloc(64);
+    void *p4 = kmalloc(2048);
+    kprintf("[TEST] kmalloc: p1=%p p2=%p p3=%p p4=%p\n", p1, p2, p3, p4);
+
+    heap_stats();
+
+    kfree(p1); kfree(p2); kfree(p3); kfree(p4);
+    kprintf("[TEST] after kfree:\n");
+    heap_stats();
+
+    /* 临时测试路径解析 */
+    struct resolved_path rp;
+
+    if (resolve_path("SYS:/BOOT/GRUB.CFG", &rp) == 0) {
+        kprintf("[TEST] absolute: vol=%s path=%s\n", rp.vol->name, rp.path);
+    }
+    if (resolve_path("/BOOT/../SHELL.ELF", &rp) == 0) {
+        kprintf("[TEST] normalize: vol=%s path=%s\n", rp.vol->name, rp.path);
+    }
+    if (resolve_path("BOOT/GRUB.CFG", &rp) == 0) {
+        kprintf("[TEST] relative: vol=%s path=%s\n", rp.vol->name, rp.path);
+    }
+
+
+
+
+
+
 
     kprintf("[KERNEL] Processes created. Starting scheduler...\n");
 
