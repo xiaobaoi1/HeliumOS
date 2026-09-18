@@ -2,18 +2,7 @@ section .text
 global _start
 
 _start:
-    mov ecx, 5          ; 循环次数
-.loop:
-    push ecx
-    ; write(1, msg, len)
-    mov eax, 1
-    mov ebx, 1
-    mov ecx, msg
-    mov edx, msglen
-    int 0x80
-    pop ecx
-    dec ecx
-    jnz .loop
+    jmp _start
 
     ; exit(0)
     mov eax, 2

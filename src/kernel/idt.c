@@ -97,6 +97,8 @@ void idt_init(void) {
     pic_unmask_irq(0);
     pit_set_frequency(1000);
 
+    pic_unmask_irq(1);
+
     kprintf("[IDT] Initialization complete.\n");
 }
 

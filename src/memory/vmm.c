@@ -88,6 +88,19 @@ void vmm_map_user_page(uint32_t *pgd, uint32_t virt, uint32_t phys, uint32_t fla
     __asm__ volatile("invlpg (%0)" :: "r"(virt));
 }
 
+// 在 vmm.c 中添加：
+void vmm_unmap_user_page(uint32_t *pgd, uint32_t virt) {
+    if (virt < USER_SPACE_START) return;
+    uint32_t pde_idx = virt >> 22;
+    uint32_t pte_idx = (virt >> 12) & 0x3FF;
+    uint32_t pde = pgd[pde_idx];
+    if (!(pde & PTE_PRESENT)) return;
+    uint32_t *ptable = (uint32_t*)(pde & 0xFFFFF000);
+    if (!(ptable[pte_idx] & PTE_PRESENT)) return;
+    ptable[pte_idx] = 0;  // 清除页表项
+    __asm__ volatile("invlpg (%0)" :: "r"(virt)); // 刷新 TLB
+}
+
 uint32_t vmm_get_phys(uint32_t *pgd, uint32_t virt) {
     uint32_t pde_idx = virt >> 22;
     uint32_t pte_idx = (virt >> 12) & 0x3FF;

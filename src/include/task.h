@@ -18,6 +18,8 @@ extern struct task *waiting_queue_head;
 extern struct task *waiting_queue_tail;
 extern struct task *zombie_queue_head;
 extern struct task *zombie_queue_tail;
+extern struct task *sleep_queue_head;
+extern struct task *sleep_queue_tail;
 
 extern struct task *current_task;
 
@@ -25,15 +27,21 @@ struct task {
     uint32_t pid;
     uint32_t state;
     uint32_t time_slice;
-    uint32_t *pgd;
-    uint32_t kernel_stack_phys;
-    uint32_t kernel_esp;
+    uint32_t *pgd;              // +12 start.asm将会使用
+    uint32_t kernel_stack_phys; // +16 start.asm将会使用
+    uint32_t kernel_esp;        // +20 start.asm将会使用
     uint32_t user_stack_phys;
     uint32_t user_stack_virt;
     uint32_t entry_point;
     struct task *next;
     struct task *parent;
     int exit_status;
+
+    uint32_t heap_base;   // 堆起始地址（固定）
+    uint32_t heap_brk;    // 当前堆顶
+    uint32_t heap_limit;  // 堆上限（防止顶到栈）
+
+    uint32_t sleep_ticks;
 };
 
 void enqueue_task(struct task **head, struct task **tail, struct task *task);

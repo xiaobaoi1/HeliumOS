@@ -11,6 +11,30 @@
 #include <elf.h>
 #include <printf.h>
 #include <stdint.h>
+#include <stddef.h>
+
+void create_idle_task(){
+    uint32_t *pgd = vmm_create_process_page_directory();
+    if (!pgd) {
+        kprintf("[KERNEL] Failed to create page directory for idle.\n");
+        while (1) __asm__("hlt");
+    }
+
+    uint32_t entry = load_elf_from_disk("/IDLE.ELF", pgd);
+    if (!entry) {
+        kprintf("[KERNEL] Failed to find entry point for idle.\n");
+        while (1) __asm__("hlt");
+    }
+
+    if (entry) {
+        struct task *task = task_create(entry, pgd);
+        task->time_slice = 1;
+        if (!task) {
+            kprintf("[KERNEL] Failed to create idle.\n");
+            while (1) __asm__("hlt");
+        }
+    }
+}
 
 void kmain(uint32_t magic, uint32_t addr) {
     screen_init();
@@ -29,29 +53,30 @@ void kmain(uint32_t magic, uint32_t addr) {
     ata_init();
     fat32_init(2048);
 
-    /* 创建两个进程 */
-    {
-        uint32_t *pgd1 = vmm_create_process_page_directory();
-        if (!pgd1) {
-            kprintf("[KERNEL] Failed to create page directory for process 1.\n");
-            while (1) __asm__("hlt");
-        }
+    create_idle_task();
 
-        uint32_t entry1 = load_elf_from_disk("/PROC.ELF", pgd1);
-        if (!entry1) {
-            kprintf("[KERNEL] Failed to find entry point for process1.\n");
-            while (1) __asm__("hlt");
-        }
+    // {
+    //     uint32_t *pgd1 = vmm_create_process_page_directory();
+    //     if (!pgd1) {
+    //         kprintf("[KERNEL] Failed to create page directory for process 1.\n");
+    //         while (1) __asm__("hlt");
+    //     }
 
-        if (entry1) {
-            struct task *task = task_create(entry1, pgd1);
-            if (!task) {
-                kprintf("[KERNEL] Failed to create task 1.\n");
-                while (1) __asm__("hlt");
-            }
-        }
-    }
-    struct task *p, *c;
+    //     uint32_t entry1 = load_elf_from_disk("/PROC.ELF", pgd1);
+    //     if (!entry1) {
+    //         kprintf("[KERNEL] Failed to find entry point for process1.\n");
+    //         while (1) __asm__("hlt");
+    //     }
+
+    //     if (entry1) {
+    //         struct task *task = task_create(entry1, pgd1);
+    //         if (!task) {
+    //             kprintf("[KERNEL] Failed to create task 1.\n");
+    //             while (1) __asm__("hlt");
+    //         }
+    //     }
+    // }
+    // struct task *p, *c;
 
     
     {
@@ -61,7 +86,7 @@ void kmain(uint32_t magic, uint32_t addr) {
             while (1) __asm__("hlt");
         }
 
-        uint32_t entry = load_elf_from_disk("/PROC2.ELF", pgd2);
+        uint32_t entry = load_elf_from_disk("/SHELL.ELF", pgd2);
         if (!entry) {
             kprintf("[KERNEL] Failed to find entry point for process2.\n");
             while (1) __asm__("hlt");
@@ -69,37 +94,37 @@ void kmain(uint32_t magic, uint32_t addr) {
 
         if (entry) {
             struct task *task = task_create(entry, pgd2);
-            c = task;
+            // c = task;
             if (!task) {
                 kprintf("[KERNEL] Failed to create task 2.\n");
                 while (1) __asm__("hlt");
             }
         }
     }
-    {
-        uint32_t *pgd3 = vmm_create_process_page_directory();
-        if (!pgd3) {
-            kprintf("[KERNEL] Failed to create page directory for process3.\n");
-            while (1) __asm__("hlt");
-        }
+    // {
+    //     uint32_t *pgd3 = vmm_create_process_page_directory();
+    //     if (!pgd3) {
+    //         kprintf("[KERNEL] Failed to create page directory for process3.\n");
+    //         while (1) __asm__("hlt");
+    //     }
 
-        uint32_t entry = load_elf_from_disk("/PROC3.ELF", pgd3);
-        if (!entry) {
-            kprintf("[KERNEL] Failed to find entry point for process3.\n");
-            while (1) __asm__("hlt");
-        }
+    //     uint32_t entry = load_elf_from_disk("/PROC3.ELF", pgd3);
+    //     if (!entry) {
+    //         kprintf("[KERNEL] Failed to find entry point for process3.\n");
+    //         while (1) __asm__("hlt");
+    //     }
 
-        if (entry) {
-            struct task *task = task_create(entry, pgd3);
-            p = task;
-            if (!task) {
-                kprintf("[KERNEL] Failed to create task 3.\n");
-                while (1) __asm__("hlt");
-            }
-        }
-    }
+    //     if (entry) {
+    //         struct task *task = task_create(entry, pgd3);
+    //         p = task;
+    //         if (!task) {
+    //             kprintf("[KERNEL] Failed to create task 3.\n");
+    //             while (1) __asm__("hlt");
+    //         }
+    //     }
+    // }
     
-    c->parent = p;
+    // c->parent = p;
 
     kprintf("[KERNEL] Processes created. Starting scheduler...\n");
 

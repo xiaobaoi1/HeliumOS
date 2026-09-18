@@ -15,6 +15,8 @@ struct task *waiting_queue_head = NULL;
 struct task *waiting_queue_tail = NULL;
 struct task *zombie_queue_head = NULL;
 struct task *zombie_queue_tail = NULL;
+struct task *sleep_queue_head = NULL;
+struct task *sleep_queue_tail = NULL;
 
 /* 队列操作（通用） */
 void enqueue_task(struct task **head, struct task **tail, struct task *task) {
@@ -92,14 +94,43 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd) {
     vmm_map_user_page(pgd, 0x7FFFC000, stack_low, PTE_WRITE | PTE_USER);
     vmm_map_user_page(pgd, 0x7FFFD000, stack_high, PTE_WRITE | PTE_USER);
 
-    /* 构造 iret 帧 */
+    // 初始化 堆
+    task->heap_base = 0x50000000;
+    task->heap_brk = 0x50000000;
+    task->heap_limit = 0x60000000;
+
+
+
+    // 在 task_create 中，替换栈构造部分
     uint32_t *stack_top = (uint32_t*)(task->kernel_stack_phys + 4096);
-    *(--stack_top) = 0x23;
-    *(--stack_top) = task->user_stack_virt;
-    *(--stack_top) = 0x200 | 0x2;
-    *(--stack_top) = 0x1B;
-    *(--stack_top) = task->entry_point;
-    task->kernel_esp = (uint32_t)stack_top;
+
+    // 1. iret 帧（先压入，位于最高地址）
+    *(--stack_top) = 0x23;                   // SS
+    *(--stack_top) = task->user_stack_virt;  // ESP
+    *(--stack_top) = 0x200 | 0x2;            // EFLAGS
+    *(--stack_top) = 0x1B;                   // CS
+    *(--stack_top) = task->entry_point;      // EIP
+
+    *(--stack_top) = 0;  // 错误码
+    *(--stack_top) = 0;  // 中断号
+
+    // 2. pusha 数据（按 pusha 压栈顺序：eax, ecx, edx, ebx, esp, ebp, esi, edi）
+    *(--stack_top) = 0;  // eax
+    *(--stack_top) = 0;  // ecx
+    *(--stack_top) = 0;  // edx
+    *(--stack_top) = 0;  // ebx
+    *(--stack_top) = 0;  // esp
+    *(--stack_top) = 0;  // ebp
+    *(--stack_top) = 0;  // esi
+    *(--stack_top) = 0;  // edi
+
+    // 3. 段寄存器（按压栈顺序 ds, es, fs, gs）
+    *(--stack_top) = 0x23;  // ds
+    *(--stack_top) = 0x23;  // es
+    *(--stack_top) = 0x23;  // fs
+    *(--stack_top) = 0x23;  // gs
+
+    task->kernel_esp = (uint32_t)stack_top;  // 指向 gs 的地址
 
     enqueue_task(&ready_queue_head, &ready_queue_tail, task);
 
@@ -132,16 +163,18 @@ void scheduler_start(void) {
     tss_set_kernel_stack(kernel_stack_top);
 
     __asm__ volatile(
-        "mov $0x23, %%ax\n"
-        "mov %%ax, %%ds\n"
-        "mov %%ax, %%es\n"
-        "mov %%ax, %%fs\n"
-        "mov %%ax, %%gs\n"
         "mov %0, %%esp\n"
+        "pop %%gs\n"
+        "pop %%fs\n"
+        "pop %%es\n"
+        "pop %%ds\n"
+        "popa\n"
+        "add $8, %%esp\n"
         "iret\n"
         :: "r"(first->kernel_esp)
-        : "eax", "memory"
+        : "memory"
     );
+
     while (1) __asm__("cli; hlt");
 }
 
@@ -182,7 +215,7 @@ void task_exit(struct task *task, int status) {
     /* 清空用户栈指针 */
     task->user_stack_phys = 0;
 
-    /* 从就绪队列移除（如果还在） */
+    /* 从就绪队列移除（如果还在）*/
     remove_task_from_queue(&ready_queue_head, &ready_queue_tail, task);
 
     /* 加入僵尸队列 */

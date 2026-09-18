@@ -28,6 +28,8 @@ uint32_t *vmm_create_process_page_directory(void);
 
 /* 在用户页目录中映射虚拟地址到物理地址 */
 void vmm_map_user_page(uint32_t *pgd, uint32_t virt, uint32_t phys, uint32_t flags);
+/* 取消映射用户空间虚拟地址（用于收缩堆） */
+void vmm_unmap_user_page(uint32_t *pgd, uint32_t virt);
 /* 获取虚拟地址对应的物理地址（在指定页目录中） */
 uint32_t vmm_get_phys(uint32_t *pgd, uint32_t virt);
 

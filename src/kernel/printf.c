@@ -12,6 +12,7 @@ static void putc(char c) {
         // screen_write_char('\n');
     }
     // screen_write_char(c);
+    // screen_write_char_colored(c, VGA_LIGHT_GREEN, VGA_BLACK);
     serial_write_char(c);
 }
 

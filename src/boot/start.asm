@@ -167,24 +167,26 @@ isr80:
 
 ; ===== 通用异常处理 =====
 isr_common_stub:
-    ; 在 pusha 之前保存当前栈指针（指向中断帧底部）
-    push eax
-    push ebx
-    mov eax, [current_task]
-    test eax, eax
-    jz .skip_save_esp_isr
-    mov ebx, esp
-    add ebx, 0x10 ; bad solution
-    mov [eax + 20], ebx          ; kernel_esp 偏移 20
-.skip_save_esp_isr:
-    pop ebx
-    pop eax
-
     pusha
     push ds
     push es
     push fs
     push gs
+    ; 现在 esp 指向 eax，直接保存
+    ; push eax
+    ; push ebx
+    mov eax, [current_task]
+    test eax, eax
+    jz .skip_isr
+    mov [eax + 20], esp
+.skip_isr:
+    ; pop ebx
+    ; pop eax
+
+    ; push ds
+    ; push es
+    ; push fs
+    ; push gs
     mov ax, 0x10
     mov ds, ax
     mov es, ax
@@ -204,24 +206,27 @@ isr_common_stub:
 
 ; ===== 通用 IRQ 处理 =====
 irq_common_stub:
-    ; 在 pusha 之前保存当前栈指针（指向中断帧底部）
-    push eax
-    push ebx
-    mov eax, [current_task]
-    test eax, eax
-    jz .skip_save_esp_irq
-    mov ebx, esp
-    add ebx, 0x10 ; bad solution
-    mov [eax + 20], ebx          ; kernel_esp 偏移 20
-.skip_save_esp_irq:
-    pop ebx
-    pop eax
-
     pusha
     push ds
     push es
     push fs
     push gs
+    ; 现在 esp 指向 eax，直接保存
+    ; push eax
+    ; push ebx
+    mov eax, [current_task]
+    test eax, eax
+    jz .skip_irq
+    mov [eax + 20], esp   ; 保存 esp（指向 eax）
+.skip_irq:
+    ; pop ebx
+    ; pop eax
+
+    ; push ds
+    ; push es
+    ; push fs
+    ; push gs
+
     mov ax, 0x10
     mov ds, ax
     mov es, ax
@@ -272,14 +277,14 @@ switch_to:
     mov eax, [esp+4]   ; prev
     mov edx, [esp+8]   ; next
 
-    ; 注意：不再保存 esp，因为中断入口已经保存了当前进程的 kernel_esp
-    ; 如果还保存这里，会覆盖入口保存的正确值
+    ; 保存当前栈指针到 prev->kernel_esp
+    ; mov [eax + 20], esp
 
-    ; 切换到 next 的页目录（偏移 12）
+    ; 切换到 next 的页目录
     mov ecx, [edx + 12]
     mov cr3, ecx
 
-    ; 更新 TSS.esp0（偏移 16 是 kernel_stack_phys）
+    ; 更新 TSS.esp0
     push edx
     mov eax, [edx + 16]
     add eax, 4096
@@ -288,17 +293,22 @@ switch_to:
     add esp, 4
     pop edx
 
-    ; 切换到 next 的内核栈（偏移 20 是 kernel_esp）
+    ; 切换到 next 的内核栈
     mov esp, [edx + 20]
 
-    ; 设置用户段寄存器
-    mov ax, 0x23
-    mov ds, ax
-    mov es, ax
-    mov fs, ax
-    mov gs, ax
 
-    ; 执行 iret，返回用户态
+    ; ===== 恢复段寄存器 =====
+    pop gs
+    pop fs
+    pop es
+    pop ds
+
+    ; ===== 恢复通用寄存器 =====
+    popa
+
+    add esp, 8
+
+    ; ===== 执行 iret =====
     iret
 
 ; ============================================================

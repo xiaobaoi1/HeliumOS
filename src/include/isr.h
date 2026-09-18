@@ -10,5 +10,7 @@ struct registers {
     uint32_t int_no, err_code;
     uint32_t eip, cs, eflags, user_esp, user_ss;
 };
+/* 键盘中断处理（IRQ 1） */
+void keyboard_handler(void);
 
 #endif

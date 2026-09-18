@@ -35,9 +35,29 @@
 //     return head;
 // }
 
+/* 处理睡眠队列，递减 sleep_ticks，唤醒到期进程 */
+void sleep_tick(void) {
+    struct task *cur = sleep_queue_head;
+    struct task *next;
+
+    while (cur) {
+        next = cur->next;
+        if (cur->sleep_ticks > 0) {
+            cur->sleep_ticks--;
+            if (cur->sleep_ticks == 0) {
+                // 唤醒进程：从睡眠队列移除，加入就绪队列
+                remove_task_from_queue(&sleep_queue_head, &sleep_queue_tail, cur);
+                cur->state = TASK_STATE_READY;
+                enqueue_task(&ready_queue_head, &ready_queue_tail, cur);
+            }
+        }
+        cur = next;
+    }
+}
+
 /* 调度核心 */
 void schedule(void) {
-    kprintf("+");
+    // kprintf("+");
     struct task *current = get_current_task();
 
     // 当前进程仍可运行（时间片未用完）
@@ -57,6 +77,7 @@ void schedule(void) {
     if (!next) {
         kprintf("[SCHED] Idling...\n");
         set_current_task(NULL);
+        while (1) __asm__("hlt");
         return;
     }
 
