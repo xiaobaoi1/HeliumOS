@@ -10,27 +10,29 @@
 #include <stddef.h>
 #include <errno.h>
 #include <fs.h>
+#include <device.h>
+#include <console.h>
 
-/* 系统调用 write */
+/* 系统调用 write：fd=1 走控制台，其他 fd 暂不支持 */
 static int sys_write(int fd, const char *buf, uint32_t count) {
-    if (fd != 1) return -1;
-    for (uint32_t i = 0; i < count; i++) {
-        // serial_write_char(buf[i]);
-        screen_write_char(buf[i]);
+    if (fd != 1) return EINVAL;
+    if (!buf || count == 0) return EINVAL;
+    if ((uint32_t)buf < USER_SPACE_START ||
+        (uint32_t)buf + count > USER_SPACE_END) {
+        return EFAULT;
     }
-    return count;
+    return console_write(buf, count);
 }
 
+/* 系统调用 read：fd=0 走控制台，其他 fd 暂不支持 */
 static int sys_read(int fd, char *buf, uint32_t count) {
-    if (fd != 0 || !buf || count == 0) return -1;
+    if (fd != 0) return EINVAL;
+    if (!buf || count == 0) return EINVAL;
     if ((uint32_t)buf < USER_SPACE_START ||
-        (uint32_t)buf + count > USER_SPACE_END) return -1;
-
-    int n = 0;
-    while (n < count && keyboard_has_data()) {
-        buf[n++] = keyboard_getchar();
+        (uint32_t)buf + count > USER_SPACE_END) {
+        return EFAULT;
     }
-    return n;
+    return console_read(buf, count);
 }
 
 /* 系统调用 exit */
@@ -268,6 +270,78 @@ void syscall_handler(struct registers *regs) {
         case SYS_CHDIR:
             ret = fs_chdir((const char*)arg1);
             break;
+
+        /* ---------- 设备 ---------- */
+        case SYS_DEV_OPEN:
+            ret = dev_open(arg1, (void*)arg2);
+            break;
+        case SYS_DEV_READ:
+            ret = dev_read(arg1, (void*)arg2, arg3);
+            break;
+        case SYS_DEV_WRITE:
+            ret = dev_write(arg1, (const void*)arg2, arg3);
+            break;
+        case SYS_DEV_IOCTL:
+            ret = dev_ioctl(arg1, arg2, (void*)arg3);
+            break;
+        case SYS_DEV_CLOSE:
+            ret = dev_close(arg1);
+            break;
+
+
+        /* ---------- 控制台 ---------- */
+        case SYS_CONSOLE_CLEAR:
+            console_clear();
+            ret = 0;
+            break;
+
+        case SYS_CONSOLE_SET_COLOR:
+            console_set_color((uint8_t)arg1, (uint8_t)arg2);
+            ret = 0;
+            break;
+
+        case SYS_CONSOLE_SET_CURSOR:
+            console_set_cursor((int)arg1, (int)arg2);
+            ret = 0;
+            break;
+
+        case SYS_CONSOLE_GET_CURSOR:
+            /* arg1 指向用户空间的 int[2]: out_x, out_y */
+            if ((uint32_t)arg1 < USER_SPACE_START ||
+                (uint32_t)arg1 + 8 > USER_SPACE_END) {
+                ret = EFAULT;
+            } else {
+                int cx = 0, cy = 0;
+                console_get_cursor(&cx, &cy);
+                ((int*)arg1)[0] = cx;
+                ((int*)arg1)[1] = cy;
+                ret = 0;
+            }
+            break;
+
+        case SYS_CONSOLE_SAVE_CURSOR:
+            console_save_cursor();
+            ret = 0;
+            break;
+
+        case SYS_CONSOLE_RESTORE_CURSOR:
+            console_restore_cursor();
+            ret = 0;
+            break;
+
+        case SYS_CONSOLE_DEBUG_WRITE:
+            if (!arg1 || arg2 == 0) {
+                ret = EINVAL;
+            } else if ((uint32_t)arg1 < USER_SPACE_START ||
+                       (uint32_t)arg1 + arg2 > USER_SPACE_END) {
+                ret = EFAULT;
+            } else {
+                ret = console_debug_write((const char*)arg1, arg2);
+            }
+            break;
+
+
+
         default:
             kprintf("[SYSCALL] Unknown syscall %d\n", syscall_no);
             ret = -1;

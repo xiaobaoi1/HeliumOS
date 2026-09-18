@@ -2,6 +2,8 @@
 #include <io.h>
 #include <stdint.h>
 #include <stddef.h>
+#include <device.h>
+#include <errno.h>
 
 #define KEYBOARD_DATA_PORT   0x60
 #define KB_BUF_SIZE          128
@@ -86,11 +88,6 @@ static char scancode_to_ascii(uint8_t scancode) {
     return use_upper ? shifted[scancode] : normal[scancode];
 }
 
-/* ===== 对外接口 ===== */
-void keyboard_init(void) {
-    /* 目前无需额外初始化，PS/2 默认工作 */
-}
-
 void keyboard_handle_irq(void) {
     uint8_t scancode = inb(KEYBOARD_DATA_PORT);
     char c = scancode_to_ascii(scancode);
@@ -112,4 +109,49 @@ char keyboard_getchar(void) {
     char c = kb_buffer[kb_tail];
     kb_tail = (kb_tail + 1) % KB_BUF_SIZE;
     return c;
+}
+
+/* ---------- device_ops 实现 ---------- */
+static int kb_dev_open(void **state, void *arg) {
+    (void)arg;
+    *state = NULL;
+    return OK;
+}
+
+static int kb_dev_read(void *state, void *buf, uint32_t n) {
+    (void)state;
+    if (!buf || n == 0) return EINVAL;
+    char *p = buf;
+    uint32_t got = 0;
+    while (got < n && keyboard_has_data()) {
+        p[got++] = keyboard_getchar();
+    }
+    return got;   /* 非阻塞，可能返回 0 */
+}
+
+static int kb_dev_write(void *state, const void *buf, uint32_t n) {
+    (void)state; (void)buf; (void)n;
+    return ENOSYS;   /* 键盘不支持写 */
+}
+
+static int kb_dev_ioctl(void *state, uint32_t cmd, void *arg) {
+    (void)state; (void)cmd; (void)arg;
+    return ENOSYS;   /* 暂无 ioctl */
+}
+
+static void kb_dev_close(void *state) {
+    (void)state;
+}
+
+static const struct device_ops kb_ops = {
+    .open  = kb_dev_open,
+    .read  = kb_dev_read,
+    .write = kb_dev_write,
+    .ioctl = kb_dev_ioctl,
+    .close = kb_dev_close,
+};
+
+/* 在 keyboard_init 里注册 */
+void keyboard_init(void) {
+    dev_register(DEV_TYPE_KEYBOARD, &kb_ops);
 }

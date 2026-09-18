@@ -11,8 +11,16 @@
 #define SYS_SLEEP      5   // 留作以后实现
 
 /* ========== I/O 操作 (11~19) ========== */
-#define SYS_READ       11
-#define SYS_WRITE      12
+#define SYS_READ                     11
+#define SYS_WRITE                    12
+
+#define SYS_CONSOLE_CLEAR            13
+#define SYS_CONSOLE_SET_COLOR        14
+#define SYS_CONSOLE_SET_CURSOR       15
+#define SYS_CONSOLE_GET_CURSOR       16
+#define SYS_CONSOLE_SAVE_CURSOR      17
+#define SYS_CONSOLE_RESTORE_CURSOR   18
+#define SYS_CONSOLE_DEBUG_WRITE      19
 
 /* ========== 内存管理 (21~29) ========== */
 #define SYS_BRK        21
@@ -26,6 +34,13 @@
 #define SYS_FS_OPENDIR    36
 #define SYS_FS_READDIR    37
 #define SYS_FS_CLOSEDIR   38
+
+/* ========== 设备 (41~49) ========== */
+#define SYS_DEV_OPEN      41
+#define SYS_DEV_READ      42
+#define SYS_DEV_WRITE     43
+#define SYS_DEV_IOCTL     44
+#define SYS_DEV_CLOSE     45
 
 /* ========== 进程环境 (61~69) ========== */
 #define SYS_GETCWD        61

@@ -64,7 +64,7 @@ struct fat32_file {
     uint32_t current_cluster;
     uint32_t current_offset;
     uint32_t file_size;
-    uint8_t  buffer[SECTOR_SIZE];
+    // uint8_t  buffer[SECTOR_SIZE];
 };
 
 /* ★ 新增：FAT32 卷上下文。每个挂载点一个 */

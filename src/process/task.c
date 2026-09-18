@@ -157,6 +157,10 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd) {
         task->fs_handles[i].used = 0;
     }
 
+    for (int i = 0; i < DEV_MAX_HANDLES; i++) {
+        task->dev_handles[i].used = 0;
+    }
+
     /* 构造内核栈（与中断布局一致） */
     uint32_t *stack_top = (uint32_t*)(task->kernel_stack_phys + 4096);
 
@@ -241,6 +245,7 @@ void task_exit(struct task *task, int status) {
 
     /* 释放文件系统句柄 */
     fs_release_all(task);
+    dev_release_all(task);
 
     /* 释放用户空间 */
     if (task->pgd) {

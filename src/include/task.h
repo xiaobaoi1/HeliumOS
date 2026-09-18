@@ -5,6 +5,7 @@
 #include <volume.h>
 #include <path.h>
 #include <fs.h>
+#include <device.h>
 
 /* 进程状态 */
 #define TASK_STATE_READY         0   /* 就绪 */
@@ -52,6 +53,7 @@ struct task {
 
         /* 资源句柄表 */
     struct fs_handle fs_handles[FS_MAX_HANDLES];
+    struct dev_handle dev_handles[DEV_MAX_HANDLES];
 };
 
 void enqueue_task(struct task **head, struct task **tail, struct task *task);
