@@ -25,6 +25,7 @@ void vmm_init(void);
 
 /* 创建用户进程页目录（复制内核的前 256 项） */
 uint32_t *vmm_create_process_page_directory(void);
+void vmm_free_process_address_space(uint32_t *pgd);
 
 /* 在用户页目录中映射虚拟地址到物理地址 */
 void vmm_map_user_page(uint32_t *pgd, uint32_t virt, uint32_t phys, uint32_t flags);

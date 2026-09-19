@@ -118,3 +118,22 @@ uint32_t vmm_get_phys(uint32_t *pgd, uint32_t virt) {
 
     return (pte & 0xFFFFF000) + (virt & 0xFFF);
 }
+
+
+/* src/kernel/vmm.c 或 task.c */
+void vmm_free_process_address_space(uint32_t *pgd) {
+    if (!pgd) return;
+    for (int i = KERNEL_PDE_COUNT; i < 1024; i++) {
+        if (pgd[i] & PTE_PRESENT) {
+            uint32_t pt_phys = pgd[i] & 0xFFFFF000;
+            uint32_t *pt = (uint32_t*)pt_phys;
+            for (int j = 0; j < 1024; j++) {
+                if (pt[j] & PTE_PRESENT) {
+                    pmm_free_page(pt[j] & 0xFFFFF000);
+                }
+            }
+            pmm_free_page(pt_phys);
+        }
+    }
+    pmm_free_page((uint32_t)pgd);
+}

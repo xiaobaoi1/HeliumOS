@@ -65,10 +65,22 @@ fd_t fs_open(const char *path, int flags) {
 int fs_read(fd_t fd, void *buf, uint32_t n) {
     struct fs_handle *h = fs_get(fd);
     if (!h || h->obj_type != FS_OBJ_FILE) return EINVAL;
+    if (!buf || n == 0) return EINVAL;
 
     switch (h->fs_type) {
         case VOL_FS_FAT32: {
             struct fat32_volume *fvol = (struct fat32_volume*)h->vol->fs_private;
+            if (!fvol) return EINVAL;
+
+            /* 已经到文件末尾 */
+            if (h->offset >= h->u.fat32_file.file_size) {
+                return 0;    /* EOF */
+            }
+
+            /* 截断到剩余字节数 */
+            uint32_t remaining = h->u.fat32_file.file_size - h->offset;
+            if (n > remaining) n = remaining;
+
             int r = fat32_read_file(fvol, &h->u.fat32_file, buf, h->offset, n);
             if (r > 0) h->offset += r;
             return r;

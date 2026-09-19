@@ -35,6 +35,10 @@ uint32_t load_elf_from_disk(struct fat32_volume *vol, const char *path,
         if (ph.type == PT_LOAD) {
             if (ph.vaddr < USER_SPACE_START) continue;
 
+            kprintf("[ELF] PT_LOAD: vaddr=0x%x filesz=0x%x memsz=0x%x pages=%d\n",
+            ph.vaddr, ph.filesz, ph.memsz, (ph.memsz + 4095) / 4096);
+
+
             uint32_t pages_needed = (ph.memsz + 4095) / 4096;
             uint32_t virt_start = ph.vaddr & ~0xFFF;
 
@@ -64,12 +68,19 @@ uint32_t load_elf_from_disk(struct fat32_volume *vol, const char *path,
 
             /* .bss 清零 */
             if (ph.memsz > ph.filesz) {
-                for (uint32_t addr = ph.vaddr + ph.filesz;
-                     addr < ph.vaddr + ph.memsz; addr += 4) {
-                    uint32_t phys = vmm_get_phys(pgd, addr & ~0xFFF);
-                    if (phys) {
-                        *(uint8_t*)(phys + (addr & 0xFFF)) = 0;
+                uint32_t addr = ph.vaddr + ph.filesz;
+                uint32_t end  = ph.vaddr + ph.memsz;
+                while (addr < end) {
+                    uint32_t page_start = addr & ~0xFFF;
+                    uint32_t phys = vmm_get_phys(pgd, page_start);
+                    if (!phys) {
+                        addr = page_start + 0x1000;
+                        continue;
                     }
+                    uint32_t page_end = page_start + 0x1000;
+                    uint32_t chunk_end = (page_end < end) ? page_end : end;
+                    memset((uint8_t*)phys + (addr - page_start), 0, chunk_end - addr);
+                    addr = chunk_end;
                 }
             }
         }

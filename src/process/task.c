@@ -195,8 +195,8 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd) {
 
     enqueue_task(&ready_queue_head, &ready_queue_tail, task);
 
-    kprintf("[TASK] Process %d created. Entry: %p, Kernel stack: %p\n",
-            task->pid, entry_point, task->kernel_stack_phys);
+    kprintf("[TASK] Process %d created. Entry: %p, Kernel stack: %p, heap_brk=%p\n",
+        task->pid, entry_point, task->kernel_stack_phys, task->heap_brk);
 
     return task;
 }
@@ -235,6 +235,12 @@ void scheduler_start(void) {
     while (1) __asm__("cli; hlt");
 }
 
+/* 注意：本函数释放在自己 kernel_stack 上的资源，
+ * 依赖以下不变式：
+ *   1. int 0x80 中断门进入后 IF=0，全程不可抢占
+ *   2. 本函数中间不调用 pmm_alloc_page
+ *   3. switch_to 换 CR3/换 esp 之前不会访问此栈
+ * 如果未来修改打破任一条件，需改成"延迟释放"模式。 */
 /* ---------- 进程退出 ---------- */
 void task_exit(struct task *task, int status) {
     if (!task) return;
@@ -249,20 +255,7 @@ void task_exit(struct task *task, int status) {
 
     /* 释放用户空间 */
     if (task->pgd) {
-        uint32_t *pgd = task->pgd;
-        for (int i = KERNEL_PDE_COUNT; i < 1024; i++) {
-            if (pgd[i] & PTE_PRESENT) {
-                uint32_t pt_phys = pgd[i] & 0xFFFFF000;
-                uint32_t *pt = (uint32_t*)pt_phys;
-                for (int j = 0; j < 1024; j++) {
-                    if (pt[j] & PTE_PRESENT) {
-                        pmm_free_page(pt[j] & 0xFFFFF000);
-                    }
-                }
-                pmm_free_page(pt_phys);
-            }
-        }
-        pmm_free_page((uint32_t)task->pgd);
+        vmm_free_process_address_space(task->pgd);
         task->pgd = NULL;
     }
 

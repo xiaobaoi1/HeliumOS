@@ -85,12 +85,6 @@ void create_shell_task(struct fat32_volume *vol) {
 }
 
 
-/* 注意：本函数释放在自己 kernel_stack 上的资源，
- * 依赖以下不变式：
- *   1. int 0x80 中断门进入后 IF=0，全程不可抢占
- *   2. 本函数中间不调用 pmm_alloc_page
- *   3. switch_to 换 CR3/换 esp 之前不会访问此栈
- * 如果未来修改打破任一条件，需改成"延迟释放"模式。 */
 
 void kmain(uint32_t magic, uint32_t addr) {
     screen_init();

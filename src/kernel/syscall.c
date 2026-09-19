@@ -12,6 +12,39 @@
 #include <fs.h>
 #include <device.h>
 #include <console.h>
+#include <path.h>
+
+/* ---------- 用户指针校验辅助 ---------- */
+
+/* 检查 [addr, addr+size) 是否完全在用户空间
+ * 返回 0 成功，-1 失败
+ */
+static int check_user_range(uint32_t addr, uint32_t size) {
+    if (size == 0) return 0;
+    if (addr < USER_SPACE_START) return -1;
+    uint64_t end = (uint64_t)addr + size;
+    if (end > (uint64_t)USER_SPACE_END + 1) return -1;
+    return 0;
+}
+
+/* 从用户空间拷贝字符串到内核缓冲区
+ * 返回 >= 0 成功（拷贝的字节数含 '\0'），< 0 失败
+ */
+static int strncpy_from_user(char *dest, const char *src, size_t max_len) {
+    if (!src || !dest || max_len == 0) return -1;
+    if ((uint32_t)src < USER_SPACE_START) return -1;
+
+    for (size_t i = 0; i < max_len; i++) {
+        uint32_t addr = (uint32_t)src + i;
+        if (addr < USER_SPACE_START || addr > USER_SPACE_END) {
+            return -1;
+        }
+        char c = src[i];
+        dest[i] = c;
+        if (c == '\0') return (int)(i + 1);
+    }
+    return -1;  /* 没有终止符 */
+}
 
 /* 系统调用 write：fd=1 走控制台，其他 fd 暂不支持 */
 static int sys_write(int fd, const char *buf, uint32_t count) {
@@ -61,7 +94,14 @@ static int has_child(struct task *parent, int pid) {
 /* 系统调用 waitpid */
 static int sys_waitpid(int pid, int *status) {
     struct task *current = get_current_task();
-    if (!current) return -1;
+    if (!current) return EINVAL;
+
+    /* status 可以为 NULL（表示不关心退出码） */
+    if (status != NULL) {
+        if (check_user_range((uint32_t)status, sizeof(int)) < 0) {
+            return EFAULT;
+        }
+    }
 
     while (1) {
         /* 找已退出的子进程 */
@@ -74,13 +114,14 @@ static int sys_waitpid(int pid, int *status) {
 
                 remove_task_from_queue(&blocked_list_head, &blocked_list_tail, t);
                 pmm_free_page((uint32_t)t);
+                kprintf("[WAITPID] Freed PCB pid=%d at phys %p\n", child_pid, (uint32_t)t);
                 return child_pid;
             }
         }
 
         /* 没有匹配的子进程（且没有活着的），直接返回 */
         if (!has_child(current, pid)) {
-            return -1;
+            return ECHILD;
         }
 
         /* 阻塞，等待子进程退出 */
@@ -92,14 +133,18 @@ static int sys_waitpid(int pid, int *status) {
 
 static int sys_brk(uint32_t new_brk) {
     struct task *cur = get_current_task();
-    if (!cur) return -1;
+    kprintf("[BRK] pid=%d new=0x%x heap_brk=0x%x\n",
+            cur ? (int)cur->pid : -1,
+            new_brk,
+            cur ? cur->heap_brk : 0);
+    if (!cur) return EINVAL;
 
     // 如果 new_brk == 0，仅返回当前 brk（查询用途）
     if (new_brk == 0) return cur->heap_brk;
 
     // 边界检查
     if (new_brk < cur->heap_base || new_brk > cur->heap_limit) {
-        return -1;
+        return EINVAL;
     }
 
     uint32_t old_brk = cur->heap_brk;
@@ -114,7 +159,7 @@ static int sys_brk(uint32_t new_brk) {
         if (new_brk > old_brk) {
             // 扩展堆：分配物理页并映射
             uint32_t phys = pmm_alloc_page();
-            if (!phys) return -1;
+            if (!phys) return ENOMEM;
             vmm_map_user_page(cur->pgd, addr, phys, PTE_WRITE | PTE_USER);
         } else {
             // 收缩堆：解除映射并释放物理页
@@ -130,70 +175,53 @@ static int sys_brk(uint32_t new_brk) {
     return 0; // 成功
 }
 
-// 简单复制用户空间字符串到内核缓冲区（假设用户空间地址有效）
-static int strncpy_from_user(char *dest, const char *src, size_t max_len) {
-    size_t i;
-    for (i = 0; i < max_len; i++) {
-        // 检查 src 是否在用户空间
-        if ((uint32_t)(src + i) < USER_SPACE_START ||
-            (uint32_t)(src + i) > USER_SPACE_END) {
-            return -1;
-        }
-        char c = src[i];
-        dest[i] = c;
-        if (c == '\0') break;
-    }
-    if (i == max_len) return -1; // 没有终止符
-    return i + 1; // 包括终止符
-}
-
 static int sys_spawn(const char *path) {
     struct task *parent = get_current_task();
-    if (!parent) return -1;
+    if (!parent) return EINVAL;                /* 原来是 EFAULT */
 
-    char path_buf[128];
+    char path_buf[PATH_MAX_LEN];
     if (strncpy_from_user(path_buf, path, sizeof(path_buf)) < 0) {
-        return -1;
+        return EFAULT;                          /* 保持 */
     }
 
-    // 1. 创建子进程页目录
+    /* 1. 创建子进程页目录 */
     uint32_t *pgd_child = vmm_create_process_page_directory();
-    if (!pgd_child) return -1;
+    if (!pgd_child) return ENOMEM;              /* 原来是 -1 */
 
-    // 2. 加载 ELF 获取入口点
+    /* 2. 加载 ELF 获取入口点 */
     struct resolved_path rp;
-    if (resolve_path(path_buf, &rp) != OK) return -1;
+    int rr = resolve_path(path_buf, &rp);
+    if (rr != OK) {
+        vmm_free_process_address_space(pgd_child);
+        return rr;                              /* 传回 ENOENT / EINVAL */
+    }
 
     struct fat32_volume *vol = (struct fat32_volume*)rp.vol->fs_private;
-    if (!vol) return -1;
+    if (!vol) {
+        vmm_free_process_address_space(pgd_child);
+        return ENOENT;                          /* 原来是 -1 */
+    }
 
     uint32_t entry = load_elf_from_disk(vol, rp.path, pgd_child);
     if (!entry) {
-        // 加载失败，释放页目录（简化：暂不处理）
-        pmm_free_page((uint32_t)pgd_child);
-        return -1;
+        vmm_free_process_address_space(pgd_child);
+        return ENOEXEC;                         /* 原来是 -1 */
     }
 
-    // 3. 创建任务（复用 task_create，但 task_create 会再次分配用户栈和内核栈）
-    //    注意：task_create 会调用 vmm_map_user_page 映射用户栈，还会构造 iret 帧
-    //    但它不会加载 ELF，所以我们需要先加载 ELF 再调用 task_create
-    //    task_create 只接受 entry_point 和 pgd，它会分配栈并设置 iret 帧
+    /* 3. 创建任务 */
     struct task *child = task_create(entry, pgd_child);
     if (!child) {
-        pmm_free_page((uint32_t)pgd_child);
-        return -1;
+        vmm_free_process_address_space(pgd_child);
+        return ENOMEM;                          /* 原来是 -1 */
     }
 
-    // 4. 设置父子关系（task_create 已经设置了 parent，但为保险再设一次）
     child->parent = parent;
-
-    // 5. 子进程已加入就绪队列（由 task_create 完成）
     return child->pid;
 }
 
 static int sys_sleep(uint32_t ms) {
     struct task *cur = get_current_task();
-    if (!cur) return -1;
+    if (!cur) return EINVAL;
     if (ms == 0) return 0;
 
     cur->sleep_ticks = ms;
@@ -239,15 +267,29 @@ void syscall_handler(struct registers *regs) {
         
 
 
-        /* ---------- 文件系统 ---------- */
-        case SYS_FS_OPEN:
-            ret = fs_open((const char*)arg1, arg2);
+                /* ---------- 文件系统 ---------- */
+        case SYS_FS_OPEN: {
+            char path_buf[PATH_MAX_LEN];
+            if (strncpy_from_user(path_buf, (const char*)arg1, sizeof(path_buf)) < 0) {
+                ret = EFAULT;
+            } else {
+                ret = fs_open(path_buf, arg2);
+            }
             break;
+        }
         case SYS_FS_READ:
-            ret = fs_read(arg1, (void*)arg2, arg3);
+            if (check_user_range(arg2, arg3) < 0) {
+                ret = EFAULT;
+            } else {
+                ret = fs_read(arg1, (void*)arg2, arg3);
+            }
             break;
         case SYS_FS_WRITE:
-            ret = fs_write(arg1, (const void*)arg2, arg3);
+            if (check_user_range(arg2, arg3) < 0) {
+                ret = EFAULT;
+            } else {
+                ret = fs_write(arg1, (const void*)arg2, arg3);
+            }
             break;
         case SYS_FS_SEEK:
             ret = fs_seek(arg1, arg2);
@@ -255,33 +297,63 @@ void syscall_handler(struct registers *regs) {
         case SYS_FS_CLOSE:
             ret = fs_close(arg1);
             break;
-        case SYS_FS_OPENDIR:
-            ret = fs_opendir((const char*)arg1);
+        case SYS_FS_OPENDIR: {
+            char path_buf[PATH_MAX_LEN];
+            if (strncpy_from_user(path_buf, (const char*)arg1, sizeof(path_buf)) < 0) {
+                ret = EFAULT;
+            } else {
+                ret = fs_opendir(path_buf);
+            }
             break;
+        }
         case SYS_FS_READDIR:
-            ret = fs_readdir(arg1, (struct dirent*)arg2);
+            if (check_user_range(arg2, sizeof(struct dirent)) < 0) {
+                ret = EFAULT;
+            } else {
+                ret = fs_readdir(arg1, (struct dirent*)arg2);
+            }
             break;
         case SYS_FS_CLOSEDIR:
             ret = fs_closedir(arg1);
             break;
         case SYS_GETCWD:
-            ret = fs_getcwd((char*)arg1, arg2);
+            if (check_user_range(arg1, arg2) < 0) {
+                ret = EFAULT;
+            } else {
+                ret = fs_getcwd((char*)arg1, arg2);
+            }
             break;
-        case SYS_CHDIR:
-            ret = fs_chdir((const char*)arg1);
+        case SYS_CHDIR: {
+            char path_buf[PATH_MAX_LEN];
+            if (strncpy_from_user(path_buf, (const char*)arg1, sizeof(path_buf)) < 0) {
+                ret = EFAULT;
+            } else {
+                ret = fs_chdir(path_buf);
+            }
             break;
+        }
 
         /* ---------- 设备 ---------- */
         case SYS_DEV_OPEN:
+            /* arg2 语义由设备类型决定，暂不校验 */
             ret = dev_open(arg1, (void*)arg2);
             break;
         case SYS_DEV_READ:
-            ret = dev_read(arg1, (void*)arg2, arg3);
+            if (check_user_range(arg2, arg3) < 0) {
+                ret = EFAULT;
+            } else {
+                ret = dev_read(arg1, (void*)arg2, arg3);
+            }
             break;
         case SYS_DEV_WRITE:
-            ret = dev_write(arg1, (const void*)arg2, arg3);
+            if (check_user_range(arg2, arg3) < 0) {
+                ret = EFAULT;
+            } else {
+                ret = dev_write(arg1, (const void*)arg2, arg3);
+            }
             break;
         case SYS_DEV_IOCTL:
+            /* arg3 语义由 cmd 决定，暂不校验 */
             ret = dev_ioctl(arg1, arg2, (void*)arg3);
             break;
         case SYS_DEV_CLOSE:
@@ -344,7 +416,7 @@ void syscall_handler(struct registers *regs) {
 
         default:
             kprintf("[SYSCALL] Unknown syscall %d\n", syscall_no);
-            ret = -1;
+            ret = ENOSYS;
     }
 
     regs->eax = ret;

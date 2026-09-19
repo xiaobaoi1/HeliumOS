@@ -21,5 +21,7 @@
 #define EEXIST     -15    /* 已存在 */
 #define ENOTEMPTY  -16    /* 目录非空 */
 #define EPIPE      -17    /* 管道破裂 */
+#define ECHILD     -18    /* 没有子进程 */
+#define ENOEXEC    -19    /* 可执行格式错误 */
 
 #endif
