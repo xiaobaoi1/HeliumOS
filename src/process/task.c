@@ -7,6 +7,8 @@
 #include <isr.h>
 #include <errno.h>
 
+extern void enter_user_mode(void);
+
 static uint32_t next_pid = 1;
 struct task *current_task = NULL;
 
@@ -107,8 +109,6 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd) {
     task->wait_target = NULL;
     task->sleep_ticks = 0;
 
-    task->syscall_regs = 0;
-
 
     task->creator_pid = get_current_task() ? get_current_task()->pid : 0;
     task->wait_deadline = 0;
@@ -180,37 +180,61 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd) {
         task->dev_handles[i].used = 0;
     }
 
-    /* 构造内核栈（与中断布局一致） */
-    uint32_t *stack_top = (uint32_t*)(task->kernel_stack_phys + 4096);
+        /* 构造内核栈：模拟"刚从 switch_to 返回"的状态。
+     *
+     * 栈布局（从低地址到高地址）：
+     *   [callee-saved: edi, esi, ebx, ebp]      ← kernel_esp 指向这里
+     *   [返回地址 = enter_user_mode]
+     *   [段寄存器: gs, fs, es, ds]
+     *   [pusha: edi, esi, ebp, (esp), ebx, edx, ecx, eax]
+     *   [int_no, err_code]
+     *   [iret 帧: eip, cs, eflags, user_esp, ss]
+     *
+     * 执行过程：
+     *   switch_to(NULL, task) 的 pop 弹出 callee-saved；
+     *   ret 跳到 enter_user_mode；
+     *   enter_user_mode 恢复段寄存器 + pusha，跳过 int/err，iret 到用户态。
+     */
+    uint32_t *sp = (uint32_t*)(task->kernel_stack_phys + 4096);
 
-    /* iret 帧 */
-    *(--stack_top) = 0x23;
-    *(--stack_top) = task->user_stack_virt;
-    *(--stack_top) = 0x200 | 0x2;
-    *(--stack_top) = 0x1B;
-    *(--stack_top) = task->entry_point;
+    /* iret 帧（5 个 dword，从高到低写） */
+    *(--sp) = 0x23;                    /* ss */
+    *(--sp) = task->user_stack_virt;   /* user esp */
+    *(--sp) = 0x202;                   /* eflags: IF=1 */
+    *(--sp) = 0x1B;                    /* cs */
+    *(--sp) = task->entry_point;       /* eip */
 
-    /* 错误码 + 中断号占位 */
-    *(--stack_top) = 0;
-    *(--stack_top) = 0;
+    /* 中断占位（2 个 dword） */
+    *(--sp) = 0;                       /* err_code */
+    *(--sp) = 0;                       /* int_no */
 
-    /* pusha 数据 */
-    *(--stack_top) = 0;  // eax
-    *(--stack_top) = 0;  // ecx
-    *(--stack_top) = 0;  // edx
-    *(--stack_top) = 0;  // ebx
-    *(--stack_top) = 0;  // esp
-    *(--stack_top) = 0;  // ebp
-    *(--stack_top) = 0;  // esi
-    *(--stack_top) = 0;  // edi
+    /* pusha 保存（8 个 dword，从高到低） */
+    *(--sp) = 0;                       /* eax */
+    *(--sp) = 0;                       /* ecx */
+    *(--sp) = 0;                       /* edx */
+    *(--sp) = 0;                       /* ebx */
+    *(--sp) = 0;                       /* esp (dummy) */
+    *(--sp) = 0;                       /* ebp */
+    *(--sp) = 0;                       /* esi */
+    *(--sp) = 0;                       /* edi */
 
-    /* 段寄存器 */
-    *(--stack_top) = 0x23;
-    *(--stack_top) = 0x23;
-    *(--stack_top) = 0x23;
-    *(--stack_top) = 0x23;
+    /* 段寄存器（4 个 dword，从高到低） */
+    *(--sp) = 0x23;                    /* ds */
+    *(--sp) = 0x23;                    /* es */
+    *(--sp) = 0x23;                    /* fs */
+    *(--sp) = 0x23;                    /* gs */
 
-    task->kernel_esp = (uint32_t)stack_top;
+    /* 返回地址（trampoline） */
+    *(--sp) = (uint32_t)enter_user_mode;
+
+    /* callee-saved（4 个 dword，从高到低） */
+    *(--sp) = 0;                       /* ebp */
+    *(--sp) = 0;                       /* ebx */
+    *(--sp) = 0;                       /* esi */
+    *(--sp) = 0;                       /* edi */
+    /* 此时 sp 指向栈顶（= kernel_esp） */
+
+    task->kernel_esp = (uint32_t)sp;
 
     enqueue_task(&ready_queue_head, &ready_queue_tail, task);
 
@@ -234,32 +258,24 @@ void scheduler_start(void) {
     }
     set_current_task(first);
 
-    __asm__ volatile("mov %0, %%cr3" :: "r"(first->pgd));
-    uint32_t kernel_stack_top = first->kernel_stack_phys + 4096;
-    tss_set_kernel_stack(kernel_stack_top);
-
-    __asm__ volatile(
-        "mov %0, %%esp\n"
-        "pop %%gs\n"
-        "pop %%fs\n"
-        "pop %%es\n"
-        "pop %%ds\n"
-        "popa\n"
-        "add $8, %%esp\n"
-        "iret\n"
-        :: "r"(first->kernel_esp)
-        : "memory"
-    );
+    /* switch_to 会切 CR3、更新 TSS.esp0、加载 first->kernel_esp，
+     * 通过 ret 跳到 enter_user_mode，最终 iret 进入用户态。
+     * 本函数不会返回。 */
+    switch_to(NULL, first);
 
     while (1) __asm__("cli; hlt");
 }
 
-/* 注意：本函数释放在自己 kernel_stack 上的资源，
- * 依赖以下不变式：
- *   1. int 0x80 中断门进入后 IF=0，全程不可抢占
- *   2. 本函数中间不调用 pmm_alloc_page
- *   3. switch_to 换 CR3/换 esp 之前不会访问此栈
- * 如果未来修改打破任一条件，需改成"延迟释放"模式。 */
+/* task_exit: 进程退出。
+ *
+ * 不释放 kernel_stack / pgd / PCB——这些由 proc_free_pcb 释放。
+ * proc_unref 归零且 t == current 时把 task 挂入 graveyard，
+ * 由 irq_handler 开头的 proc_reap_graveyard 回收。
+ *
+ * 依赖：
+ *   - schedule 能识别 ZOMBIE 状态的 current（不放回 ready_queue）
+ *   - switch_to 支持 prev != NULL 的正常保存（不需要 prev == NULL 特例）
+ */
 /* ---------- 进程退出 ---------- */
 void task_exit(struct task *task, int status) {
     if (!task) return;
@@ -275,7 +291,7 @@ void task_exit(struct task *task, int status) {
     /* 从就绪队列移除 */
     remove_task_from_queue(&ready_queue_head, &ready_queue_tail, task);
 
-    /* 标记 zombie */
+    /* 标记 zombie，挂入 blocked_list */
     task->zombie = 1;
     task->state = TASK_STATE_ZOMBIE;
     enqueue_task(&blocked_list_head, &blocked_list_tail, task);
@@ -283,9 +299,12 @@ void task_exit(struct task *task, int status) {
     /* 唤醒所有等它的进程 */
     wake_up_waiters(task);
 
-    /* 释放 self 引用 —— proc_unref 会自动处理 graveyard */
+    /* 释放 self 引用。如果 refcount 归零且 t == current，
+     * proc_unref 会把 task 挂入 graveyard，由 irq_handler 回收。 */
     proc_unref(task);
 
-    set_current_task(NULL);
+    /* schedule 里 current = task，state 是 ZOMBIE，
+     * 不满足"时间片耗尽"的分支，直接被跳过。
+     * switch_to 会保存 task->kernel_esp 但不会再恢复。 */
     schedule();
 }

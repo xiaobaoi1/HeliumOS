@@ -51,10 +51,7 @@ static int strncpy_from_user(char *dest, const char *src, size_t max_len) {
 static int sys_write(int fd, const char *buf, uint32_t count) {
     if (fd != 1) return EINVAL;
     if (!buf || count == 0) return EINVAL;
-    if ((uint32_t)buf < USER_SPACE_START ||
-        (uint32_t)buf + count > USER_SPACE_END) {
-        return EFAULT;
-    }
+    if (check_user_range((uint32_t)buf, count) < 0) return EFAULT;
     return console_write(buf, count);
 }
 
@@ -62,10 +59,7 @@ static int sys_write(int fd, const char *buf, uint32_t count) {
 static int sys_read(int fd, char *buf, uint32_t count) {
     if (fd != 0) return EINVAL;
     if (!buf || count == 0) return EINVAL;
-    if ((uint32_t)buf < USER_SPACE_START ||
-        (uint32_t)buf + count > USER_SPACE_END) {
-        return EFAULT;
-    }
+    if (check_user_range((uint32_t)buf, count) < 0) return EFAULT;
     return console_read(buf, count);
 }
 
@@ -86,7 +80,7 @@ static int wait_impl(struct task *cur, struct task *target,
     if (timeout_ms > 0) deadline = get_ticks() + timeout_ms;
 
     while (1) {
-        /* 1. 检查目标是否已退出 */
+        /* 1. 目标已退出 */
         if (target) {
             if (target->zombie) {
                 if (status) *status = target->exit_status;
@@ -116,17 +110,16 @@ static int wait_impl(struct task *cur, struct task *target,
             if (!has_alive) return ECHILD;
         }
 
-        /* 2. 检查超时 */
+        /* 2. 超时 */
         if (deadline > 0 && get_ticks() >= deadline) {
             return EAGAIN;
         }
 
-        if (cur->syscall_regs) {
-            ((struct registers*)cur->syscall_regs)->eax = EAGAIN;
-        }
-
-        /* 3. 阻塞 */
-        cur->wait_target   = target;         /* NULL 表示等任意 */
+        /* 3. 阻塞
+         * schedule 会切走；被唤醒时从 switch_to 的 ret 返回，
+         * 继续循环；最终 return 会流回 sys_wait → syscall_handler，
+         * 由 regs->eax = ret 写到用户态。 */
+        cur->wait_target   = target;
         cur->wait_deadline = deadline;
         block_current(TASK_STATE_WAITING_CHILD);
         schedule();
@@ -135,8 +128,6 @@ static int wait_impl(struct task *cur, struct task *target,
 
 static int sys_wait(proc_handle_t h, int *status, uint32_t timeout_ms) {
     struct task *cur = get_current_task();
-    kprintf("[WAIT] enter: cur=%p pid=%d h=%d timeout=%d\n",
-            cur, cur ? cur->pid : 0, h, timeout_ms);
     if (!cur) return EINVAL;
 
     if (status) {
@@ -146,9 +137,7 @@ static int sys_wait(proc_handle_t h, int *status, uint32_t timeout_ms) {
     struct task *target = proc_handle_deref(h, PROC_WAIT);
     if (!target) return EINVAL;
 
-    int r = wait_impl(cur, target, status, timeout_ms);
-    kprintf("[WAIT] leave: r=%d\n", r);
-    return r;
+    return wait_impl(cur, target, status, timeout_ms);
 }
 
 /* 注意：本函数靠"句柄只能由 spawn 分配给当前进程"这一不变式
@@ -184,10 +173,6 @@ static int sys_waitpid(int pid, int *status) {
  * 若实现严格语义，需要在失败路径遍历 start_page..addr 释放物理页。 */
 static int sys_brk(uint32_t new_brk) {
     struct task *cur = get_current_task();
-    kprintf("[BRK] pid=%d new=0x%x heap_brk=0x%x\n",
-            cur ? (int)cur->pid : -1,
-            new_brk,
-            cur ? cur->heap_brk : 0);
     if (!cur) return EINVAL;
 
     // 如果 new_brk == 0，仅返回当前 brk（查询用途）
@@ -304,7 +289,7 @@ static int sys_kill(proc_handle_t h, int status) {
     /* 唤醒所有等它的 */
     wake_up_waiters(target);
 
-    /* ★ 释放 self 引用 —— 目标不会再走 task_exit */
+    /* 释放 self 引用：被 kill 的进程不会再走 task_exit */
     proc_unref(target);
 
     return OK;
@@ -330,11 +315,6 @@ static int sys_sleep(uint32_t ms) {
     if (!cur) return EINVAL;
     if (ms == 0) return 0;
 
-    if (cur->syscall_regs) {
-        ((struct registers*)cur->syscall_regs)->eax = 0;
-    }
-
-
     cur->sleep_ticks = ms;
     block_current(TASK_STATE_SLEEPING);
     schedule();
@@ -343,11 +323,6 @@ static int sys_sleep(uint32_t ms) {
 
 /* 系统调用分发器 */
 void syscall_handler(struct registers *regs) {
-    struct task *cur = get_current_task();
-    if (cur) {
-        cur->syscall_regs = (uint32_t)regs;
-    }
-
     uint32_t syscall_no = regs->eax;
     uint32_t arg1 = regs->ebx;
     uint32_t arg2 = regs->ecx;
@@ -504,8 +479,7 @@ void syscall_handler(struct registers *regs) {
 
         case SYS_CONSOLE_GET_CURSOR:
             /* arg1 指向用户空间的 int[2]: out_x, out_y */
-            if ((uint32_t)arg1 < USER_SPACE_START ||
-                (uint32_t)arg1 + 8 > USER_SPACE_END) {
+            if (check_user_range(arg1, 8) < 0) {
                 ret = EFAULT;
             } else {
                 int cx = 0, cy = 0;
@@ -529,8 +503,7 @@ void syscall_handler(struct registers *regs) {
         case SYS_CONSOLE_DEBUG_WRITE:
             if (!arg1 || arg2 == 0) {
                 ret = EINVAL;
-            } else if ((uint32_t)arg1 < USER_SPACE_START ||
-                       (uint32_t)arg1 + arg2 > USER_SPACE_END) {
+            } else if (check_user_range(arg1, arg2) < 0) {
                 ret = EFAULT;
             } else {
                 ret = console_debug_write((const char*)arg1, arg2);

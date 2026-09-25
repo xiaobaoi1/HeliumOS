@@ -43,7 +43,9 @@ void schedule(void) {
         return;
     }
 
-    /* 时间片用完，放回就绪队列 */
+    /* 时间片用完，放回就绪队列。
+     * 注意：ZOMBIE 状态的 current（task_exit 调进来）不满足此分支，
+     * 会被跳过——task 已在 blocked_list 里，不重复入队。 */
     if (current && current->state == TASK_STATE_RUNNING) {
         current->time_slice = TIME_SLICE_TICKS;
         current->state = TASK_STATE_READY;

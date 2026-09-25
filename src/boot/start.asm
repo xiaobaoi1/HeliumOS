@@ -25,7 +25,6 @@ extern isr_handler
 extern irq_handler
 extern isr_syscall_handler
 extern tss_set_kernel_stack
-extern current_task          ; 新增
 
 _start:
     mov [magic_phys], eax
@@ -172,30 +171,18 @@ isr_common_stub:
     push es
     push fs
     push gs
-    ; 现在 esp 指向 eax，直接保存
-    ; push eax
-    ; push ebx
-    mov eax, [current_task]
-    test eax, eax
-    jz .skip_isr
-    mov [eax + 20], esp
-.skip_isr:
-    ; pop ebx
-    ; pop eax
 
-    ; push ds
-    ; push es
-    ; push fs
-    ; push gs
     mov ax, 0x10
     mov ds, ax
     mov es, ax
     mov fs, ax
     mov gs, ax
     cld
+
     push esp
     call isr_handler
     add esp, 4
+
     pop gs
     pop fs
     pop es
@@ -211,21 +198,6 @@ irq_common_stub:
     push es
     push fs
     push gs
-    ; 现在 esp 指向 eax，直接保存
-    ; push eax
-    ; push ebx
-    mov eax, [current_task]
-    test eax, eax
-    jz .skip_irq
-    mov [eax + 20], esp   ; 保存 esp（指向 eax）
-.skip_irq:
-    ; pop ebx
-    ; pop eax
-
-    ; push ds
-    ; push es
-    ; push fs
-    ; push gs
 
     mov ax, 0x10
     mov ds, ax
@@ -233,9 +205,11 @@ irq_common_stub:
     mov fs, ax
     mov gs, ax
     cld
+
     push esp
     call irq_handler
     add esp, 4
+
     pop gs
     pop fs
     pop es
@@ -274,41 +248,55 @@ syscall_common_stub:
 ; ============================================================
 global switch_to
 switch_to:
-    mov eax, [esp+4]   ; prev
-    mov edx, [esp+8]   ; next
+    push ebp
+    push ebx
+    push esi
+    push edi
 
-    ; 保存当前栈指针到 prev->kernel_esp
-    ; mov [eax + 20], esp
+    ; 保存 prev 的 esp（如果 prev 非 NULL）
+    mov eax, [esp + 20]          ; prev
+    test eax, eax
+    jz .no_save
+    mov [eax + 20], esp          ; prev->kernel_esp = esp
+.no_save:
 
-    ; 切换到 next 的页目录
-    mov ecx, [edx + 12]
-    mov cr3, ecx
+    ; 取 next
+    mov eax, [esp + 24]          ; next
 
-    ; 更新 TSS.esp0
-    push edx
-    mov eax, [edx + 16]
-    add eax, 4096
-    push eax
+    ; 更新 TSS.esp0（在切栈前，用当前栈）
+    mov ecx, [eax + 16]          ; next->kernel_stack_phys
+    add ecx, 4096                ; 栈顶
+    push eax                     ; 保存 next
+    push ecx                     ; 参数
     call tss_set_kernel_stack
     add esp, 4
-    pop edx
+    pop eax                      ; 恢复 next
 
-    ; 切换到 next 的内核栈
-    mov esp, [edx + 20]
+    ; 切 CR3
+    mov ecx, [eax + 12]          ; next->pgd
+    mov cr3, ecx
 
+    ; 切到 next 的栈
+    mov esp, [eax + 20]          ; next->kernel_esp
 
-    ; ===== 恢复段寄存器 =====
+    ; 恢复 callee-saved
+    pop edi
+    pop esi
+    pop ebx
+    pop ebp
+
+    ; 返回：首次调度会跳到 enter_user_mode；
+    ; 后续切换会回到 schedule 调用 switch_to 之后
+    ret
+
+global enter_user_mode
+enter_user_mode:
     pop gs
     pop fs
     pop es
     pop ds
-
-    ; ===== 恢复通用寄存器 =====
     popa
-
     add esp, 8
-
-    ; ===== 执行 iret =====
     iret
 
 ; ============================================================

@@ -27,19 +27,23 @@ void irq_handler(struct registers *regs) {
     }
     __asm__ volatile("mov $0x20, %%al; out %%al, $0x20" ::: "eax", "memory");
 
-    if (regs->int_no == 32) {
-        // kprintf(".");
-
-        /* 先回收 graveyard */
+        if (regs->int_no == 32) {
+        /* 先回收 graveyard（上次 task_exit 挂入的 PCB） */
         proc_reap_graveyard();
+
+        /* tick 相关：SLEEPING 递减 + WAITING_CHILD 超时 */
         sleep_tick();
+
         struct task *current = get_current_task();
         if (current) {
             current->time_slice--;
             if (current->time_slice == 0) {
-                schedule();  // 可能触发 switch_to，不会返回
+                schedule();
             }
-        }else{
+        } else {
+            /* current == NULL：只有启动早期（scheduler_start 之前）
+             * 时钟中断先于首次调度触发时才会到这里。
+             * 调 schedule 让它走 idle 兜底。 */
             schedule();
         }
     } else if (regs->int_no == 33) {

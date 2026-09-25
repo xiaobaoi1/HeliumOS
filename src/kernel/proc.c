@@ -80,7 +80,7 @@ void proc_unref(struct task *t) {
 void proc_free_pcb(struct task *t) {
     if (!t) return;
 
-    /* ★ 先从所有队列里摘掉，再释放内存 */
+    /* 先从所有队列里摘掉，再释放内存 */
     remove_task_from_queue(&blocked_list_head, &blocked_list_tail, t);
     remove_task_from_queue(&ready_queue_head, &ready_queue_tail, t);
 
@@ -102,11 +102,11 @@ void proc_free_pcb(struct task *t) {
     /* 释放 PCB */
     pmm_free_page((uint32_t)t);
 }
-/* 在 schedule 开头调用 */
+/* 在 irq_handler 里调用（时钟 tick 开头），此时 CPU 已在新进程的栈上 */
 void proc_reap_graveyard(void) {
     while (graveyard) {
         struct task *dead = graveyard;
-        graveyard = dead->grave_next;    /* ← 用 grave_next */
+        graveyard = dead->grave_next;
         dead->grave_next = NULL;
         proc_free_pcb(dead);
     }

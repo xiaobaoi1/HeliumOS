@@ -9,7 +9,7 @@ typedef int proc_handle_t;
 #define PROC_INVALID      (-1)
 
 /* 访问权限 */
-#define PROC_QUERY        0x01
+#define PROC_QUERY        0x01  // 预留
 #define PROC_TERMINATE    0x02
 #define PROC_WAIT         0x04
 #define PROC_ALL          0x07

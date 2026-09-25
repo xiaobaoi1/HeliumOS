@@ -120,7 +120,6 @@ uint32_t vmm_get_phys(uint32_t *pgd, uint32_t virt) {
 }
 
 
-/* src/kernel/vmm.c 或 task.c */
 void vmm_free_process_address_space(uint32_t *pgd) {
     if (!pgd) return;
     for (int i = KERNEL_PDE_COUNT; i < 1024; i++) {

@@ -125,6 +125,7 @@ int fat32_open_file(struct fat32_volume *vol, const char *path,
                     struct fat32_dir_entry *entry = &entries[j];
                     if (entry->name[0] == 0x00) break;
                     if (entry->name[0] == 0xE5) continue;
+                    if ((entry->attributes & 0x0F) == 0x0F) continue; /* LFN */
 
                     /* 8.3 名字构建 */
                     char name[13];
@@ -269,6 +270,7 @@ int fat32_is_dir(struct fat32_volume *vol, const char *path) {
                     struct fat32_dir_entry *e = &entries[j];
                     if (e->name[0] == 0x00) break;
                     if (e->name[0] == 0xE5) continue;
+                    if ((e->attributes & 0x0F) == 0x0F) continue; /* LFN */
 
                     char name[13];
                     int k = 0;
@@ -340,6 +342,7 @@ int fat32_opendir(struct fat32_volume *vol, const char *path,
                         if (e->name[0] == 0x00) break;
                         if (e->name[0] == 0xE5) continue;
                         if (!(e->attributes & 0x10)) continue;
+                        if ((e->attributes & 0x0F) == 0x0F) continue; /* LFN */
 
                         char name[13];
                         int k = 0;

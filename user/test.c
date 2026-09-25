@@ -395,6 +395,359 @@ static void test_ptr_bounds(void) {
     if (fd >= 0) fs_close(fd);
 }
 
+/* ---------- 9. 阻塞系统调用返回值（本次重构核心） ---------- */
+
+static void test_blocking_syscall(void) {
+    section("blocking syscall return value");
+
+    /* spawn 一个不会退出的进程（IDLE.ELF 用 pause 空转） */
+    int h = spawn("IDLE.ELF");
+    check(h >= 0, "spawn IDLE.ELF");
+    if (h < 0) return;
+
+    /* 给 IDLE 一点时间进入运行态 */
+    sleep_ms(20);
+
+    /* wait 超时应该返回 EAGAIN */
+    int status = 0;
+    int r = wait(h, &status, 30);
+    check_eq(r, EAGAIN, "wait timeout -> EAGAIN");
+
+    /* 再次 wait 应该还是 EAGAIN，证明上次超时没有副作用 */
+    r = wait(h, &status, 30);
+    check_eq(r, EAGAIN, "wait timeout again -> EAGAIN");
+
+    /* kill 后 wait 应该立即成功，且返回退出状态 */
+    r = kill(h, 99);
+    check_eq(r, OK, "kill -> OK");
+
+    r = wait(h, &status, 100);
+    check_eq(r, OK, "wait after kill -> OK");
+    check_eq(status, 99, "wait status = 99");
+
+    /* close 后 handle 应该失效 */
+    r = process_close(h);
+    check_eq(r, OK, "process_close -> OK");
+
+    r = process_close(h);
+    check(r < 0, "process_close again -> error");
+
+    r = wait(h, &status, 10);
+    check(r < 0, "wait invalid handle -> error");
+}
+
+/* ---------- 10. spawn 错误路径 ---------- */
+
+static void test_spawn_errors(void) {
+    section("spawn error paths");
+
+    int h = spawn("SYS:/NOT_EXIST_99999.ELF");
+    check(h < 0, "spawn nonexistent -> negative");
+
+    h = spawn("");
+    check(h < 0, "spawn empty path -> negative");
+
+    h = spawn((const char*)0x1000);     /* 内核地址 */
+    check(h < 0, "spawn kernel ptr -> negative");
+
+    h = spawn((const char*)0x50000000); /* 未映射的用户地址 */
+    /* 允许返回值不同，只要不是有效 handle */
+    check(h < 0, "spawn unmapped user ptr -> negative");
+
+    h = spawn("SYS:/BOOT");             /* 是目录不是 ELF */
+    check(h < 0, "spawn directory -> negative");
+}
+
+/* ---------- 11. 文件系统边界 ---------- */
+
+static void test_fs_boundaries(void) {
+    section("fs boundaries");
+
+    int fd = fs_open("SYS:/SHELL.ELF", FS_O_RDONLY);
+    check(fd >= 0, "fs_open SHELL.ELF");
+    if (fd < 0) return;
+
+    /* seek 超出文件大小 */
+    int r = fs_seek(fd, 0x10000000);
+    check(r < 0, "fs_seek beyond EOF -> error");
+
+    /* 读一遍到 EOF */
+    r = fs_seek(fd, 0);
+    check_eq(r, 0, "fs_seek to 0");
+
+    char buf[512];
+    int total = 0, n;
+    while ((n = fs_read(fd, buf, sizeof(buf))) > 0) {
+        total += n;
+        if (total > 500000) break;      /* 防止死循环 */
+    }
+    check(n == 0, "fs_read at EOF -> 0");
+    check(total > 0, "fs_read total > 0");
+
+    /* NULL 缓冲区 */
+    fs_seek(fd, 0);
+    r = fs_read(fd, NULL, 100);
+    check(r < 0, "fs_read NULL buf -> error");
+
+    /* 零长度读 */
+    r = fs_read(fd, buf, 0);
+    check(r < 0, "fs_read zero size -> error");
+
+    fs_close(fd);
+
+    /* 无效 fd */
+    r = fs_read(-1, buf, 10);
+    check(r < 0, "fs_read(-1) -> error");
+
+    r = fs_read(999, buf, 10);
+    check(r < 0, "fs_read(999) -> error");
+
+    r = fs_close(-1);
+    check(r < 0, "fs_close(-1) -> error");
+
+    /* 目录不能用 fs_open 打开（当前实现） */
+    fd = fs_open("SYS:/BOOT", FS_O_RDONLY);
+    if (fd >= 0) {
+        /* 如果实现允许打开目录，至少 read 应该失败 */
+        r = fs_read(fd, buf, 10);
+        check(r < 0, "fs_read on dir -> error");
+        fs_close(fd);
+    } else {
+        ok("fs_open on dir rejected");
+    }
+}
+
+/* ---------- 12. 多次打开同一文件 ---------- */
+
+static void test_multi_open(void) {
+    section("multiple opens");
+
+    int fd1 = fs_open("SYS:/SHELL.ELF", FS_O_RDONLY);
+    int fd2 = fs_open("SYS:/SHELL.ELF", FS_O_RDONLY);
+    check(fd1 >= 0 && fd2 >= 0, "two opens same file");
+    check(fd1 != fd2, "fd1 != fd2");
+
+    if (fd1 >= 0 && fd2 >= 0) {
+        char b1[16], b2[16], b3[16], b4[16];
+
+        /* 两个 fd 独立读同一区域 */
+        fs_read(fd1, b1, 16);
+        fs_read(fd2, b2, 16);
+        check(memcmp(b1, b2, 16) == 0, "identical content from two fds");
+
+        /* fd1 前进，fd2 seek 回 0 */
+        fs_read(fd1, b3, 16);
+        fs_seek(fd2, 0);
+        fs_read(fd2, b4, 16);
+        check(memcmp(b2, b4, 16) == 0, "fd2 seek back gives same bytes");
+
+        /* fd1 前进后再读的位置应与 b1 不同（内容不同或 offset 不同） */
+        /* 仅验证 fs_seek 独立生效 */
+
+        fs_close(fd1);
+        fs_close(fd2);
+    }
+
+    /* 同时打开 16 个 */
+    int fds[16];
+    int ok_count = 0;
+    for (int i = 0; i < 16; i++) {
+        fds[i] = fs_open("SYS:/SHELL.ELF", FS_O_RDONLY);
+        if (fds[i] >= 0) ok_count++;
+    }
+    check_eq(ok_count, 16, "open 16 handles simultaneously");
+    for (int i = 0; i < 16; i++) {
+        if (fds[i] >= 0) fs_close(fds[i]);
+    }
+}
+
+/* ---------- 13. brk 边界 ---------- */
+
+static void test_brk_boundaries(void) {
+    section("brk boundaries");
+
+    int base = brk(0);
+    check(base > 0, "brk(0) query");
+
+    /* 扩展 8KB */
+    int r = brk(base + 8192);
+    check_eq(r, 0, "brk extend 8KB");
+
+    /* 读一下扩展区 */
+    volatile char *p = (volatile char*)base;
+    p[0] = 1;
+    p[8191] = 2;
+    check(p[0] == 1 && p[8191] == 2, "brk extended region writable");
+
+    /* 收缩到 4KB */
+    r = brk(base + 4096);
+    check_eq(r, 0, "brk shrink to 4KB");
+
+    /* 再扩展回来 */
+    r = brk(base + 16384);
+    check_eq(r, 0, "brk extend to 16KB");
+
+    /* 回到原位 */
+    r = brk(base);
+    check_eq(r, 0, "brk back to base");
+
+    /* 低于 heap_base 应该失败 */
+    r = brk(0x40000000);
+    check(r < 0, "brk below heap_base -> error");
+
+    r = brk(0x4FFFFFFF);
+    check(r < 0, "brk just below heap_base -> error");
+}
+
+/* ---------- 14. 字符串边界 ---------- */
+
+static void test_string_boundaries(void) {
+    section("string boundaries");
+
+    check_eq((int)strlen(""), 0, "strlen empty");
+    check_eq((int)strlen("a"), 1, "strlen single");
+
+    char buf[16];
+
+    memcpy(buf, "abc", 0);
+    ok("memcpy 0 bytes");
+
+    check_eq(memcmp("abc", "abd", 0), 0, "memcmp 0 bytes");
+
+    memset(buf, 'X', 0);
+    ok("memset 0 bytes");
+
+    strncpy(buf, "hello", 5);
+    buf[5] = '\0';
+    check(strcmp(buf, "hello") == 0, "strncpy exact length");
+
+    strncpy(buf, "ab", 5);
+    check(buf[0] == 'a' && buf[1] == 'b' &&
+          buf[2] == '\0' && buf[4] == '\0', "strncpy zero pad");
+
+    /* strcmp 空串 */
+    check(strcmp("", "") == 0, "strcmp both empty");
+    check(strcmp("", "a") < 0, "strcmp empty < a");
+    check(strcmp("a", "") > 0, "strcmp a > empty");
+}
+
+/* ---------- 15. printf 边界 ---------- */
+
+static void test_printf_boundaries(void) {
+    section("printf boundaries");
+
+    char buf[64];
+
+    snprintf(buf, sizeof(buf), "%d", -2147483647 - 1);
+    check(strcmp(buf, "-2147483648") == 0, "%d INT_MIN");
+
+    snprintf(buf, sizeof(buf), "%u", 0xFFFFFFFFu);
+    check(strcmp(buf, "4294967295") == 0, "%u UINT_MAX");
+
+    snprintf(buf, sizeof(buf), "%d", 0);
+    check(strcmp(buf, "0") == 0, "%d zero");
+
+    snprintf(buf, sizeof(buf), "%x", 0);
+    check(strcmp(buf, "0") == 0, "%x zero");
+
+    snprintf(buf, sizeof(buf), "[%s]", "");
+    check(strcmp(buf, "[]") == 0, "%s empty");
+
+    /* 长字符串 */
+    char long_str[80];
+    memset(long_str, 'a', 50);
+    long_str[50] = '\0';
+    snprintf(buf, sizeof(buf), "%s", long_str);
+    check(strcmp(buf, long_str) == 0, "%s 50 chars");
+
+    /* snprintf size 0 */
+    int n = snprintf(buf, 0, "abc");
+    check_eq(n, 3, "snprintf size 0 returns needed len");
+
+    /* snprintf size 1 */
+    buf[0] = 'X';
+    n = snprintf(buf, 1, "abc");
+    check(buf[0] == '\0', "snprintf size 1 null terminates");
+    check_eq(n, 3, "snprintf size 1 returns needed len");
+}
+
+/* ---------- 16. chdir 相对路径 ---------- */
+
+static void test_chdir_relative(void) {
+    section("chdir relative paths");
+
+    char cwd[128];
+
+    /* 从 SYS:/ 开始 */
+    check_eq(chdir("SYS:/"), 0, "chdir SYS:/");
+
+    /* 相对路径打开 */
+    int fd = fs_open("SHELL.ELF", FS_O_RDONLY);
+    check(fd >= 0, "open relative SHELL.ELF");
+    if (fd >= 0) fs_close(fd);
+
+    /* 尝试进入 /BOOT */
+    int r = chdir("BOOT");
+    if (r == 0) {
+        getcwd(cwd, sizeof(cwd));
+        int found = 0;
+        for (int i = 0; cwd[i]; i++) {
+            if (cwd[i] == 'B' && cwd[i+1] == 'O' &&
+                cwd[i+2] == 'O' && cwd[i+3] == 'T') {
+                found = 1;
+                break;
+            }
+        }
+        check(found, "chdir BOOT -> cwd contains BOOT");
+
+        /* 从 /BOOT 用 .. 回到根 */
+        r = chdir("..");
+        check_eq(r, 0, "chdir ..");
+    } else {
+        ok("(skip chdir BOOT: not accessible)");
+    }
+
+    /* 不存在的相对路径 */
+    chdir("SYS:/");
+    r = chdir("NOT_EXIST_12345");
+    check(r < 0, "chdir nonexistent relative -> error");
+
+    /* 绝对路径覆盖 cwd */
+    check_eq(chdir("SYS:/"), 0, "chdir absolute override");
+}
+
+/* ---------- 17. spawn/close 循环 ---------- */
+
+static void test_spawn_stress(void) {
+    section("spawn stress");
+
+    int failures = 0;
+    for (int i = 0; i < 8; i++) {
+        int h = spawn("IDLE.ELF");
+        if (h < 0) { failures++; continue; }
+
+        sleep_ms(5);
+
+        if (kill(h, i) != OK) { failures++; process_close(h); continue; }
+
+        int status = -1;
+        if (wait(h, &status, 100) != OK || status != i) {
+            failures++;
+            process_close(h);
+            continue;
+        }
+        process_close(h);
+    }
+
+    if (failures == 0) {
+        ok("8 rounds spawn/kill/wait/close");
+    } else {
+        char buf[48];
+        snprintf(buf, sizeof(buf), "%d of 8 failed", failures);
+        fail("spawn stress", buf);
+    }
+}
+
 /* ---------- 主入口 ---------- */
 
 void _start(void) {
@@ -415,6 +768,15 @@ void _start(void) {
     test_console();
     test_errno();
     test_ptr_bounds();
+    test_blocking_syscall();
+    test_spawn_errors();
+    test_fs_boundaries();
+    test_multi_open();
+    test_brk_boundaries();
+    test_string_boundaries();
+    test_printf_boundaries();
+    test_chdir_relative();
+    test_spawn_stress();
 
     printf("\n");
     console_set_color(C_YELLOW, C_BLACK);
