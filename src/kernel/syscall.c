@@ -13,6 +13,7 @@
 #include <device.h>
 #include <console.h>
 #include <path.h>
+#include <proc.h>
 
 /* ---------- 用户指针校验辅助 ---------- */
 
@@ -78,59 +79,109 @@ static void sys_exit(int status) {
     while (1) __asm__("cli; hlt");
 }
 
-/* 辅助：检查子进程是否存在（遍历所有队列） */
-static int has_child(struct task *parent, int pid) {
-    for (struct task *t = ready_queue_head; t; t = t->next) {
-        if (t->parent == parent && (pid == -1 || t->pid == (uint32_t)pid))
-            return 1;
-    }
-    for (struct task *t = blocked_list_head; t; t = t->next) {
-        if (t->parent == parent && (pid == -1 || t->pid == (uint32_t)pid))
-            return 1;
-    }
-    return 0;
-}
-
-/* 系统调用 waitpid */
-static int sys_waitpid(int pid, int *status) {
-    struct task *current = get_current_task();
-    if (!current) return EINVAL;
-
-    /* status 可以为 NULL（表示不关心退出码） */
-    if (status != NULL) {
-        if (check_user_range((uint32_t)status, sizeof(int)) < 0) {
-            return EFAULT;
-        }
-    }
+/* 通用等待逻辑。target == NULL 表示等任意子进程 */
+static int wait_impl(struct task *cur, struct task *target,
+                     int *status, uint32_t timeout_ms) {
+    uint32_t deadline = 0;
+    if (timeout_ms > 0) deadline = get_ticks() + timeout_ms;
 
     while (1) {
-        /* 找已退出的子进程 */
-        for (struct task *t = blocked_list_head; t; t = t->next) {
-            if (t->state == TASK_STATE_ZOMBIE &&
-                t->parent == current &&
-                (pid == -1 || t->pid == (uint32_t)pid)) {
-                int child_pid = t->pid;
-                if (status) *status = t->exit_status;
-
-                remove_task_from_queue(&blocked_list_head, &blocked_list_tail, t);
-                pmm_free_page((uint32_t)t);
-                kprintf("[WAITPID] Freed PCB pid=%d at phys %p\n", child_pid, (uint32_t)t);
-                return child_pid;
+        /* 1. 检查目标是否已退出 */
+        if (target) {
+            if (target->zombie) {
+                if (status) *status = target->exit_status;
+                return OK;
             }
+        } else {
+            /* 等任意子进程：找第一个 zombie */
+            for (int i = 0; i < PROC_MAX_HANDLES; i++) {
+                if (!cur->proc_handles[i].used) continue;
+                if (!(cur->proc_handles[i].access & PROC_WAIT)) continue;
+                struct task *t = cur->proc_handles[i].task;
+                if (t->zombie) {
+                    if (status) *status = t->exit_status;
+                    return OK;
+                }
+            }
+            /* 检查是否还有活着的子进程 */
+            int has_alive = 0;
+            for (int i = 0; i < PROC_MAX_HANDLES; i++) {
+                if (!cur->proc_handles[i].used) continue;
+                if (!(cur->proc_handles[i].access & PROC_WAIT)) continue;
+                if (!cur->proc_handles[i].task->zombie) {
+                    has_alive = 1;
+                    break;
+                }
+            }
+            if (!has_alive) return ECHILD;
         }
 
-        /* 没有匹配的子进程（且没有活着的），直接返回 */
-        if (!has_child(current, pid)) {
-            return ECHILD;
+        /* 2. 检查超时 */
+        if (deadline > 0 && get_ticks() >= deadline) {
+            return EAGAIN;
         }
 
-        /* 阻塞，等待子进程退出 */
-        current->wait_target = NULL;   /* 等任意子进程；精确等一个的话需要找指针 */
+        if (cur->syscall_regs) {
+            ((struct registers*)cur->syscall_regs)->eax = EAGAIN;
+        }
+
+        /* 3. 阻塞 */
+        cur->wait_target   = target;         /* NULL 表示等任意 */
+        cur->wait_deadline = deadline;
         block_current(TASK_STATE_WAITING_CHILD);
         schedule();
     }
 }
 
+static int sys_wait(proc_handle_t h, int *status, uint32_t timeout_ms) {
+    struct task *cur = get_current_task();
+    kprintf("[WAIT] enter: cur=%p pid=%d h=%d timeout=%d\n",
+            cur, cur ? cur->pid : 0, h, timeout_ms);
+    if (!cur) return EINVAL;
+
+    if (status) {
+        if (check_user_range((uint32_t)status, sizeof(int)) < 0) return EFAULT;
+    }
+
+    struct task *target = proc_handle_deref(h, PROC_WAIT);
+    if (!target) return EINVAL;
+
+    int r = wait_impl(cur, target, status, timeout_ms);
+    kprintf("[WAIT] leave: r=%d\n", r);
+    return r;
+}
+
+/* 注意：本函数靠"句柄只能由 spawn 分配给当前进程"这一不变式
+ * 来保证 pid 一定是当前进程的子进程。将来引入句柄继承后，
+ * 需要显式检查 target->creator_pid == cur->pid。 */
+/* 系统调用 waitpid */
+static int sys_waitpid(int pid, int *status) {
+    struct task *cur = get_current_task();
+    if (!cur) return EINVAL;
+
+    if (status) {
+        if (check_user_range((uint32_t)status, sizeof(int)) < 0) return EFAULT;
+    }
+
+    if (pid == -1) {
+        /* 等任意子进程 */
+        return wait_impl(cur, NULL, status, 0);
+    }
+
+    /* 找匹配 pid 的 handle */
+    for (int i = 0; i < PROC_MAX_HANDLES; i++) {
+        if (!cur->proc_handles[i].used) continue;
+        if (!(cur->proc_handles[i].access & PROC_WAIT)) continue;
+        if (cur->proc_handles[i].task->pid == (uint32_t)pid) {
+            return wait_impl(cur, cur->proc_handles[i].task, status, 0);
+        }
+    }
+    return ECHILD;
+}
+
+/* 注意：本函数扩展失败时不回滚已映射的页，这些页会泄漏。
+ * 触发条件：内存接近耗尽时。当前版本接受此行为。
+ * 若实现严格语义，需要在失败路径遍历 start_page..addr 释放物理页。 */
 static int sys_brk(uint32_t new_brk) {
     struct task *cur = get_current_task();
     kprintf("[BRK] pid=%d new=0x%x heap_brk=0x%x\n",
@@ -177,52 +228,112 @@ static int sys_brk(uint32_t new_brk) {
 
 static int sys_spawn(const char *path) {
     struct task *parent = get_current_task();
-    if (!parent) return EINVAL;                /* 原来是 EFAULT */
+    if (!parent) return EINVAL;
 
     char path_buf[PATH_MAX_LEN];
     if (strncpy_from_user(path_buf, path, sizeof(path_buf)) < 0) {
-        return EFAULT;                          /* 保持 */
+        return EFAULT;
     }
 
-    /* 1. 创建子进程页目录 */
     uint32_t *pgd_child = vmm_create_process_page_directory();
-    if (!pgd_child) return ENOMEM;              /* 原来是 -1 */
+    if (!pgd_child) return ENOMEM;
 
-    /* 2. 加载 ELF 获取入口点 */
     struct resolved_path rp;
     int rr = resolve_path(path_buf, &rp);
     if (rr != OK) {
         vmm_free_process_address_space(pgd_child);
-        return rr;                              /* 传回 ENOENT / EINVAL */
+        return rr;
     }
 
     struct fat32_volume *vol = (struct fat32_volume*)rp.vol->fs_private;
     if (!vol) {
         vmm_free_process_address_space(pgd_child);
-        return ENOENT;                          /* 原来是 -1 */
+        return ENOENT;
     }
 
     uint32_t entry = load_elf_from_disk(vol, rp.path, pgd_child);
     if (!entry) {
         vmm_free_process_address_space(pgd_child);
-        return ENOEXEC;                         /* 原来是 -1 */
+        return ENOEXEC;
     }
 
-    /* 3. 创建任务 */
     struct task *child = task_create(entry, pgd_child);
     if (!child) {
         vmm_free_process_address_space(pgd_child);
-        return ENOMEM;                          /* 原来是 -1 */
+        return ENOMEM;
     }
 
-    child->parent = parent;
-    return child->pid;
+    /* 在父进程里分配一个句柄指向 child */
+    proc_handle_t h = proc_handle_alloc(child, PROC_ALL);
+    if (h < 0) {
+        /* child 从 ready_queue 摘掉，直接释放（不挂 blocked_list） */
+        remove_task_from_queue(&ready_queue_head, &ready_queue_tail, child);
+        child->zombie = 1;
+        proc_unref(child);      /* refcount 1 → 0，直接 proc_free_pcb */
+        return ENOMEM;
+    }
+
+    return h;   /* 返回句柄 */
+}
+
+/* 注意：本函数的"允许 kill 非子进程"这一行为，
+ * 当前依赖"句柄只能由 spawn 分配给子进程"来约束。
+ * 将来引入句柄继承/传递后，需要额外的权限检查。 */
+static int sys_kill(proc_handle_t h, int status) {
+    struct task *cur = get_current_task();
+    if (!cur) return EINVAL;
+
+    struct task *target = proc_handle_deref(h, PROC_TERMINATE);
+    if (!target) return EINVAL;
+
+    if (target == cur) return EPERM;    /* 不允许 kill 自己 */
+    if (target->zombie) return EINVAL;  /* 已经退出 */
+
+    /* 标记退出 */
+    target->exit_status = status;
+    target->zombie = 1;
+    target->state = TASK_STATE_ZOMBIE;
+
+    /* 从任何队列移除 */
+    remove_task_from_queue(&ready_queue_head, &ready_queue_tail, target);
+    remove_task_from_queue(&blocked_list_head, &blocked_list_tail, target);
+
+    /* 加入 blocked_list */
+    enqueue_task(&blocked_list_head, &blocked_list_tail, target);
+
+    /* 唤醒所有等它的 */
+    wake_up_waiters(target);
+
+    /* ★ 释放 self 引用 —— 目标不会再走 task_exit */
+    proc_unref(target);
+
+    return OK;
+}
+
+static int sys_process_close(proc_handle_t h) {
+    struct task *cur = get_current_task();
+    if (!cur) return EINVAL;
+    if (h < 0 || h >= PROC_MAX_HANDLES) return EINVAL;
+    if (!cur->proc_handles[h].used) return EINVAL;
+
+    struct task *target = cur->proc_handles[h].task;
+    cur->proc_handles[h].used = 0;
+    cur->proc_handles[h].access = 0;
+    cur->proc_handles[h].task = NULL;
+
+    proc_unref(target);
+    return OK;
 }
 
 static int sys_sleep(uint32_t ms) {
     struct task *cur = get_current_task();
     if (!cur) return EINVAL;
     if (ms == 0) return 0;
+
+    if (cur->syscall_regs) {
+        ((struct registers*)cur->syscall_regs)->eax = 0;
+    }
+
 
     cur->sleep_ticks = ms;
     block_current(TASK_STATE_SLEEPING);
@@ -232,6 +343,11 @@ static int sys_sleep(uint32_t ms) {
 
 /* 系统调用分发器 */
 void syscall_handler(struct registers *regs) {
+    struct task *cur = get_current_task();
+    if (cur) {
+        cur->syscall_regs = (uint32_t)regs;
+    }
+
     uint32_t syscall_no = regs->eax;
     uint32_t arg1 = regs->ebx;
     uint32_t arg2 = regs->ecx;
@@ -263,6 +379,15 @@ void syscall_handler(struct registers *regs) {
             break;
         case SYS_SLEEP:
             ret = sys_sleep(arg1);
+            break;
+        case SYS_WAIT:
+            ret = sys_wait((proc_handle_t)arg1, (int*)arg2, arg3);
+            break;
+        case SYS_KILL:
+            ret = sys_kill((proc_handle_t)arg1, (int)arg2);
+            break;
+        case SYS_PROC_CLOSE:
+            ret = sys_process_close((proc_handle_t)arg1);
             break;
         
 
@@ -418,6 +543,10 @@ void syscall_handler(struct registers *regs) {
             kprintf("[SYSCALL] Unknown syscall %d\n", syscall_no);
             ret = ENOSYS;
     }
+
+    // kprintf("[SYSCALL] regs=%p regs->eax=%d ret=%d\n",
+    //         regs, regs->eax, ret);
+
 
     regs->eax = ret;
 }

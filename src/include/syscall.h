@@ -4,11 +4,14 @@
 #include <isr.h>
 
 /* ========== 进程控制 (1~9) ========== */
-#define SYS_EXIT       1
-#define SYS_GETPID     2
-#define SYS_SPAWN      3
-#define SYS_WAITPID    4
-#define SYS_SLEEP      5   // 留作以后实现
+#define SYS_EXIT          1
+#define SYS_GETPID        2
+#define SYS_SPAWN         3      /* 返回 proc_handle_t（不再是 pid） */
+#define SYS_WAITPID       4      /* 兼容：内部解析 pid */
+#define SYS_SLEEP         5
+#define SYS_WAIT          6      /* 新增：wait(handle, *status, timeout) */
+#define SYS_KILL          7      /* 新增：kill(handle, status) */
+#define SYS_PROC_CLOSE    8      /* 新增：process_close(handle) */
 
 /* ========== I/O 操作 (11~19) ========== */
 #define SYS_READ                     11

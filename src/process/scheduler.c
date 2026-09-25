@@ -4,16 +4,33 @@
 #include <printf.h>
 #include <stddef.h>
 
+static uint32_t g_ticks = 0;
+
+uint32_t get_ticks(void) { return g_ticks; }
+
 /* 处理睡眠：遍历 blocked_list，递减 SLEEPING 进程的 sleep_ticks */
 void sleep_tick(void) {
+    g_ticks++;
+
     for (struct task *t = blocked_list_head; t; ) {
         struct task *next = t->next;
+
+        /* SLEEPING 递减 */
         if (t->state == TASK_STATE_SLEEPING && t->sleep_ticks > 0) {
             t->sleep_ticks--;
             if (t->sleep_ticks == 0) {
                 unblock_task(t, TASK_STATE_READY);
             }
         }
+
+        /* WAITING_CHILD 检查超时 */
+        if (t->state == TASK_STATE_WAITING_CHILD &&
+            t->wait_deadline > 0 &&
+            g_ticks >= t->wait_deadline) {
+            unblock_task(t, TASK_STATE_READY);
+            /* wait 函数唤醒后会自己检查超时 */
+        }
+
         t = next;
     }
 }

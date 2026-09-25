@@ -29,6 +29,9 @@ void irq_handler(struct registers *regs) {
 
     if (regs->int_no == 32) {
         // kprintf(".");
+
+        /* 先回收 graveyard */
+        proc_reap_graveyard();
         sleep_tick();
         struct task *current = get_current_task();
         if (current) {

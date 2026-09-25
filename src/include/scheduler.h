@@ -10,4 +10,6 @@ void schedule(void);
 void switch_to(struct task *prev, struct task *next);
 void sleep_tick(void);
 
+uint32_t get_ticks(void);
+
 #endif

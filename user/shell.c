@@ -218,13 +218,15 @@ void _start(void) {
             cmd_clear();
         } else {
             /* 其他都当作可执行文件名 */
-            int pid = spawn(c);
-            if (pid < 0) {
+            int h = spawn(c);       /* ← 现在返回 handle */
+            if (h < 0) {
                 set_color(VGA_LIGHT_RED, VGA_BLACK);
-                printf("spawn '%s' failed (error %d)\n", c, pid);
+                printf("spawn '%s' failed (error %d)\n", c, h);
                 set_color(VGA_LIGHT_GRAY, VGA_BLACK);
             } else {
-                waitpid(pid, NULL);
+                int status;
+                wait(h, &status, 0);
+                process_close(h);
             }
         }
     }

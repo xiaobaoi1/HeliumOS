@@ -2,11 +2,14 @@
 #define USER_SYSCALL_H
 
 /* ========== 进程控制 (1~9) ========== */
-#define SYS_EXIT       1
-#define SYS_GETPID     2
-#define SYS_SPAWN      3
-#define SYS_WAITPID    4
-#define SYS_SLEEP      5
+#define SYS_EXIT          1
+#define SYS_GETPID        2
+#define SYS_SPAWN         3
+#define SYS_WAITPID       4
+#define SYS_SLEEP         5
+#define SYS_WAIT          6
+#define SYS_KILL          7
+#define SYS_PROC_CLOSE    8
 
 /* ========== I/O 操作 (11~19) ========== */
 #define SYS_READ                     11
@@ -67,12 +70,25 @@ static inline int getpid(void) {
     return __syscall(SYS_GETPID, 0, 0, 0);
 }
 
+/* 进程控制 */
 static inline int spawn(const char *path) {
-    return __syscall(SYS_SPAWN, (int)path, 0, 0);
+    return __syscall(SYS_SPAWN, (int)path, 0, 0);   /* 返回 handle */
 }
 
 static inline int waitpid(int pid, int *status) {
     return __syscall(SYS_WAITPID, pid, (int)status, 0);
+}
+
+static inline int wait(int handle, int *status, unsigned int timeout_ms) {
+    return __syscall(SYS_WAIT, handle, (int)status, (int)timeout_ms);
+}
+
+static inline int kill(int handle, int status) {
+    return __syscall(SYS_KILL, handle, status, 0);
+}
+
+static inline int process_close(int handle) {
+    return __syscall(SYS_PROC_CLOSE, handle, 0, 0);
 }
 
 static inline void sleep_ms(int ms) {

@@ -6,6 +6,7 @@
 #include <path.h>
 #include <fs.h>
 #include <device.h>
+#include <proc.h>
 
 /* 进程状态 */
 #define TASK_STATE_READY         0   /* 就绪 */
@@ -30,14 +31,14 @@ struct task {
     uint32_t pid;
     uint32_t state;
     uint32_t time_slice;
-    uint32_t *pgd;              // +12 start.asm
-    uint32_t kernel_stack_phys; // +16 start.asm
-    uint32_t kernel_esp;        // +20 start.asm
+    uint32_t *pgd;
+    uint32_t kernel_stack_phys;
+    uint32_t kernel_esp;
     uint32_t user_stack_phys;
     uint32_t user_stack_virt;
     uint32_t entry_point;
     struct task *next;
-    struct task *parent;
+    uint32_t creator_pid;            /* ← parent 改成 creator_pid */
     int exit_status;
 
     uint32_t heap_base;
@@ -45,15 +46,23 @@ struct task {
     uint32_t heap_limit;
 
     uint32_t sleep_ticks;
-    struct task *wait_target;   /* WAITING_CHILD 时有效，NULL = 等任意子进程 */
+    struct task *wait_target;
+    uint32_t wait_deadline;          /* ← 新增：超时时间戳（tick） */
 
-    /* cwd（当前工作目录） */
     char cwd_volume[VOL_NAME_LEN];
     char cwd_path[PATH_MAX_LEN];
 
-        /* 资源句柄表 */
-    struct fs_handle fs_handles[FS_MAX_HANDLES];
+    struct fs_handle  fs_handles[FS_MAX_HANDLES];
     struct dev_handle dev_handles[DEV_MAX_HANDLES];
+
+    /* 进程对象（批次 D） */
+    uint32_t refcount;               /* ← 新增 */
+    uint8_t  zombie;                 /* ← 新增 */
+    struct task *proc_next;          /* ← 新增：全局链表 */
+    struct task *grave_next;
+    struct proc_handle proc_handles[PROC_MAX_HANDLES];  /* ← 新增 */
+
+    uint32_t syscall_regs;   /* ★ 最近一次 int 0x80 的 regs 指针 */
 };
 
 void enqueue_task(struct task **head, struct task **tail, struct task *task);

@@ -4,6 +4,8 @@
 #include <tss.h>
 #include <printf.h>
 #include <stddef.h>
+#include <isr.h>
+#include <errno.h>
 
 static uint32_t next_pid = 1;
 struct task *current_task = NULL;
@@ -77,7 +79,6 @@ void unblock_task(struct task *t, uint32_t new_state) {
 
 void wake_up_waiters(struct task *target) {
     if (!target) return;
-
     for (struct task *t = blocked_list_head; t; ) {
         struct task *next = t->next;
         if (t->state == TASK_STATE_WAITING_CHILD &&
@@ -103,12 +104,26 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd) {
     task->pgd = pgd;
     task->entry_point = entry_point;
     task->next = NULL;
-    task->parent = get_current_task();
     task->wait_target = NULL;
     task->sleep_ticks = 0;
 
-    
+    task->syscall_regs = 0;
 
+
+    task->creator_pid = get_current_task() ? get_current_task()->pid : 0;
+    task->wait_deadline = 0;
+
+    /* 进程对象字段 */
+    task->refcount = 1;              /* self 引用 */
+    task->zombie = 0;
+    task->proc_next = NULL;
+    task->grave_next = NULL;
+    for (int i = 0; i < PROC_MAX_HANDLES; i++) {
+        task->proc_handles[i].used = 0;
+        task->proc_handles[i].access = 0;
+        task->proc_handles[i].task = NULL;
+    }
+    
     // 内核栈
     task->kernel_stack_phys = pmm_alloc_page();
     if (!task->kernel_stack_phys) {
@@ -122,6 +137,10 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd) {
         kprintf("[TASK] ERROR: Failed to allocate user stack pages.\n");
         return NULL;
     }
+
+
+    /* 加入全局链表 */
+    proc_register(task);
 
     // 用户栈
     task->user_stack_virt = 0x7FFFE000;
@@ -138,7 +157,7 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd) {
 
 
     /* 初始化 cwd */
-    struct task *parent = task->parent;
+    struct task *parent = get_current_task();
     if (parent && parent->cwd_volume[0] != '\0') {
         strcpy(task->cwd_volume, parent->cwd_volume);
         strcpy(task->cwd_path, parent->cwd_path);
@@ -246,34 +265,26 @@ void task_exit(struct task *task, int status) {
     if (!task) return;
 
     kprintf("[TASK] Process %d exiting with status %d\n", task->pid, status);
-
     task->exit_status = status;
 
-    /* 释放文件系统句柄 */
+    /* 释放自己持有的所有句柄（对子进程的引用） */
     fs_release_all(task);
     dev_release_all(task);
-
-    /* 释放用户空间 */
-    if (task->pgd) {
-        vmm_free_process_address_space(task->pgd);
-        task->pgd = NULL;
-    }
-
-    if (task->kernel_stack_phys) {
-        pmm_free_page(task->kernel_stack_phys);
-        task->kernel_stack_phys = 0;
-    }
-    task->user_stack_phys = 0;
+    proc_release_all_handles(task);
 
     /* 从就绪队列移除 */
     remove_task_from_queue(&ready_queue_head, &ready_queue_tail, task);
 
-    /* 转入 ZOMBIE：加入 blocked_list */
+    /* 标记 zombie */
+    task->zombie = 1;
     task->state = TASK_STATE_ZOMBIE;
     enqueue_task(&blocked_list_head, &blocked_list_tail, task);
 
-    /* 唤醒所有等待它的进程 */
+    /* 唤醒所有等它的进程 */
     wake_up_waiters(task);
+
+    /* 释放 self 引用 —— proc_unref 会自动处理 graveyard */
+    proc_unref(task);
 
     set_current_task(NULL);
     schedule();
