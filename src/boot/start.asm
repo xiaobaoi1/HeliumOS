@@ -32,27 +32,27 @@ _start:
 
     mov esp, temp_stack_top
 
-    ; 建立身份映射页表（0~4MB）
+    ; 清零 page_directory（4KB）
     mov edi, page_directory
-    mov esi, page_table_identity
-
     mov ecx, PAGE_SIZE / 4
     xor eax, eax
     rep stosd
 
-    mov edi, esi
-    xor eax, eax
-    mov ecx, 1024
-.identity_loop:
-    or eax, 0x003
-    stosd
-    add eax, PAGE_SIZE
-    loop .identity_loop
-
+    ; 填 256 个 PSE 4MB 大页 PDE，覆盖 0..1GB
+    ; PDE 格式：[31:22]=物理地址高位，[7]=PS=1，[1]=W=1，[0]=P=1
+    ; 0x83 = 1000_0011b = PS | W | P
     mov edi, page_directory
-    mov eax, esi
-    or eax, 0x003
-    mov [edi], eax
+    mov eax, 0x83
+    mov ecx, 256
+.fill_pde:
+    stosd
+    add eax, 0x400000           ; 每项覆盖 4MB
+    loop .fill_pde
+
+    ; 打开 CR4.PSE
+    mov eax, cr4
+    or  eax, 0x10               ; PSE = bit 4
+    mov cr4, eax
 
     ; 开启分页
     mov eax, page_directory
@@ -327,9 +327,6 @@ section .bss
 align 4096
 global page_directory
 page_directory:     resb 4096
-
-global page_table_identity
-page_table_identity: resb 4096
 
 temp_stack_bottom:
     resb 4096

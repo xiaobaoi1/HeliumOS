@@ -7,7 +7,7 @@
 
 #define PAGE_SIZE 4096
 #define PAGE_SHIFT 12
-#define MAX_PHYS_MEM (128 * 1024 * 1024)  /* QEMU 默认 128MB */
+#define MAX_PHYS_MEM (1024 * 1024 * 1024)  /* 1GB */
 #define MAX_PAGES (MAX_PHYS_MEM / PAGE_SIZE)
 #define BITMAP_SIZE (MAX_PAGES / 8 + 1)
 
