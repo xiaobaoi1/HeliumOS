@@ -57,6 +57,11 @@ void dev_release_all(struct task *task);
 /* ---------- 驱动注册 ---------- */
 int  dev_register(int type, const struct device_ops *ops);
 
+/* 内核态拿 ops 的接口（不分配 per-process 句柄）
+ * 用于内核组件（tty、fs 的底层等）直接访问设备能力。
+ * 返回 NULL 表示未注册。 */
+const struct device_ops *dev_get_ops(int type);
+
 /* ---------- 设备 API ---------- */
 dev_t dev_open(int type, void *arg);
 int   dev_read(dev_t dev, void *buf, uint32_t n);

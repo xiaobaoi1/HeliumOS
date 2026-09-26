@@ -13,17 +13,18 @@
 #define SYS_KILL          7      /* 新增：kill(handle, status) */
 #define SYS_PROC_CLOSE    8      /* 新增：process_close(handle) */
 
-/* ========== I/O 操作 (11~19) ========== */
+/* ========== 标准流 (11~12) ========== */
 #define SYS_READ                     11
 #define SYS_WRITE                    12
 
-#define SYS_CONSOLE_CLEAR            13
-#define SYS_CONSOLE_SET_COLOR        14
-#define SYS_CONSOLE_SET_CURSOR       15
-#define SYS_CONSOLE_GET_CURSOR       16
-#define SYS_CONSOLE_SAVE_CURSOR      17
-#define SYS_CONSOLE_RESTORE_CURSOR   18
-#define SYS_CONSOLE_DEBUG_WRITE      19
+/* ========== tty 控制 (13~19) ========== */
+#define SYS_TTY_CLEAR                13
+#define SYS_TTY_SET_COLOR            14
+#define SYS_TTY_SET_CURSOR           15
+#define SYS_TTY_GET_CURSOR           16
+#define SYS_TTY_SAVE_CURSOR          17
+#define SYS_TTY_RESTORE_CURSOR       18
+#define SYS_TTY_DEBUG_WRITE          19
 
 /* ========== 内存管理 (21~29) ========== */
 #define SYS_BRK        21

@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-/* ---------- 颜色常量（前景 / 背景通用） ---------- */
+/* ---------- 颜色常量 ---------- */
 #define VGA_BLACK        0
 #define VGA_BLUE         1
 #define VGA_GREEN        2
@@ -21,26 +21,28 @@
 #define VGA_YELLOW       14
 #define VGA_WHITE        15
 
-/* 默认配色 */
 #define VGA_DEFAULT_ATTR ((VGA_BLACK << 4) | VGA_LIGHT_GRAY)
 
-/* ---------- 基础输出 ---------- */
+/* VGA 文本模式尺寸 */
+#define VGA_WIDTH   80
+#define VGA_HEIGHT  25
+
+/* VGA 的一个 cell：位置 + 属性 + 字符
+ * vga dev 的 write 接受 vga_cell 序列 */
+struct vga_cell {
+    uint16_t x;
+    uint16_t y;
+    uint8_t  attr;
+    char     c;
+} __attribute__((packed));
+
+/* VGA dev 的 ioctl 命令 */
+#define VGA_IOCTL_CLEAR          1   /* arg = attr（uint8_t），整屏填属性空格 */
+#define VGA_IOCTL_SET_HW_CURSOR  2   /* arg = (x << 16) | y，设置硬件光标 */
+#define VGA_IOCTL_GET_HW_CURSOR  3   /* arg = int[2]，返回 (x, y) */
+#define VGA_IOCTL_SCROLL         4   /* arg = attr，向上滚一行，最后一行清空 */
+
+/* 初始化 VGA 并注册为 dev */
 void screen_init(void);
-void screen_clear(void);
-void screen_write_char(char c);
-void screen_write_string(const char *str);
-
-/* ---------- 颜色控制 ---------- */
-void screen_set_color(uint8_t fg, uint8_t bg);
-uint8_t screen_get_fg(void);
-uint8_t screen_get_bg(void);
-
-/* 快捷打印：设置颜色 → 打印 → 恢复 */
-void screen_write_string_colored(const char *str, uint8_t fg, uint8_t bg);
-void screen_write_char_colored(const char c, uint8_t fg, uint8_t bg);
-
-/* 光标 */
-void screen_set_cursor(int x, int y);
-void screen_get_cursor(int *x, int *y);
 
 #endif

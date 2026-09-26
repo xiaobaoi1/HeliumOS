@@ -11,7 +11,7 @@
 #include <errno.h>
 #include <fs.h>
 #include <device.h>
-#include <console.h>
+#include <tty.h>
 #include <path.h>
 #include <proc.h>
 
@@ -73,20 +73,18 @@ static int strncpy_from_user(char *dest, const char *src, size_t max_len) {
     return -1;
 }
 
-/* 系统调用 write：fd=1 走控制台，其他 fd 暂不支持 */
 static int sys_write(int fd, const char *buf, uint32_t count) {
     if (fd != 1) return EINVAL;
     if (!buf || count == 0) return EINVAL;
     if (check_user_range((uint32_t)buf, count) < 0) return EFAULT;
-    return console_write(buf, count);
+    return tty_write(buf, count);
 }
 
-/* 系统调用 read：fd=0 走控制台，其他 fd 暂不支持 */
 static int sys_read(int fd, char *buf, uint32_t count) {
     if (fd != 0) return EINVAL;
     if (!buf || count == 0) return EINVAL;
     if (check_user_range((uint32_t)buf, count) < 0) return EFAULT;
-    return console_read(buf, count);
+    return tty_read(buf, count);
 }
 
 /* 系统调用 exit */
@@ -537,51 +535,55 @@ void syscall_handler(struct registers *regs) {
 
 
         /* ---------- 控制台 ---------- */
-        case SYS_CONSOLE_CLEAR:
-            console_clear();
+        case SYS_TTY_CLEAR:
+            tty_clear();
             ret = 0;
             break;
 
-        case SYS_CONSOLE_SET_COLOR:
-            console_set_color((uint8_t)arg1, (uint8_t)arg2);
+        case SYS_TTY_SET_COLOR:
+            if (arg1 > 15 || arg2 > 15) {
+                ret = EINVAL;
+            } else {
+                tty_set_color((uint8_t)arg1, (uint8_t)arg2);
+                ret = 0;
+            }
+            break;
+
+        case SYS_TTY_SET_CURSOR:
+            tty_set_cursor((int)arg1, (int)arg2);
             ret = 0;
             break;
 
-        case SYS_CONSOLE_SET_CURSOR:
-            console_set_cursor((int)arg1, (int)arg2);
-            ret = 0;
-            break;
-
-        case SYS_CONSOLE_GET_CURSOR:
+        case SYS_TTY_GET_CURSOR:
             /* arg1 指向用户空间的 int[2]: out_x, out_y */
             if (check_user_range(arg1, 8) < 0) {
                 ret = EFAULT;
             } else {
                 int cx = 0, cy = 0;
-                console_get_cursor(&cx, &cy);
+                tty_get_cursor(&cx, &cy);
                 ((int*)arg1)[0] = cx;
                 ((int*)arg1)[1] = cy;
                 ret = 0;
             }
             break;
 
-        case SYS_CONSOLE_SAVE_CURSOR:
-            console_save_cursor();
+        case SYS_TTY_SAVE_CURSOR:
+            tty_save_cursor();
             ret = 0;
             break;
 
-        case SYS_CONSOLE_RESTORE_CURSOR:
-            console_restore_cursor();
+        case SYS_TTY_RESTORE_CURSOR:
+            tty_restore_cursor();
             ret = 0;
             break;
 
-        case SYS_CONSOLE_DEBUG_WRITE:
+        case SYS_TTY_DEBUG_WRITE:
             if (!arg1 || arg2 == 0) {
                 ret = EINVAL;
             } else if (check_user_range(arg1, arg2) < 0) {
                 ret = EFAULT;
             } else {
-                ret = console_debug_write((const char*)arg1, arg2);
+                ret = tty_debug_write((const char*)arg1, arg2);
             }
             break;
 

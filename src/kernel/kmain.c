@@ -17,7 +17,7 @@
 #include <errno.h>
 #include <device.h>
 #include <keyboard.h>
-#include <console.h>
+#include <tty.h>
 
 /* ---------- 内部辅助：从一个 ELF 路径创建进程 ---------- */
 
@@ -87,9 +87,10 @@ void create_shell_task(struct fat32_volume *vol) {
 
 
 void kmain(uint32_t magic, uint32_t addr) {
-    screen_init();
+    dev_init();
     serial_init();
-    console_init();
+    screen_init();
+    tty_init();
 
     kprintf("========================================\n");
     kprintf(" HeliumOS Kernel Started (1GB/3GB)\n");
@@ -105,8 +106,8 @@ void kmain(uint32_t magic, uint32_t addr) {
     volume_init();
     fs_init();
 
-    dev_init();
     keyboard_init();
+    serial_register_dev();
 
     ata_init();
     // fat32_init(2048);

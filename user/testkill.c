@@ -22,33 +22,33 @@ static int g_pass = 0;
 static int g_fail = 0;
 
 static void ok(const char *name) {
-    console_set_color(C_GREEN, C_BLACK);
+    tty_set_color(C_GREEN, C_BLACK);
     printf("  [PASS] %s\n", name);
-    console_set_color(C_GRAY, C_BLACK);
+    tty_set_color(C_GRAY, C_BLACK);
     g_pass++;
 }
 
 static void fail(const char *name, const char *why) {
-    console_set_color(C_RED, C_BLACK);
+    tty_set_color(C_RED, C_BLACK);
     printf("  [FAIL] %s: %s\n", name, why);
-    console_set_color(C_GRAY, C_BLACK);
+    tty_set_color(C_GRAY, C_BLACK);
     g_fail++;
 }
 
 static void section(const char *title) {
     printf("\n");
-    console_set_color(C_BLUE, C_BLACK);
+    tty_set_color(C_BLUE, C_BLACK);
     printf("--- %s ---\n", title);
-    console_set_color(C_GRAY, C_BLACK);
+    tty_set_color(C_GRAY, C_BLACK);
 }
 
 /* 生成一个 "PID" 用于 log，不通过内核 API */
 static int spawn_sleeper(void) {
     int h = spawn("SLEEPER.ELF", NULL);
     if (h < 0) {
-        console_set_color(C_RED, C_BLACK);
+        tty_set_color(C_RED, C_BLACK);
         printf("  spawn SLEEPER.ELF failed: %d\n", h);
-        console_set_color(C_GRAY, C_BLACK);
+        tty_set_color(C_GRAY, C_BLACK);
     }
     return h;
 }
@@ -173,13 +173,13 @@ static void test_wait_timeout_then_kill(void) {
 
 void _start(int argc, char **argv) {
     (void)argc; (void)argv;
-    console_clear();
+    tty_clear();
 
-    console_set_color(C_YELLOW, C_BLACK);
+    tty_set_color(C_YELLOW, C_BLACK);
     printf("========================================\n");
     printf("  HeliumOS Kill Test\n");
     printf("========================================\n");
-    console_set_color(C_GRAY, C_BLACK);
+    tty_set_color(C_GRAY, C_BLACK);
 
     test_kill_sleeping();
     test_kill_then_close();
@@ -187,18 +187,18 @@ void _start(int argc, char **argv) {
     test_wait_timeout_then_kill();
 
     printf("\n");
-    console_set_color(C_YELLOW, C_BLACK);
+    tty_set_color(C_YELLOW, C_BLACK);
     printf("========================================\n");
     if (g_fail == 0) {
-        console_set_color(C_GREEN, C_BLACK);
+        tty_set_color(C_GREEN, C_BLACK);
         printf("  ALL PASSED (%d checks)\n", g_pass);
     } else {
-        console_set_color(C_RED, C_BLACK);
+        tty_set_color(C_RED, C_BLACK);
         printf("  %d PASSED, %d FAILED\n", g_pass, g_fail);
     }
-    console_set_color(C_YELLOW, C_BLACK);
+    tty_set_color(C_YELLOW, C_BLACK);
     printf("========================================\n");
-    console_set_color(C_GRAY, C_BLACK);
+    tty_set_color(C_GRAY, C_BLACK);
 
     return g_fail;
 }

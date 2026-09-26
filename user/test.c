@@ -26,16 +26,16 @@ static int g_fail = 0;
 /* ---------- 报告辅助 ---------- */
 
 static void ok(const char *name) {
-    console_set_color(C_GREEN, C_BLACK);
+    tty_set_color(C_GREEN, C_BLACK);
     printf("  [PASS] %s\n", name);
-    console_set_color(C_GRAY, C_BLACK);
+    tty_set_color(C_GRAY, C_BLACK);
     g_pass++;
 }
 
 static void fail(const char *name, const char *why) {
-    console_set_color(C_RED, C_BLACK);
+    tty_set_color(C_RED, C_BLACK);
     printf("  [FAIL] %s: %s\n", name, why);
-    console_set_color(C_GRAY, C_BLACK);
+    tty_set_color(C_GRAY, C_BLACK);
     g_fail++;
 }
 
@@ -57,9 +57,9 @@ static void check_eq(int got, int expected, const char *name) {
 /* 打印分段标题 */
 static void section(const char *title) {
     printf("\n");
-    console_set_color(C_BLUE, C_BLACK);
+    tty_set_color(C_BLUE, C_BLACK);
     printf("--- %s ---\n", title);
-    console_set_color(C_GRAY, C_BLACK);
+    tty_set_color(C_GRAY, C_BLACK);
 }
 
 /* ---------- 1. 字符串库 ---------- */
@@ -325,32 +325,32 @@ static void test_dev(void) {
 
 /* ---------- 6. 控制台 ---------- */
 
-static void test_console(void) {
-    section("console");
+static void test_tty(void) {
+    section("tty");
 
     int x, y;
-    console_get_cursor(&x, &y);
+    tty_get_cursor(&x, &y);
     check(x >= 0 && x < 80 && y >= 0 && y < 25,
-          "console_get_cursor in range");
+          "tty_get_cursor in range");
 
     /* save / restore 一圈 */
-    console_save_cursor();
+    tty_save_cursor();
 
-    console_set_cursor(0, 0);
+    tty_set_cursor(0, 0);
     /* 不写东西，纯粹移动 */
 
-    console_restore_cursor();
+    tty_restore_cursor();
 
     int x2, y2;
-    console_get_cursor(&x2, &y2);
+    tty_get_cursor(&x2, &y2);
     check(x2 == x && y2 == y, "save/restore cursor");
 
     /* 彩色输出（视觉检查） */
-    console_set_color(C_YELLOW, C_BLACK);
+    tty_set_color(C_YELLOW, C_BLACK);
     printf("  (visual) this line should be YELLOW\n");
-    console_set_color(C_BLUE, C_BLACK);
+    tty_set_color(C_BLUE, C_BLACK);
     printf("  (visual) this line should be BLUE\n");
-    console_set_color(C_GRAY, C_BLACK);
+    tty_set_color(C_GRAY, C_BLACK);
     ok("color output");
 }
 
@@ -748,25 +748,43 @@ static void test_spawn_stress(void) {
     }
 }
 
+static void test_dev_vga(void) {
+    section("dev vga direct");
+    int vga = dev_open(DEV_TYPE_VGA, NULL);
+    check(vga >= 0, "dev_open VGA");
+    if (vga >= 0) {
+        /* 在 (20, 5) 写一个 'X' */
+        struct {
+            unsigned short x;
+            unsigned short y;
+            unsigned char  attr;
+            char           c;
+        } __attribute__((packed)) cell = { 20, 5, 0x1F, 'X' };
+        int r = dev_write(vga, &cell, sizeof(cell));
+        check(r > 0, "dev_write VGA");
+        dev_close(vga);
+    }
+}
+
 /* ---------- 主入口 ---------- */
 
 void _start(int argc, char **argv) {
     (void)argc; (void)argv;
     /* 清屏，保证从干净状态开始 */
-    console_clear();
+    tty_clear();
 
-    console_set_color(C_YELLOW, C_BLACK);
+    tty_set_color(C_YELLOW, C_BLACK);
     printf("========================================\n");
     printf("  HeliumOS Self Test\n");
     printf("========================================\n");
-    console_set_color(C_GRAY, C_BLACK);
+    tty_set_color(C_GRAY, C_BLACK);
 
     test_strings();
     test_printf();
     test_mem();
     test_fs();
     test_dev();
-    test_console();
+    test_tty();
     test_errno();
     test_ptr_bounds();
     test_blocking_syscall();
@@ -778,20 +796,21 @@ void _start(int argc, char **argv) {
     test_printf_boundaries();
     test_chdir_relative();
     test_spawn_stress();
+    test_dev_vga();
 
     printf("\n");
-    console_set_color(C_YELLOW, C_BLACK);
+    tty_set_color(C_YELLOW, C_BLACK);
     printf("========================================\n");
     if (g_fail == 0) {
-        console_set_color(C_GREEN, C_BLACK);
+        tty_set_color(C_GREEN, C_BLACK);
         printf("  ALL PASSED (%d tests)\n", g_pass);
     } else {
-        console_set_color(C_RED, C_BLACK);
+        tty_set_color(C_RED, C_BLACK);
         printf("  %d PASSED, %d FAILED\n", g_pass, g_fail);
     }
-    console_set_color(C_YELLOW, C_BLACK);
+    tty_set_color(C_YELLOW, C_BLACK);
     printf("========================================\n");
-    console_set_color(C_GRAY, C_BLACK);
+    tty_set_color(C_GRAY, C_BLACK);
 
     return g_fail;
 }

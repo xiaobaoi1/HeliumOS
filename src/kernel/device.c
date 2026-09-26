@@ -13,7 +13,6 @@ void dev_init(void) {
     for (int i = 0; i < DEV_MAX_TYPES; i++) {
         dev_ops[i] = NULL;
     }
-    kprintf("[DEV] Initialized\n");
 }
 
 int dev_register(int type, const struct device_ops *ops) {
@@ -22,6 +21,11 @@ int dev_register(int type, const struct device_ops *ops) {
     dev_ops[type] = ops;
     kprintf("[DEV] Registered type %d\n", type);
     return OK;
+}
+
+const struct device_ops *dev_get_ops(int type) {
+    if (type <= 0 || type >= DEV_MAX_TYPES) return NULL;
+    return dev_ops[type];
 }
 
 /* ---------- 句柄管理 ---------- */

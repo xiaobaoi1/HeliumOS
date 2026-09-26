@@ -59,7 +59,7 @@ static int tokenize(char *cmd, char **argv, int max) {
 /* ---------- 颜色辅助 ---------- */
 
 static void set_color(int fg, int bg) {
-    console_set_color(fg, bg);
+    tty_set_color(fg, bg);
 }
 
 static void print_error(const char *fmt, ...) {
@@ -175,7 +175,7 @@ static void cmd_cat(int argc, char **argv) {
 }
 
 static void cmd_clear(void) {
-    console_clear();
+    tty_clear();
 }
 
 /* ---------- 主循环 ---------- */

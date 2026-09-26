@@ -11,16 +11,18 @@
 #define SYS_KILL          7
 #define SYS_PROC_CLOSE    8
 
-/* ========== I/O 操作 (11~19) ========== */
+/* ========== 标准流 (11~12) ========== */
 #define SYS_READ                     11
 #define SYS_WRITE                    12
-#define SYS_CONSOLE_CLEAR            13
-#define SYS_CONSOLE_SET_COLOR        14
-#define SYS_CONSOLE_SET_CURSOR       15
-#define SYS_CONSOLE_GET_CURSOR       16
-#define SYS_CONSOLE_SAVE_CURSOR      17
-#define SYS_CONSOLE_RESTORE_CURSOR   18
-#define SYS_CONSOLE_DEBUG_WRITE      19
+
+/* ========== tty 控制 (13~19) ========== */
+#define SYS_TTY_CLEAR                13
+#define SYS_TTY_SET_COLOR            14
+#define SYS_TTY_SET_CURSOR           15
+#define SYS_TTY_GET_CURSOR           16
+#define SYS_TTY_SAVE_CURSOR          17
+#define SYS_TTY_RESTORE_CURSOR       18
+#define SYS_TTY_DEBUG_WRITE          19
 
 /* ========== 内存管理 (21~29) ========== */
 #define SYS_BRK        21
@@ -75,10 +77,6 @@ static inline int spawn(const char *path, char *const argv[]) {
     return __syscall(SYS_SPAWN, (int)path, (int)argv, 0);
 }
 
-static inline int waitpid(int pid, int *status) {
-    return __syscall(SYS_WAITPID, pid, (int)status, 0);
-}
-
 static inline int wait(int handle, int *status, unsigned int timeout_ms) {
     return __syscall(SYS_WAIT, handle, (int)status, (int)timeout_ms);
 }
@@ -104,35 +102,35 @@ static inline int read(int fd, void *buf, unsigned int n) {
     return __syscall(SYS_READ, fd, (int)buf, (int)n);
 }
 
-static inline void console_clear(void) {
-    __syscall(SYS_CONSOLE_CLEAR, 0, 0, 0);
+static inline void tty_clear(void) {
+    __syscall(SYS_TTY_CLEAR, 0, 0, 0);
 }
 
-static inline void console_set_color(unsigned char fg, unsigned char bg) {
-    __syscall(SYS_CONSOLE_SET_COLOR, fg, bg, 0);
+static inline void tty_set_color(unsigned char fg, unsigned char bg) {
+    __syscall(SYS_TTY_SET_COLOR, fg, bg, 0);
 }
 
-static inline void console_set_cursor(int x, int y) {
-    __syscall(SYS_CONSOLE_SET_CURSOR, x, y, 0);
+static inline void tty_set_cursor(int x, int y) {
+    __syscall(SYS_TTY_SET_CURSOR, x, y, 0);
 }
 
-static inline void console_get_cursor(int *x, int *y) {
+static inline void tty_get_cursor(int *x, int *y) {
     int out[2];
-    __syscall(SYS_CONSOLE_GET_CURSOR, (int)out, 0, 0);
+    __syscall(SYS_TTY_GET_CURSOR, (int)out, 0, 0);
     if (x) *x = out[0];
     if (y) *y = out[1];
 }
 
-static inline void console_save_cursor(void) {
-    __syscall(SYS_CONSOLE_SAVE_CURSOR, 0, 0, 0);
+static inline void tty_save_cursor(void) {
+    __syscall(SYS_TTY_SAVE_CURSOR, 0, 0, 0);
 }
 
-static inline void console_restore_cursor(void) {
-    __syscall(SYS_CONSOLE_RESTORE_CURSOR, 0, 0, 0);
+static inline void tty_restore_cursor(void) {
+    __syscall(SYS_TTY_RESTORE_CURSOR, 0, 0, 0);
 }
 
-static inline int console_debug_write(const void *buf, unsigned int n) {
-    return __syscall(SYS_CONSOLE_DEBUG_WRITE, (int)buf, (int)n, 0);
+static inline int tty_debug_write(const void *buf, unsigned int n) {
+    return __syscall(SYS_TTY_DEBUG_WRITE, (int)buf, (int)n, 0);
 }
 
 /* 内存 */

@@ -8,6 +8,18 @@
 #include <device.h>
 #include <proc.h>
 
+/* ---------- I/O slot（进程的标准流端点） ---------- */
+
+#define IO_SLOT_DEFAULT   0   /* 用内核默认（tty） */
+#define IO_SLOT_FILE      1   /* 绑到一个 fs_handle */
+#define IO_SLOT_NULL      2   /* 丢弃 */
+
+struct io_slot {
+    uint8_t  type;
+    uint8_t  reserved[3];
+    int      fd;              /* IO_SLOT_FILE 时有效；其他为 -1 */
+};
+
 /* 进程状态 */
 #define TASK_STATE_READY         0   /* 就绪 */
 #define TASK_STATE_RUNNING       1   /* 运行中 */
@@ -81,6 +93,10 @@ struct task {
     struct task *proc_next;          /* 全局进程链表 next */
     struct task *grave_next;         /* graveyard 链表 next */
     struct proc_handle proc_handles[PROC_MAX_HANDLES];
+
+    struct io_slot stdin_slot;
+    struct io_slot stdout_slot;
+    struct io_slot stderr_slot;
 };
 
 void enqueue_task(struct task **head, struct task **tail, struct task *task);
@@ -93,7 +109,8 @@ void unblock_task(struct task *t, uint32_t new_state);
 void wake_up_waiters(struct task *target);
 
 struct task *task_create(uint32_t entry_point, uint32_t *pgd,
-                         int argc, char *const argv[]);
+                         int argc, char *const argv[],
+                         int redir_in_fd, int redir_out_fd, int redir_err_fd);
 struct task *get_current_task(void);
 void set_current_task(struct task *task);
 void scheduler_start(void) __attribute__((noreturn));

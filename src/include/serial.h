@@ -17,7 +17,10 @@
 // 初始化串口（波特率 115200, 8N1）
 void serial_init(void);
 
-// 发送单个字符（带换行符转换）
+/* 注册为 DEV_TYPE_SERIAL。需要在 dev_init 之后调用。 */
+void serial_register_dev(void);
+
+// 发送单个字符
 void serial_write_char(char c);
 
 // 发送字符串

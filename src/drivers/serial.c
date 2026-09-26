@@ -1,5 +1,8 @@
 #include <serial.h>
 #include <io.h>
+#include <device.h>
+#include <errno.h>
+#include <stddef.h>
 
 // 初始化 COM1 串口
 void serial_init(void) {
@@ -57,4 +60,48 @@ void serial_write_string(const char *str) {
     for (int i = 0; str[i] != '\0'; i++) {
         serial_write_char(str[i]);
     }
+}
+
+/* ---------- device_ops 实现 ---------- */
+
+static int serial_dev_open(void **state, void *arg) {
+    (void)arg;
+    *state = NULL;
+    return OK;
+}
+
+static int serial_dev_read(void *state, void *buf, uint32_t n) {
+    (void)state; (void)buf; (void)n;
+    return 0;   /* 暂不支持串口读（需要中断或轮询 LSR） */
+}
+
+static int serial_dev_write(void *state, const void *buf, uint32_t n) {
+    (void)state;
+    if (!buf || n == 0) return EINVAL;
+    const char *p = (const char*)buf;
+    for (uint32_t i = 0; i < n; i++) {
+        serial_write_char(p[i]);
+    }
+    return (int)n;
+}
+
+static int serial_dev_ioctl(void *state, uint32_t cmd, void *arg) {
+    (void)state; (void)cmd; (void)arg;
+    return ENOSYS;
+}
+
+static void serial_dev_close(void *state) {
+    (void)state;
+}
+
+static const struct device_ops serial_ops = {
+    .open  = serial_dev_open,
+    .read  = serial_dev_read,
+    .write = serial_dev_write,
+    .ioctl = serial_dev_ioctl,
+    .close = serial_dev_close,
+};
+
+void serial_register_dev(void) {
+    dev_register(DEV_TYPE_SERIAL, &serial_ops);
 }
