@@ -57,6 +57,35 @@ void remove_task_from_queue(struct task **head, struct task **tail, struct task 
     }
 }
 
+/* 把内核缓冲写入子进程用户空间（支持跨页） */
+static int write_to_child_stack(uint32_t *pgd, uint32_t u_virt,
+                                const void *buf, uint32_t len) {
+    const uint8_t *src = (const uint8_t*)buf;
+    while (len > 0) {
+        uint32_t phys = vmm_get_phys(pgd, u_virt & ~0xFFF);
+        if (!phys) return -1;
+        uint32_t off = u_virt & 0xFFF;
+        uint32_t n = 0x1000 - off;
+        if (n > len) n = len;
+        memcpy((void*)(phys + off), src, n);
+        u_virt += n;
+        src += n;
+        len -= n;
+    }
+    return 0;
+}
+
+/* 写 4 字节到子进程用户空间（4 字节对齐） */
+static void write_u32_to_child(uint32_t *pgd, uint32_t u_virt, uint32_t val) {
+    if ((u_virt & 0xFFF) > 0xFFC) {
+        write_to_child_stack(pgd, u_virt, &val, 4);
+        return;
+    }
+    uint32_t phys = vmm_get_phys(pgd, u_virt & ~0xFFF);
+    if (!phys) return;
+    *(uint32_t*)(phys + (u_virt & 0xFFF)) = val;
+}
+
 /* ---------- 阻塞与唤醒 ---------- */
 void block_current(uint32_t new_state) {
     struct task *cur = get_current_task();
@@ -93,8 +122,9 @@ void wake_up_waiters(struct task *target) {
 }
 
 /* ---------- 进程创建 ---------- */
-struct task *task_create(uint32_t entry_point, uint32_t *pgd) {
-    /* 1. 先分配所有物理资源，任何一步失败都回滚 */
+struct task *task_create(uint32_t entry_point, uint32_t *pgd,
+                         int argc, char *const argv[]) {
+    /* 1. 分配所有物理资源，任何一步失败都回滚 */
     struct task *task = (struct task*)pmm_alloc_page();
     if (!task) {
         kprintf("[TASK] ERROR: Failed to allocate PCB.\n");
@@ -103,14 +133,12 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd) {
 
     uint32_t kernel_stack = pmm_alloc_page();
     if (!kernel_stack) {
-        kprintf("[TASK] ERROR: Failed to allocate kernel stack.\n");
         pmm_free_page((uint32_t)task);
         return NULL;
     }
 
     uint32_t stack_low = pmm_alloc_page();
     if (!stack_low) {
-        kprintf("[TASK] ERROR: Failed to allocate user stack low.\n");
         pmm_free_page(kernel_stack);
         pmm_free_page((uint32_t)task);
         return NULL;
@@ -118,14 +146,13 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd) {
 
     uint32_t stack_high = pmm_alloc_page();
     if (!stack_high) {
-        kprintf("[TASK] ERROR: Failed to allocate user stack high.\n");
         pmm_free_page(stack_low);
         pmm_free_page(kernel_stack);
         pmm_free_page((uint32_t)task);
         return NULL;
     }
 
-    /* 2. 所有物理资源到位，开始初始化字段 */
+    /* 2. 初始化字段 */
     task->pid = next_pid++;
     task->state = TASK_STATE_READY;
     task->time_slice = TIME_SLICE_TICKS;
@@ -138,7 +165,6 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd) {
     task->creator_pid = get_current_task() ? get_current_task()->pid : 0;
     task->wait_deadline = 0;
 
-    /* 进程对象字段 */
     task->refcount = 1;
     task->zombie = 0;
     task->proc_next = NULL;
@@ -160,12 +186,12 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd) {
     /* 4. 加入全局链表 */
     proc_register(task);
 
-    // 堆
+    /* 5. 堆 */
     task->heap_base = 0x50000000;
     task->heap_brk = 0x50000000;
     task->heap_limit = 0x60000000;
 
-    /* 初始化 cwd */
+    /* 6. cwd */
     struct task *parent = get_current_task();
     if (parent && parent->cwd_volume[0] != '\0') {
         strcpy(task->cwd_volume, parent->cwd_volume);
@@ -180,7 +206,7 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd) {
         strcpy(task->cwd_path, "/");
     }
 
-    /* 清空 fs/dev 句柄表 */
+    /* 7. 清空 fs/dev 句柄表 */
     for (int i = 0; i < FS_MAX_HANDLES; i++) {
         task->fs_handles[i].used = 0;
     }
@@ -188,59 +214,93 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd) {
         task->dev_handles[i].used = 0;
     }
 
-        /* 构造内核栈：模拟"刚从 switch_to 返回"的状态。
+    /* 8. 在用户栈上构造 argc/argv
      *
-     * 栈布局（从低地址到高地址）：
-     *   [callee-saved: edi, esi, ebx, ebp]      ← kernel_esp 指向这里
-     *   [返回地址 = enter_user_mode]
-     *   [段寄存器: gs, fs, es, ds]
-     *   [pusha: edi, esi, ebp, (esp), ebx, edx, ecx, eax]
-     *   [int_no, err_code]
-     *   [iret 帧: eip, cs, eflags, user_esp, ss]
-     *
-     * 执行过程：
-     *   switch_to(NULL, task) 的 pop 弹出 callee-saved；
-     *   ret 跳到 enter_user_mode；
-     *   enter_user_mode 恢复段寄存器 + pusha，跳过 int/err，iret 到用户态。
+     * 栈布局（从高地址到低地址）：
+     *   user_stack_virt (0x7FFFE000) ← 栈顶
+     *     "argv[0]\0"
+     *     "argv[1]\0"
+     *     ...
+     *     "argv[N-1]\0"
+     *     [4 字节对齐]
+     *     ptr(argv[0]), ptr(argv[1]), ..., NULL
+     *     argc
+     *   ← user_sp（新的 esp）
      */
+    uint32_t user_sp = task->user_stack_virt;
+    uint32_t arg_addrs[ARGV_MAX];
+    int valid_argc = 0;
+
+    if (argc > ARGV_MAX) argc = ARGV_MAX;
+
+    if (argc > 0 && argv) {
+        for (int i = 0; i < argc; i++) {
+            if (!argv[i]) break;
+            uint32_t len = strlen(argv[i]) + 1;
+            if (len > ARG_MAX) len = ARG_MAX;
+            user_sp -= len;
+            if (write_to_child_stack(pgd, user_sp, argv[i], len) < 0) {
+                user_sp += len;
+                break;
+            }
+            arg_addrs[i] = user_sp;
+            valid_argc++;
+        }
+    }
+
+    /* 4 字节对齐 */
+    user_sp &= ~3u;
+
+    /* argv 数组 + NULL */
+    user_sp -= (valid_argc + 1) * 4;
+    uint32_t argv_arr = user_sp;
+    for (int i = 0; i < valid_argc; i++) {
+        write_u32_to_child(pgd, argv_arr + i * 4, arg_addrs[i]);
+    }
+    write_u32_to_child(pgd, argv_arr + valid_argc * 4, 0);
+
+    /* argc */
+    user_sp -= 4;
+    write_u32_to_child(pgd, user_sp, (uint32_t)valid_argc);
+
+    /* 9. 构造内核栈（iret 帧的 user esp 指向 argc 位置） */
     uint32_t *sp = (uint32_t*)(task->kernel_stack_phys + 4096);
 
-    /* iret 帧（5 个 dword，从高到低写） */
+    /* iret 帧 */
     *(--sp) = 0x23;                    /* ss */
-    *(--sp) = task->user_stack_virt;   /* user esp */
-    *(--sp) = 0x202;                   /* eflags: IF=1 */
+    *(--sp) = user_sp;                 /* user esp ← 指向 argc */
+    *(--sp) = 0x202;                   /* eflags */
     *(--sp) = 0x1B;                    /* cs */
     *(--sp) = task->entry_point;       /* eip */
 
-    /* 中断占位（2 个 dword） */
-    *(--sp) = 0;                       /* err_code */
-    *(--sp) = 0;                       /* int_no */
+    /* 中断占位 */
+    *(--sp) = 0;
+    *(--sp) = 0;
 
-    /* pusha 保存（8 个 dword，从高到低） */
+    /* pusha */
     *(--sp) = 0;                       /* eax */
     *(--sp) = 0;                       /* ecx */
     *(--sp) = 0;                       /* edx */
     *(--sp) = 0;                       /* ebx */
-    *(--sp) = 0;                       /* esp (dummy) */
+    *(--sp) = 0;                       /* esp */
     *(--sp) = 0;                       /* ebp */
     *(--sp) = 0;                       /* esi */
     *(--sp) = 0;                       /* edi */
 
-    /* 段寄存器（4 个 dword，从高到低） */
-    *(--sp) = 0x23;                    /* ds */
-    *(--sp) = 0x23;                    /* es */
-    *(--sp) = 0x23;                    /* fs */
-    *(--sp) = 0x23;                    /* gs */
+    /* 段寄存器 */
+    *(--sp) = 0x23;
+    *(--sp) = 0x23;
+    *(--sp) = 0x23;
+    *(--sp) = 0x23;
 
     /* 返回地址（trampoline） */
     *(--sp) = (uint32_t)enter_user_mode;
 
-    /* callee-saved（4 个 dword，从高到低） */
+    /* callee-saved */
     *(--sp) = 0;                       /* ebp */
     *(--sp) = 0;                       /* ebx */
     *(--sp) = 0;                       /* esi */
     *(--sp) = 0;                       /* edi */
-    /* 此时 sp 指向栈顶（= kernel_esp） */
 
     task->kernel_esp = (uint32_t)sp;
 

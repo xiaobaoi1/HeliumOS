@@ -401,7 +401,7 @@ static void test_blocking_syscall(void) {
     section("blocking syscall return value");
 
     /* spawn 一个不会退出的进程（IDLE.ELF 用 pause 空转） */
-    int h = spawn("IDLE.ELF");
+    int h = spawn("IDLE.ELF", NULL);
     check(h >= 0, "spawn IDLE.ELF");
     if (h < 0) return;
 
@@ -441,20 +441,20 @@ static void test_blocking_syscall(void) {
 static void test_spawn_errors(void) {
     section("spawn error paths");
 
-    int h = spawn("SYS:/NOT_EXIST_99999.ELF");
+    int h = spawn("SYS:/NOT_EXIST_99999.ELF", NULL);
     check(h < 0, "spawn nonexistent -> negative");
 
-    h = spawn("");
+    h = spawn("", NULL);
     check(h < 0, "spawn empty path -> negative");
 
-    h = spawn((const char*)0x1000);     /* 内核地址 */
+    h = spawn((const char*)0x1000, NULL);     /* 内核地址 */
     check(h < 0, "spawn kernel ptr -> negative");
 
-    h = spawn((const char*)0x70000000); /* 未映射的用户地址 */
+    h = spawn((const char*)0x70000000, NULL); /* 未映射的用户地址 */
     /* 允许返回值不同，只要不是有效 handle */
     check(h < 0, "spawn unmapped user ptr -> negative");
 
-    h = spawn("SYS:/BOOT");             /* 是目录不是 ELF */
+    h = spawn("SYS:/BOOT", NULL);             /* 是目录不是 ELF */
     check(h < 0, "spawn directory -> negative");
 }
 
@@ -723,7 +723,7 @@ static void test_spawn_stress(void) {
 
     int failures = 0;
     for (int i = 0; i < 8; i++) {
-        int h = spawn("IDLE.ELF");
+        int h = spawn("IDLE.ELF", NULL);
         if (h < 0) { failures++; continue; }
 
         sleep_ms(5);
@@ -750,7 +750,8 @@ static void test_spawn_stress(void) {
 
 /* ---------- 主入口 ---------- */
 
-void _start(void) {
+void _start(int argc, char **argv) {
+    (void)argc; (void)argv;
     /* 清屏，保证从干净状态开始 */
     console_clear();
 
@@ -792,5 +793,5 @@ void _start(void) {
     printf("========================================\n");
     console_set_color(C_GRAY, C_BLACK);
 
-    _exit(g_fail);
+    return g_fail;
 }

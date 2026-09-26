@@ -17,6 +17,10 @@
 
 #define TIME_SLICE_TICKS 10
 
+/* 传参 */
+#define ARGV_MAX  16
+#define ARG_MAX   256
+
 /* 就绪队列（在 task.c 中定义） */
 extern struct task *ready_queue_head;
 extern struct task *ready_queue_tail;
@@ -88,7 +92,8 @@ void block_current(uint32_t new_state);
 void unblock_task(struct task *t, uint32_t new_state);
 void wake_up_waiters(struct task *target);
 
-struct task *task_create(uint32_t entry_point, uint32_t *pgd);
+struct task *task_create(uint32_t entry_point, uint32_t *pgd,
+                         int argc, char *const argv[]);
 struct task *get_current_task(void);
 void set_current_task(struct task *task);
 void scheduler_start(void) __attribute__((noreturn));

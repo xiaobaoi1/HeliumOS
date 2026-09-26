@@ -180,7 +180,8 @@ static void cmd_clear(void) {
 
 /* ---------- 主循环 ---------- */
 
-void _start(void) {
+void _start(int _argc, char **_argv) {
+    (void)_argc; (void)_argv;
     printf("Welcome to HeliumOS Shell!\n");
     printf("Type 'help' for commands.\n\n");
 
@@ -218,7 +219,8 @@ void _start(void) {
             cmd_clear();
         } else {
             /* 其他都当作可执行文件名 */
-            int h = spawn(c);       /* ← 现在返回 handle */
+            argv[argc] = NULL;
+            int h = spawn(c, argv);       /* ← 现在返回 handle */
             if (h < 0) {
                 set_color(VGA_LIGHT_RED, VGA_BLACK);
                 printf("spawn '%s' failed (error %d)\n", c, h);

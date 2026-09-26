@@ -6,11 +6,11 @@
 #include "syscall.h"
 #include "stdio.h"
 
-void _start(void) {
+int _start(int argc, char **argv) {
+    (void)argc; (void)argv;
     printf("[sleeper] pid=%d, entering long sleep\n", getpid());
-    /* 睡 100 秒，等被杀 */
     for (;;) {
         sleep_ms(100000);
     }
-    _exit(0);   /* 不会到达 */
+    return 0;
 }

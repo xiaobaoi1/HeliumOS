@@ -253,54 +253,87 @@ static int sys_brk(uint32_t new_brk) {
     return 0; // 成功
 }
 
-static int sys_spawn(const char *path) {
+static int sys_spawn(const char *path, char *const argv[]) {
     struct task *parent = get_current_task();
     if (!parent) return EINVAL;
 
     char path_buf[PATH_MAX_LEN];
-    if (strncpy_from_user(path_buf, path, sizeof(path_buf)) < 0) {
+    if (strncpy_from_user(path_buf, path, sizeof(path_buf)) < 0)
         return EFAULT;
+
+    char *k_argv[ARGV_MAX];
+    int argc = 0;
+    int ret = 0;
+
+    if (argv) {
+        for (int i = 0; i < ARGV_MAX; i++) {
+            if (check_user_range((uint32_t)(argv + i), sizeof(char*)) < 0) {
+                ret = EFAULT;
+                goto cleanup;
+            }
+            char *u_arg = argv[i];
+            if (!u_arg) break;
+
+            char *k_arg = kmalloc(ARG_MAX);
+            if (!k_arg) { ret = ENOMEM; goto cleanup; }
+
+            if (strncpy_from_user(k_arg, u_arg, ARG_MAX) < 0) {
+                kfree(k_arg);
+                ret = EFAULT;
+                goto cleanup;
+            }
+            k_argv[argc++] = k_arg;
+        }
     }
 
     uint32_t *pgd_child = vmm_create_process_page_directory();
-    if (!pgd_child) return ENOMEM;
+    if (!pgd_child) { ret = ENOMEM; goto cleanup; }
 
     struct resolved_path rp;
     int rr = resolve_path(path_buf, &rp);
     if (rr != OK) {
         vmm_free_process_address_space(pgd_child);
-        return rr;
+        ret = rr;
+        goto cleanup;
     }
 
     struct fat32_volume *vol = (struct fat32_volume*)rp.vol->fs_private;
     if (!vol) {
         vmm_free_process_address_space(pgd_child);
-        return ENOENT;
+        ret = ENOENT;
+        goto cleanup;
     }
 
     uint32_t entry = load_elf_from_disk(vol, rp.path, pgd_child);
     if (!entry) {
         vmm_free_process_address_space(pgd_child);
-        return ENOEXEC;
+        ret = ENOEXEC;
+        goto cleanup;
     }
 
-    struct task *child = task_create(entry, pgd_child);
+    struct task *child = task_create(entry, pgd_child, argc, k_argv);
     if (!child) {
         vmm_free_process_address_space(pgd_child);
-        return ENOMEM;
+        ret = ENOMEM;
+        goto cleanup;
     }
 
-    /* 在父进程里分配一个句柄指向 child */
     proc_handle_t h = proc_handle_alloc(child, PROC_ALL);
     if (h < 0) {
-        /* child 从 ready_queue 摘掉，直接释放（不挂 blocked_list） */
         remove_task_from_queue(&ready_queue_head, &ready_queue_tail, child);
         child->zombie = 1;
-        proc_unref(child);      /* refcount 1 → 0，直接 proc_free_pcb */
-        return ENOMEM;
+        proc_unref(child);
+        ret = ENOMEM;
+        goto cleanup;
     }
 
-    return h;   /* 返回句柄 */
+    /* 成功 */
+    for (int i = 0; i < argc; i++) kfree(k_argv[i]);
+    return h;
+
+cleanup:
+    for (int i = 0; i < argc; i++) kfree(k_argv[i]);
+    return ret;
 }
 
 /* 注意：本函数的"允许 kill 非子进程"这一行为，
@@ -392,7 +425,7 @@ void syscall_handler(struct registers *regs) {
             ret = sys_brk(arg1);
             break;
         case SYS_SPAWN:
-            ret = sys_spawn((const char*)arg1);
+            ret = sys_spawn((const char*)arg1, (char *const*)arg2);
             break;
         case SYS_SLEEP:
             ret = sys_sleep(arg1);

@@ -71,8 +71,8 @@ static inline int getpid(void) {
 }
 
 /* 进程控制 */
-static inline int spawn(const char *path) {
-    return __syscall(SYS_SPAWN, (int)path, 0, 0);   /* 返回 handle */
+static inline int spawn(const char *path, char *const argv[]) {
+    return __syscall(SYS_SPAWN, (int)path, (int)argv, 0);
 }
 
 static inline int waitpid(int pid, int *status) {
