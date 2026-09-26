@@ -111,7 +111,8 @@ int fat32_open_file(struct fat32_volume *vol, const char *path,
 
         int found = 0;
         uint32_t cluster = current_cluster;
-        while (cluster < 0x0FFFFFF8) {
+        uint32_t guard = 1024;
+        while (cluster < 0x0FFFFFF8 && guard-- > 0) {
             int sectors_in_cluster = vol->bpb.sectors_per_cluster;
             int entries_per_sector = vol->bpb.bytes_per_sector /
                                      sizeof(struct fat32_dir_entry);
@@ -256,8 +257,9 @@ int fat32_is_dir(struct fat32_volume *vol, const char *path) {
         int is_last = (*path == '\0');
         int found = 0;
         uint32_t cluster = current_cluster;
+        uint32_t guard = 1024;
 
-        while (cluster < 0x0FFFFFF8 && !found) {
+        while (cluster < 0x0FFFFFF8 && !found && guard-- > 0) {
             int sectors = vol->bpb.sectors_per_cluster;
             int eps = vol->bpb.bytes_per_sector / sizeof(struct fat32_dir_entry);
 
@@ -330,7 +332,8 @@ int fat32_opendir(struct fat32_volume *vol, const char *path,
 
             int found = 0;
             uint32_t c = cur;
-            while (c < 0x0FFFFFF8 && !found) {
+            uint32_t guard = 1024;
+            while (c < 0x0FFFFFF8 && !found && guard-- > 0) {
                 int sectors = vol->bpb.sectors_per_cluster;
                 int eps = vol->bpb.bytes_per_sector / sizeof(struct fat32_dir_entry);
                 for (int s = 0; s < sectors && !found; s++) {
@@ -379,8 +382,9 @@ int fat32_opendir(struct fat32_volume *vol, const char *path,
 int fat32_readdir(struct fat32_volume *vol, struct fat32_dir *dir,
                   struct dirent *out) {
     if (!vol || !vol->valid || !dir || !out || !dir->valid) return EINVAL;
-
-    while (dir->cur_cluster < 0x0FFFFFF8) {
+    
+    uint32_t guard = 1024;
+    while (dir->cur_cluster < 0x0FFFFFF8 && guard-- > 0) {
         int sectors = vol->bpb.sectors_per_cluster;
         int eps = vol->bpb.bytes_per_sector / sizeof(struct fat32_dir_entry);
 

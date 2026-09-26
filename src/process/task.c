@@ -94,12 +94,38 @@ void wake_up_waiters(struct task *target) {
 
 /* ---------- 进程创建 ---------- */
 struct task *task_create(uint32_t entry_point, uint32_t *pgd) {
+    /* 1. 先分配所有物理资源，任何一步失败都回滚 */
     struct task *task = (struct task*)pmm_alloc_page();
     if (!task) {
         kprintf("[TASK] ERROR: Failed to allocate PCB.\n");
         return NULL;
     }
 
+    uint32_t kernel_stack = pmm_alloc_page();
+    if (!kernel_stack) {
+        kprintf("[TASK] ERROR: Failed to allocate kernel stack.\n");
+        pmm_free_page((uint32_t)task);
+        return NULL;
+    }
+
+    uint32_t stack_low = pmm_alloc_page();
+    if (!stack_low) {
+        kprintf("[TASK] ERROR: Failed to allocate user stack low.\n");
+        pmm_free_page(kernel_stack);
+        pmm_free_page((uint32_t)task);
+        return NULL;
+    }
+
+    uint32_t stack_high = pmm_alloc_page();
+    if (!stack_high) {
+        kprintf("[TASK] ERROR: Failed to allocate user stack high.\n");
+        pmm_free_page(stack_low);
+        pmm_free_page(kernel_stack);
+        pmm_free_page((uint32_t)task);
+        return NULL;
+    }
+
+    /* 2. 所有物理资源到位，开始初始化字段 */
     task->pid = next_pid++;
     task->state = TASK_STATE_READY;
     task->time_slice = TIME_SLICE_TICKS;
@@ -109,12 +135,11 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd) {
     task->wait_target = NULL;
     task->sleep_ticks = 0;
 
-
     task->creator_pid = get_current_task() ? get_current_task()->pid : 0;
     task->wait_deadline = 0;
 
     /* 进程对象字段 */
-    task->refcount = 1;              /* self 引用 */
+    task->refcount = 1;
     task->zombie = 0;
     task->proc_next = NULL;
     task->grave_next = NULL;
@@ -123,38 +148,22 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd) {
         task->proc_handles[i].access = 0;
         task->proc_handles[i].task = NULL;
     }
-    
-    // 内核栈
-    task->kernel_stack_phys = pmm_alloc_page();
-    if (!task->kernel_stack_phys) {
-        kprintf("[TASK] ERROR: Failed to allocate kernel stack.\n");
-        return NULL;
-    }
 
-    uint32_t stack_low = pmm_alloc_page();
-    uint32_t stack_high = pmm_alloc_page();
-    if (!stack_low || !stack_high) {
-        kprintf("[TASK] ERROR: Failed to allocate user stack pages.\n");
-        return NULL;
-    }
-
-
-    /* 加入全局链表 */
-    proc_register(task);
-
-    // 用户栈
-    task->user_stack_virt = 0x7FFFE000;
+    task->kernel_stack_phys = kernel_stack;
     task->user_stack_phys = stack_high;
+    task->user_stack_virt = 0x7FFFE000;
 
+    /* 3. 映射用户栈 */
     vmm_map_user_page(pgd, 0x7FFFC000, stack_low, PTE_WRITE | PTE_USER);
     vmm_map_user_page(pgd, 0x7FFFD000, stack_high, PTE_WRITE | PTE_USER);
 
+    /* 4. 加入全局链表 */
+    proc_register(task);
 
     // 堆
     task->heap_base = 0x50000000;
     task->heap_brk = 0x50000000;
     task->heap_limit = 0x60000000;
-
 
     /* 初始化 cwd */
     struct task *parent = get_current_task();
@@ -171,11 +180,10 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd) {
         strcpy(task->cwd_path, "/");
     }
 
-    /* 清空 fs 句柄表 */
+    /* 清空 fs/dev 句柄表 */
     for (int i = 0; i < FS_MAX_HANDLES; i++) {
         task->fs_handles[i].used = 0;
     }
-
     for (int i = 0; i < DEV_MAX_HANDLES; i++) {
         task->dev_handles[i].used = 0;
     }

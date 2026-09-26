@@ -207,6 +207,12 @@ int fs_getcwd(char *buf, int size) {
 void fs_release_all(struct task *task) {
     if (!task) return;
     for (int i = 0; i < FS_MAX_HANDLES; i++) {
-        task->fs_handles[i].used = 0;
+        if (task->fs_handles[i].used) {
+            /* FAT32 打开文件没有额外资源需要释放。
+             * 将来若加有资源的文件系统（RAMFS / pipe），
+             * 在此处按 fs_type 分派到具体释放逻辑，
+             * 或在 fs_handle 里加 close 回调。 */
+            task->fs_handles[i].used = 0;
+        }
     }
 }

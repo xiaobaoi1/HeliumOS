@@ -7,12 +7,6 @@
 
 // ---------- 内部字符输出（绑定到串口） ----------
 static void putc(char c) {
-    // 换行符自动补充回车，确保终端显示正确
-    if (c == '\n') {
-        // screen_write_char('\n');
-    }
-    // screen_write_char(c);
-    // screen_write_char_colored(c, VGA_LIGHT_GREEN, VGA_BLACK);
     serial_write_char(c);
 }
 

@@ -40,6 +40,15 @@ struct fs_handle {
 
 /* ---------- 生命周期 ---------- */
 void fs_init(void);
+/* 释放一个进程的所有文件句柄。
+ *
+ * 当前只标 used=0——FAT32 的 fat32_file / fat32_dir 是纯数据，无额外资源。
+ *
+ * 契约：
+ *   - 将来若有文件系统需要在 close 时释放资源（缓冲区、连接、锁等），
+ *     在 fs_release_all 内按 fs_type 分派，或给 fs_handle 加 close 回调
+ *   - fs_release_all 与 fs_close 的语义必须一致（谁 open 谁 close）
+ */
 void fs_release_all(struct task *task);
 
 /* ---------- 文件 API ---------- */

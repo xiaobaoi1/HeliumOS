@@ -17,7 +17,7 @@
 
 /* ---------- 用户指针校验辅助 ---------- */
 
-/* 检查 [addr, addr+size) 是否完全在用户空间
+/* 检查用户地址范围 [addr, addr+size) 是否完全在用户空间且已映射
  * 返回 0 成功，-1 失败
  */
 static int check_user_range(uint32_t addr, uint32_t size) {
@@ -25,6 +25,17 @@ static int check_user_range(uint32_t addr, uint32_t size) {
     if (addr < USER_SPACE_START) return -1;
     uint64_t end = (uint64_t)addr + size;
     if (end > (uint64_t)USER_SPACE_END + 1) return -1;
+
+    /* 逐页检查映射。前提：调用者是 syscall 分发器，current_task 一定存在。 */
+    struct task *cur = get_current_task();
+    if (!cur || !cur->pgd) return -1;
+
+    uint32_t first_page = addr & ~0xFFF;
+    uint32_t last_page  = ((uint32_t)(end - 1)) & ~0xFFF;
+
+    for (uint32_t p = first_page; p <= last_page; p += 4096) {
+        if (!vmm_get_phys(cur->pgd, p)) return -1;
+    }
     return 0;
 }
 
@@ -35,16 +46,31 @@ static int strncpy_from_user(char *dest, const char *src, size_t max_len) {
     if (!src || !dest || max_len == 0) return -1;
     if ((uint32_t)src < USER_SPACE_START) return -1;
 
+    struct task *cur = get_current_task();
+    if (!cur || !cur->pgd) return -1;
+
+    uint32_t u_src = (uint32_t)src;
+    uint32_t cur_page = u_src & ~0xFFF;
+    if (!vmm_get_phys(cur->pgd, cur_page)) return -1;
+
     for (size_t i = 0; i < max_len; i++) {
-        uint32_t addr = (uint32_t)src + i;
+        uint32_t addr = u_src + i;
         if (addr < USER_SPACE_START || addr > USER_SPACE_END) {
             return -1;
         }
+
+        /* 跨页时重新检查映射 */
+        uint32_t page = addr & ~0xFFF;
+        if (page != cur_page) {
+            if (!vmm_get_phys(cur->pgd, page)) return -1;
+            cur_page = page;
+        }
+
         char c = src[i];
         dest[i] = c;
         if (c == '\0') return (int)(i + 1);
     }
-    return -1;  /* 没有终止符 */
+    return -1;
 }
 
 /* 系统调用 write：fd=1 走控制台，其他 fd 暂不支持 */
@@ -168,9 +194,6 @@ static int sys_waitpid(int pid, int *status) {
     return ECHILD;
 }
 
-/* 注意：本函数扩展失败时不回滚已映射的页，这些页会泄漏。
- * 触发条件：内存接近耗尽时。当前版本接受此行为。
- * 若实现严格语义，需要在失败路径遍历 start_page..addr 释放物理页。 */
 static int sys_brk(uint32_t new_brk) {
     struct task *cur = get_current_task();
     if (!cur) return EINVAL;
@@ -192,19 +215,38 @@ static int sys_brk(uint32_t new_brk) {
     uint32_t end_page = (end + 0xFFF) & ~0xFFF;
 
     for (uint32_t addr = start_page; addr < end_page; addr += 4096) {
-        if (new_brk > old_brk) {
-            // 扩展堆：分配物理页并映射
-            uint32_t phys = pmm_alloc_page();
-            if (!phys) return ENOMEM;
-            vmm_map_user_page(cur->pgd, addr, phys, PTE_WRITE | PTE_USER);
+            if (new_brk > old_brk) {
+            /* 扩展：逐页分配映射；失败时回滚已映射的部分 */
+            uint32_t next_unmapped = start_page;
+            for (uint32_t addr = start_page; addr < end_page; addr += 4096) {
+                uint32_t phys = pmm_alloc_page();
+                if (!phys) {
+                    /* 回滚：释放本次已映射的页 */
+                    for (uint32_t a = start_page; a < next_unmapped; a += 4096) {
+                        uint32_t p = vmm_get_phys(cur->pgd, a);
+                        if (p) {
+                            vmm_unmap_user_page(cur->pgd, a);
+                            pmm_free_page(p);
+                        }
+                    }
+                    return ENOMEM;
+                }
+                vmm_map_user_page(cur->pgd, addr, phys, PTE_WRITE | PTE_USER);
+                next_unmapped = addr + 4096;
+            }
         } else {
-            // 收缩堆：解除映射并释放物理页
-            uint32_t phys = vmm_get_phys(cur->pgd, addr);
-            if (phys) {
-                vmm_unmap_user_page(cur->pgd, addr);
-                pmm_free_page(phys);
+            /* 收缩：逐页解映射并释放 */
+            for (uint32_t addr = start_page; addr < end_page; addr += 4096) {
+                uint32_t phys = vmm_get_phys(cur->pgd, addr);
+                if (phys) {
+                    vmm_unmap_user_page(cur->pgd, addr);
+                    pmm_free_page(phys);
+                }
             }
         }
+
+        cur->heap_brk = new_brk;
+        return 0;
     }
 
     cur->heap_brk = new_brk;

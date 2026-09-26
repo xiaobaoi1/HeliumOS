@@ -6,6 +6,9 @@
 #include <string.h>
 #include <errno.h>
 
+/* 取消注释可打开 ELF 加载调试日志 */
+// #define DEBUG_ELF
+
 uint32_t load_elf_from_disk(struct fat32_volume *vol, const char *path,
                             uint32_t *pgd) {
     struct fat32_file file;
@@ -35,8 +38,10 @@ uint32_t load_elf_from_disk(struct fat32_volume *vol, const char *path,
         if (ph.type == PT_LOAD) {
             if (ph.vaddr < USER_SPACE_START) continue;
 
+            #ifdef DEBUG_ELF
             kprintf("[ELF] PT_LOAD: vaddr=0x%x filesz=0x%x memsz=0x%x pages=%d\n",
-            ph.vaddr, ph.filesz, ph.memsz, (ph.memsz + 4095) / 4096);
+                    ph.vaddr, ph.filesz, ph.memsz, (ph.memsz + 4095) / 4096);
+            #endif
 
 
             uint32_t pages_needed = (ph.memsz + 4095) / 4096;

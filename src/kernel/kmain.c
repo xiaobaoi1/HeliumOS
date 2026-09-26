@@ -124,69 +124,6 @@ void kmain(uint32_t magic, uint32_t addr) {
 
 
 
-    // 临时测试
-    void *p1 = kmalloc(16);
-    void *p2 = kmalloc(16);
-    void *p3 = kmalloc(64);
-    void *p4 = kmalloc(2048);
-    kprintf("[TEST] kmalloc: p1=%p p2=%p p3=%p p4=%p\n", p1, p2, p3, p4);
-
-    heap_stats();
-
-    kfree(p1); kfree(p2); kfree(p3); kfree(p4);
-    kprintf("[TEST] after kfree:\n");
-    heap_stats();
-
-    /* 临时测试路径解析 */
-    // struct resolved_path rp;
-
-    // if (resolve_path("SYS:/BOOT/GRUB.CFG", &rp) == 0) {
-    //     kprintf("[TEST] absolute: vol=%s path=%s\n", rp.vol->name, rp.path);
-    // }
-    // if (resolve_path("/BOOT/../SHELL.ELF", &rp) == 0) {
-    //     kprintf("[TEST] normalize: vol=%s path=%s\n", rp.vol->name, rp.path);
-    // }
-    // if (resolve_path("BOOT/GRUB.CFG", &rp) == 0) {
-    //     kprintf("[TEST] relative: vol=%s path=%s\n", rp.vol->name, rp.path);
-    // }
-
-        /* fs 测试 */
-        /* 内核早期 fs 测试：直调 fat32 */
-    kprintf("[TEST] fat32 open/read:\n");
-    {
-        struct fat32_file f;
-        if (fat32_open_file(sys_vol, "/SHELL.ELF", &f) == OK) {
-            uint8_t buf[16];
-            int r = fat32_read_file(sys_vol, &f, buf, 0, sizeof(buf));
-            kprintf("  read %d bytes: %x %x %x %x\n",
-                    r, buf[0], buf[1], buf[2], buf[3]);
-        } else {
-            kprintf("  open failed\n");
-        }
-    }
-
-    kprintf("[TEST] fat32 readdir:\n");
-    {
-        struct fat32_dir d;
-        struct dirent ent;
-        if (fat32_opendir(sys_vol, "/", &d) == OK) {
-            int n;
-            while ((n = fat32_readdir(sys_vol, &d, &ent)) == 1) {
-                kprintf("  %s%s\n", ent.name,
-                        (ent.attributes & 0x10) ? "/" : "");
-            }
-            fat32_closedir(sys_vol, &d);
-        } else {
-            kprintf("  opendir failed\n");
-        }
-    }
-
-
-
-
-
-
-
     kprintf("[KERNEL] Processes created. Starting scheduler...\n");
 
     scheduler_start();

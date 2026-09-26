@@ -450,7 +450,7 @@ static void test_spawn_errors(void) {
     h = spawn((const char*)0x1000);     /* 内核地址 */
     check(h < 0, "spawn kernel ptr -> negative");
 
-    h = spawn((const char*)0x50000000); /* 未映射的用户地址 */
+    h = spawn((const char*)0x70000000); /* 未映射的用户地址 */
     /* 允许返回值不同，只要不是有效 handle */
     check(h < 0, "spawn unmapped user ptr -> negative");
 

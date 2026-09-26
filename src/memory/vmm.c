@@ -3,6 +3,9 @@
 #include <printf.h>
 #include <stddef.h>
 
+/* 取消注释可打开 VMM 映射调试日志 */
+// #define DEBUG_VMM
+
 extern uint32_t page_directory[1024];
 
 void vmm_init(void) {
@@ -40,7 +43,9 @@ uint32_t *vmm_create_process_page_directory(void) {
         new_pgd[i] = 0;
     }
 
+    #ifdef DEBUG_VMM
     kprintf("[VMM] New process page directory created at physical %p.\n", (uint32_t)new_pgd);
+    #endif
     return new_pgd;
 }
 
@@ -81,8 +86,10 @@ void vmm_map_user_page(uint32_t *pgd, uint32_t virt, uint32_t phys, uint32_t fla
 
     /* 设置页表项 */
     ptable[pte_idx] = (phys & 0xFFFFF000) | (flags & 0xFFF) | PTE_PRESENT;
+    #ifdef DEBUG_VMM
     kprintf("[VMM] Map: virt 0x%x -> phys 0x%x, PDE=0x%x, PTE=0x%x\n",
         virt, phys, *pde, ptable[pte_idx]);
+    #endif
 
     /* 刷新 TLB（可选） */
     __asm__ volatile("invlpg (%0)" :: "r"(virt));

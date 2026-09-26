@@ -42,6 +42,16 @@ struct task;
 
 /* ---------- 生命周期 ---------- */
 void dev_init(void);
+/* 释放一个进程的所有设备句柄。
+ *
+ * 遍历每个 used 句柄，调用驱动 close 回调（如有），然后标 used=0。
+ *
+ * 契约：
+ *   - 驱动的 open 负责分配自己的资源，close 负责释放
+ *   - close 必须幂等、可重入、不依赖调用顺序
+ *   - close 里不得调用任何依赖 current_task 的接口
+ *   - 驱动不在 open 里分配需要 close 释放的资源也可以，close 留空即可
+ */
 void dev_release_all(struct task *task);
 
 /* ---------- 驱动注册 ---------- */

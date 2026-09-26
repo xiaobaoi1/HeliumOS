@@ -102,6 +102,13 @@ int dev_close(dev_t dev) {
 void dev_release_all(struct task *task) {
     if (!task) return;
     for (int i = 0; i < DEV_MAX_HANDLES; i++) {
-        task->dev_handles[i].used = 0;
+        if (task->dev_handles[i].used) {
+            const struct device_ops *ops = dev_ops[task->dev_handles[i].type];
+            if (ops && ops->close) {
+                ops->close(task->dev_handles[i].state);
+            }
+            task->dev_handles[i].used = 0;
+            task->dev_handles[i].state = NULL;
+        }
     }
 }
