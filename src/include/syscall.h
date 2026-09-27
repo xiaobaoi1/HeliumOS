@@ -7,7 +7,7 @@
 #define SYS_EXIT          1
 #define SYS_GETPID        2
 #define SYS_SPAWN         3      /* 返回 proc_handle_t（不再是 pid） */
-#define SYS_WAITPID       4      /* 兼容：内部解析 pid */
+
 #define SYS_SLEEP         5
 #define SYS_WAIT          6      /* 新增：wait(handle, *status, timeout) */
 #define SYS_KILL          7      /* 新增：kill(handle, status) */

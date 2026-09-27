@@ -401,7 +401,7 @@ static void test_blocking_syscall(void) {
     section("blocking syscall return value");
 
     /* spawn 一个不会退出的进程（IDLE.ELF 用 pause 空转） */
-    int h = spawn("IDLE.ELF", NULL);
+    int h = spawn("IDLE.ELF", NULL, NULL);
     check(h >= 0, "spawn IDLE.ELF");
     if (h < 0) return;
 
@@ -441,20 +441,20 @@ static void test_blocking_syscall(void) {
 static void test_spawn_errors(void) {
     section("spawn error paths");
 
-    int h = spawn("SYS:/NOT_EXIST_99999.ELF", NULL);
+    int h = spawn("SYS:/NOT_EXIST_99999.ELF", NULL, NULL);
     check(h < 0, "spawn nonexistent -> negative");
 
-    h = spawn("", NULL);
+    h = spawn("", NULL, NULL);
     check(h < 0, "spawn empty path -> negative");
 
-    h = spawn((const char*)0x1000, NULL);     /* 内核地址 */
+    h = spawn((const char*)0x1000, NULL, NULL);     /* 内核地址 */
     check(h < 0, "spawn kernel ptr -> negative");
 
-    h = spawn((const char*)0x70000000, NULL); /* 未映射的用户地址 */
+    h = spawn((const char*)0x70000000, NULL, NULL); /* 未映射的用户地址 */
     /* 允许返回值不同，只要不是有效 handle */
     check(h < 0, "spawn unmapped user ptr -> negative");
 
-    h = spawn("SYS:/BOOT", NULL);             /* 是目录不是 ELF */
+    h = spawn("SYS:/BOOT", NULL, NULL);             /* 是目录不是 ELF */
     check(h < 0, "spawn directory -> negative");
 }
 
@@ -723,7 +723,7 @@ static void test_spawn_stress(void) {
 
     int failures = 0;
     for (int i = 0; i < 8; i++) {
-        int h = spawn("IDLE.ELF", NULL);
+        int h = spawn("IDLE.ELF", NULL, NULL);
         if (h < 0) { failures++; continue; }
 
         sleep_ms(5);
@@ -766,12 +766,36 @@ static void test_dev_vga(void) {
     }
 }
 
+static void test_slot_null(void) {
+    section("slot null");
+
+    struct spawn_redirect r = {
+        .size = sizeof(r),
+        .in_fd = SPAWN_FD_INHERIT,
+        .out_fd = SPAWN_FD_NULL,
+        .err_fd = SPAWN_FD_INHERIT,
+        .flags = 0,
+    };
+
+    /* 用 TEST.ELF 自己，但 stdout 丢弃——屏幕上不应有输出 */
+    int h = spawn("SYS:/TESTKILL.ELF", NULL, &r);
+    check(h >= 0, "spawn with stdout=NULL");
+
+    if (h >= 0) {
+        int status = 0;
+        int r2 = wait(h, &status, 10000);
+        check_eq(r2, OK, "wait returns OK");
+        check_eq(status, 0, "TEST.ELF exits 0 (no output visible)");
+        process_close(h);
+    }
+}
+
 /* ---------- 主入口 ---------- */
 
 void _start(int argc, char **argv) {
     (void)argc; (void)argv;
     /* 清屏，保证从干净状态开始 */
-    tty_clear();
+    // tty_clear();
 
     tty_set_color(C_YELLOW, C_BLACK);
     printf("========================================\n");
@@ -797,6 +821,7 @@ void _start(int argc, char **argv) {
     test_chdir_relative();
     test_spawn_stress();
     test_dev_vga();
+    test_slot_null();
 
     printf("\n");
     tty_set_color(C_YELLOW, C_BLACK);

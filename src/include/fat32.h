@@ -64,7 +64,9 @@ struct fat32_file {
     uint32_t current_cluster;
     uint32_t current_offset;
     uint32_t file_size;
-    // uint8_t  buffer[SECTOR_SIZE];
+    uint32_t dirent_sector_lba;   /* 目录项所在扇区 LBA */
+    uint32_t dirent_entry_idx;    /* 扇区内的项索引 */
+    uint8_t  dirent_valid;        /* 是否已记录 */
 };
 
 /* ★ 新增：FAT32 卷上下文。每个挂载点一个 */
@@ -75,6 +77,7 @@ struct fat32_volume {
     uint32_t data_start_lba;          /* 数据区起始 LBA */
     uint32_t root_cluster;            /* 根目录簇号 */
     uint8_t  valid;                   /* 挂载成功标志 */
+    uint32_t last_alloc_hint;    /* 上次分配的簇号 + 1，避免每次从头扫 */
 };
 
 /* 目录迭代句柄 */
@@ -98,6 +101,15 @@ int fat32_open_file(struct fat32_volume *vol, const char *path,
 
 int fat32_read_file(struct fat32_volume *vol, struct fat32_file *file,
                     uint8_t *buffer, uint32_t offset, uint32_t size);
+/* 打开或创建文件（存在则打开，不存在则创建） */
+int fat32_create_file(struct fat32_volume *vol, const char *path,
+                      struct fat32_file *file);
+
+/* 向文件写入。offset 是文件内偏移，size 是字节数。
+ * 若 offset+size > file_size 会自动扩展簇链并更新目录项。
+ * 返回写入字节数（成功）或负错误码。 */
+int fat32_write_file(struct fat32_volume *vol, struct fat32_file *file,
+                     const uint8_t *buffer, uint32_t offset, uint32_t size);
 
 /* 目录操作 */
 int  fat32_opendir(struct fat32_volume *vol, const char *path,

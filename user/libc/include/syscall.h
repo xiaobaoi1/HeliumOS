@@ -5,7 +5,6 @@
 #define SYS_EXIT          1
 #define SYS_GETPID        2
 #define SYS_SPAWN         3
-#define SYS_WAITPID       4
 #define SYS_SLEEP         5
 #define SYS_WAIT          6
 #define SYS_KILL          7
@@ -48,6 +47,20 @@
 #define SYS_GETCWD        61
 #define SYS_CHDIR         62
 
+/* 传给 spawn 的重定向描述。
+ * size 字段必须填为 sizeof(struct spawn_redirect)。 */
+struct spawn_redirect {
+    unsigned int size;
+    int          in_fd;
+    int          out_fd;
+    int          err_fd;
+    unsigned int flags;
+};
+
+#define SPAWN_FD_INHERIT   (-1)
+#define SPAWN_FD_NULL      (-2)
+#define SPAWN_FD_TTY       (-3)
+
 /* ---------- 原始系统调用（内联汇编） ---------- */
 static inline int __syscall(int num, int a, int b, int c) {
     int ret;
@@ -73,8 +86,9 @@ static inline int getpid(void) {
 }
 
 /* 进程控制 */
-static inline int spawn(const char *path, char *const argv[]) {
-    return __syscall(SYS_SPAWN, (int)path, (int)argv, 0);
+static inline int spawn(const char *path, char *const argv[],
+                        struct spawn_redirect *redir) {
+    return __syscall(SYS_SPAWN, (int)path, (int)argv, (int)redir);
 }
 
 static inline int wait(int handle, int *status, unsigned int timeout_ms) {

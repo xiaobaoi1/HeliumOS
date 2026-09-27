@@ -50,10 +50,14 @@ fd_t fs_open(const char *path, int flags) {
         case VOL_FS_FAT32: {
             struct fat32_volume *fvol = (struct fat32_volume*)rp.vol->fs_private;
             if (!fvol) { h->used = 0; return FD_INVALID; }
-            if (fat32_open_file(fvol, rp.path, &h->u.fat32_file) != OK) {
-                h->used = 0;
-                return FD_INVALID;
+
+            int r;
+            if (flags & FS_O_CREAT) {
+                r = fat32_create_file(fvol, rp.path, &h->u.fat32_file);
+            } else {
+                r = fat32_open_file(fvol, rp.path, &h->u.fat32_file);
             }
+            if (r != OK) { h->used = 0; return FD_INVALID; }
             return fd;
         }
         default:
@@ -105,8 +109,21 @@ int fs_close(fd_t fd) {
 }
 
 int fs_write(fd_t fd, const void *buf, uint32_t n) {
-    (void)fd; (void)buf; (void)n;
-    return ENOSYS;
+    struct fs_handle *h = fs_get(fd);
+    if (!h || h->obj_type != FS_OBJ_FILE) return EINVAL;
+    if (!buf || n == 0) return EINVAL;
+
+    switch (h->fs_type) {
+        case VOL_FS_FAT32: {
+            struct fat32_volume *fvol = (struct fat32_volume*)h->vol->fs_private;
+            if (!fvol) return EINVAL;
+            int r = fat32_write_file(fvol, &h->u.fat32_file,
+                                     (const uint8_t*)buf, h->offset, n);
+            if (r > 0) h->offset += r;
+            return r;
+        }
+        default: return ENOSYS;
+    }
 }
 
 /* ---------- 目录 ---------- */
@@ -215,4 +232,24 @@ void fs_release_all(struct task *task) {
             task->fs_handles[i].used = 0;
         }
     }
+}
+
+fd_t fs_dup_handle(struct task *src_task, fd_t src_fd, struct task *dst_task) {
+    if (!src_task || !dst_task) return FD_INVALID;
+    if (src_fd < 0 || src_fd >= FS_MAX_HANDLES) return FD_INVALID;
+    if (!src_task->fs_handles[src_fd].used) return FD_INVALID;
+
+    /* 在 dst_task 里找空闲槽 */
+    fd_t new_fd = FD_INVALID;
+    for (int i = 0; i < FS_MAX_HANDLES; i++) {
+        if (!dst_task->fs_handles[i].used) {
+            new_fd = i;
+            break;
+        }
+    }
+    if (new_fd == FD_INVALID) return FD_INVALID;
+
+    /* 整块复制 */
+    dst_task->fs_handles[new_fd] = src_task->fs_handles[src_fd];
+    return new_fd;
 }

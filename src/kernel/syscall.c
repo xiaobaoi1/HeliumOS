@@ -15,6 +15,20 @@
 #include <path.h>
 #include <proc.h>
 
+
+/* 用户态结构体镜像。字段顺序和 user/libc/include/syscall.h 保持一致。
+ * size 用于版本兼容：内核只读 min(size, 本结构体大小) 字节。 */
+struct spawn_redirect {
+    uint32_t size;
+    int32_t  in_fd;
+    int32_t  out_fd;
+    int32_t  err_fd;
+    uint32_t flags;
+};
+
+#define SPAWN_FD_INHERIT   (-1)   /* 不重定向 */
+#define SPAWN_FD_NULL      (-2)   /* 丢弃 */
+
 /* ---------- 用户指针校验辅助 ---------- */
 
 /* 检查用户地址范围 [addr, addr+size) 是否完全在用户空间且已映射
@@ -73,18 +87,68 @@ static int strncpy_from_user(char *dest, const char *src, size_t max_len) {
     return -1;
 }
 
+/* 从用户空间拷贝 n 字节到内核缓冲。
+ * 用户指针须已通过 check_user_range。 */
+static int memcpy_from_user(void *dest, const void *src, size_t n) {
+    if (n == 0) return 0;
+    if (!dest || !src) return -1;
+    if (check_user_range((uint32_t)src, n) < 0) return -1;
+    memcpy(dest, src, n);
+    return 0;
+}
+
 static int sys_write(int fd, const char *buf, uint32_t count) {
     if (fd != 1) return EINVAL;
     if (!buf || count == 0) return EINVAL;
     if (check_user_range((uint32_t)buf, count) < 0) return EFAULT;
-    return tty_write(buf, count);
+
+    struct task *cur = get_current_task();
+    if (!cur) return EINVAL;
+    
+    switch (cur->stdout_slot.type) {
+        case IO_SLOT_DEFAULT:
+            return tty_write(buf, count);
+
+        case IO_SLOT_FILE: {
+            int h = cur->stdout_slot.fd;
+            if (h < 0 || h >= FS_MAX_HANDLES) return EINVAL;
+            if (!cur->fs_handles[h].used) return EINVAL;
+            return fs_write(h, buf, count);
+        }
+
+        case IO_SLOT_NULL:
+            return (int)count;
+
+        default:
+            return ENOSYS;
+    }
 }
 
 static int sys_read(int fd, char *buf, uint32_t count) {
     if (fd != 0) return EINVAL;
     if (!buf || count == 0) return EINVAL;
     if (check_user_range((uint32_t)buf, count) < 0) return EFAULT;
-    return tty_read(buf, count);
+
+    struct task *cur = get_current_task();
+    if (!cur) return EINVAL;
+
+    switch (cur->stdin_slot.type) {
+        case IO_SLOT_DEFAULT:
+            return tty_read(buf, count);
+
+        case IO_SLOT_FILE: {
+            int h = cur->stdin_slot.fd;
+            if (h < 0 || h >= FS_MAX_HANDLES) return EINVAL;
+            if (!cur->fs_handles[h].used) return EINVAL;
+            return fs_read(h, buf, count);
+        }
+
+        case IO_SLOT_NULL:
+            return 0;    /* EOF */
+
+        default:
+            return ENOSYS;
+    }
 }
 
 /* 系统调用 exit */
@@ -251,7 +315,7 @@ static int sys_brk(uint32_t new_brk) {
     return 0; // 成功
 }
 
-static int sys_spawn(const char *path, char *const argv[]) {
+static int sys_spawn(const char *path, char *const argv[], void *redir_user) {
     struct task *parent = get_current_task();
     if (!parent) return EINVAL;
 
@@ -259,6 +323,29 @@ static int sys_spawn(const char *path, char *const argv[]) {
     if (strncpy_from_user(path_buf, path, sizeof(path_buf)) < 0)
         return EFAULT;
 
+    /* 解析重定向 */
+    int redir_in = SPAWN_FD_INHERIT;
+    int redir_out = SPAWN_FD_INHERIT;
+    int redir_err = SPAWN_FD_INHERIT;
+
+    if (redir_user) {
+        struct spawn_redirect r = {0};
+        if (check_user_range((uint32_t)redir_user, sizeof(uint32_t)) < 0)
+            return EFAULT;
+        /* 先读 size */
+        uint32_t user_size;
+        if (memcpy_from_user(&user_size, redir_user, sizeof(uint32_t)) < 0)
+            return EFAULT;
+        if (user_size < sizeof(uint32_t)) return EINVAL;
+        uint32_t to_copy = user_size < sizeof(r) ? user_size : sizeof(r);
+        if (memcpy_from_user(&r, redir_user, to_copy) < 0)
+            return EFAULT;
+        redir_in = r.in_fd;
+        redir_out = r.out_fd;
+        redir_err = r.err_fd;
+    }
+
+    /* argv 拷贝（同前） */
     char *k_argv[ARGV_MAX];
     int argc = 0;
     int ret = 0;
@@ -271,10 +358,8 @@ static int sys_spawn(const char *path, char *const argv[]) {
             }
             char *u_arg = argv[i];
             if (!u_arg) break;
-
             char *k_arg = kmalloc(ARG_MAX);
             if (!k_arg) { ret = ENOMEM; goto cleanup; }
-
             if (strncpy_from_user(k_arg, u_arg, ARG_MAX) < 0) {
                 kfree(k_arg);
                 ret = EFAULT;
@@ -309,7 +394,8 @@ static int sys_spawn(const char *path, char *const argv[]) {
         goto cleanup;
     }
 
-    struct task *child = task_create(entry, pgd_child, argc, k_argv);
+    struct task *child = task_create(entry, pgd_child, argc, k_argv,
+                                     redir_in, redir_out, redir_err);
     if (!child) {
         vmm_free_process_address_space(pgd_child);
         ret = ENOMEM;
@@ -325,7 +411,6 @@ static int sys_spawn(const char *path, char *const argv[]) {
         goto cleanup;
     }
 
-    /* 成功 */
     for (int i = 0; i < argc; i++) kfree(k_argv[i]);
     return h;
 
@@ -413,9 +498,6 @@ void syscall_handler(struct registers *regs) {
         case SYS_EXIT:
             sys_exit((int)arg1);
             break;
-        case SYS_WAITPID:
-            ret = sys_waitpid((int)arg1, (int*)arg2);
-            break;
         case SYS_GETPID:
             ret = get_current_task()->pid;
             break;
@@ -423,7 +505,7 @@ void syscall_handler(struct registers *regs) {
             ret = sys_brk(arg1);
             break;
         case SYS_SPAWN:
-            ret = sys_spawn((const char*)arg1, (char *const*)arg2);
+            ret = sys_spawn((const char*)arg1, (char *const*)arg2, (void*)arg3);
             break;
         case SYS_SLEEP:
             ret = sys_sleep(arg1);

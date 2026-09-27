@@ -39,7 +39,10 @@ static struct task *create_task_from_elf(struct fat32_volume *vol,
     }
 
     /* 3. 创建 PCB */
-    struct task *task = task_create(entry, pgd, 0, NULL);
+    struct task *task = task_create(entry, pgd, 0, NULL, 
+                                SPAWN_FD_INHERIT,
+                                SPAWN_FD_INHERIT,
+                                SPAWN_FD_INHERIT);
     if (!task) {
         kprintf("[KERNEL] Failed to create task for %s\n", path);
         return NULL;

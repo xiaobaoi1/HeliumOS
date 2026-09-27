@@ -121,9 +121,80 @@ void wake_up_waiters(struct task *target) {
     }
 }
 
+/* 处理 slot 继承或重定向。
+ *
+ *   child_slot    子进程的 slot
+ *   parent_slot   父进程对应的 slot（NULL 表示无父进程）
+ *   child         子进程（用于 fs_dup_handle）
+ *   parent        父进程（NULL 表示内核早期创建）
+ *   redir_fd      重定向参数：SPAWN_FD_INHERIT / SPAWN_FD_NULL / >= 0
+ *
+ * 宽容策略：任何失败都 fallback 到 IO_SLOT_DEFAULT，不返回错误。
+ */
+static void setup_slot(struct io_slot *child_slot,
+                       const struct io_slot *parent_slot,
+                       struct task *child,
+                       struct task *parent,
+                       int redir_fd) {
+    /* 1. NULL：丢弃 */
+    if (redir_fd == SPAWN_FD_NULL) {
+        child_slot->type = IO_SLOT_NULL;
+        child_slot->fd   = -1;
+        return;
+    }
+    /* 2. TTY */
+    if (redir_fd == SPAWN_FD_TTY) {
+        child_slot->type = IO_SLOT_DEFAULT;
+        child_slot->fd   = -1;
+        return;
+    }
+
+    /* 无父进程（内核早期创建 idle/shell）：保持 DEFAULT */
+    if (!parent) {
+        return;
+    }
+
+    /* 3. 显式 fd */
+    if (redir_fd >= 0) {
+        if (redir_fd >= FS_MAX_HANDLES) return;
+        if (!parent->fs_handles[redir_fd].used) return;
+        fd_t new_fd = fs_dup_handle(parent, redir_fd, child);
+        if (new_fd >= 0) {
+            child_slot->type = IO_SLOT_FILE;
+            child_slot->fd   = new_fd;
+        }
+        return;
+    }
+
+    /* 3. INHERIT：继承父 slot */
+    if (!parent_slot) return;
+
+    child_slot->type = parent_slot->type;
+    child_slot->fd   = parent_slot->fd;
+
+    if (parent_slot->type == IO_SLOT_FILE) {
+        /* 父 slot 指向 fs_handle，子在 fs_handles 里复制一份 */
+        if (parent_slot->fd < 0 || parent_slot->fd >= FS_MAX_HANDLES) {
+            child_slot->type = IO_SLOT_DEFAULT;
+            child_slot->fd   = -1;
+            return;
+        }
+        fd_t new_fd = fs_dup_handle(parent, parent_slot->fd, child);
+        if (new_fd >= 0) {
+            child_slot->fd = new_fd;
+        } else {
+            /* 复制失败，fallback */
+            child_slot->type = IO_SLOT_DEFAULT;
+            child_slot->fd   = -1;
+        }
+    }
+    /* DEFAULT / NULL：直接继承 type，fd 保持 -1（已经是） */
+}
+
 /* ---------- 进程创建 ---------- */
 struct task *task_create(uint32_t entry_point, uint32_t *pgd,
-                         int argc, char *const argv[]) {
+                         int argc, char *const argv[],
+                         int redir_in_fd, int redir_out_fd, int redir_err_fd) {
     /* 1. 分配所有物理资源，任何一步失败都回滚 */
     struct task *task = (struct task*)pmm_alloc_page();
     if (!task) {
@@ -174,6 +245,14 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd,
         task->proc_handles[i].access = 0;
         task->proc_handles[i].task = NULL;
     }
+
+    /* 初始化三个 slot */
+    task->stdin_slot.type  = IO_SLOT_DEFAULT;
+    task->stdin_slot.fd    = -1;
+    task->stdout_slot.type = IO_SLOT_DEFAULT;
+    task->stdout_slot.fd   = -1;
+    task->stderr_slot.type = IO_SLOT_DEFAULT;
+    task->stderr_slot.fd   = -1;
 
     task->kernel_stack_phys = kernel_stack;
     task->user_stack_phys = stack_high;
@@ -263,7 +342,27 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd,
     user_sp -= 4;
     write_u32_to_child(pgd, user_sp, (uint32_t)valid_argc);
 
-    /* 9. 构造内核栈（iret 帧的 user esp 指向 argc 位置） */
+    /* 9. 处理三个 slot 的重定向
+     * 从父进程复制 fs_handle 到子进程（如果指定了 fd）。
+     * 父进程不存在（内核早期创建 idle/shell）或 fd 无效时，
+     * slot 保持初始化时的 IO_SLOT_DEFAULT。 */
+
+    // struct task *parent = get_current_task();
+
+    setup_slot(&task->stdin_slot,
+               parent ? &parent->stdin_slot : NULL,
+               task, parent, redir_in_fd);
+
+    setup_slot(&task->stdout_slot,
+               parent ? &parent->stdout_slot : NULL,
+               task, parent, redir_out_fd);
+
+    setup_slot(&task->stderr_slot,
+               parent ? &parent->stderr_slot : NULL,
+               task, parent, redir_err_fd);
+
+
+    /* 10. 构造内核栈（iret 帧的 user esp 指向 argc 位置） */
     uint32_t *sp = (uint32_t*)(task->kernel_stack_phys + 4096);
 
     /* iret 帧 */

@@ -44,7 +44,7 @@ static void section(const char *title) {
 
 /* 生成一个 "PID" 用于 log，不通过内核 API */
 static int spawn_sleeper(void) {
-    int h = spawn("SLEEPER.ELF", NULL);
+    int h = spawn("SLEEPER.ELF", NULL, NULL);
     if (h < 0) {
         tty_set_color(C_RED, C_BLACK);
         printf("  spawn SLEEPER.ELF failed: %d\n", h);
@@ -173,7 +173,7 @@ static void test_wait_timeout_then_kill(void) {
 
 void _start(int argc, char **argv) {
     (void)argc; (void)argv;
-    tty_clear();
+    // tty_clear();
 
     tty_set_color(C_YELLOW, C_BLACK);
     printf("========================================\n");

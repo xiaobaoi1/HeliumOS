@@ -40,61 +40,62 @@ int split_volume_prefix(const char *input, char *vol_name, int name_size,
 void normalize_path(char *path) {
     if (!path) return;
 
-    /* 分割成段 */
-    char segments[32][64];      /* 最多 32 层，每层 63 字符 */
-    int  depth = 0;
-
-    int i = 0;
-    while (path[i]) {
-        /* 跳过所有分隔符 */
-        while (path[i] && is_sep(path[i])) i++;
-        if (!path[i]) break;
-
-        /* 取一个段 */
-        char tok[64];
-        int  t = 0;
-        while (path[i] && !is_sep(path[i]) && t < 63) {
-            tok[t++] = path[i++];
-        }
-        tok[t] = '\0';
-
-        if (strcmp(tok, ".") == 0) {
-            /* 忽略 */
-        } else if (strcmp(tok, "..") == 0) {
-            if (depth > 0) depth--;
-            /* 已经在根，保持在根 */
-        } else {
-            if (depth < 32) {
-                /* 拷贝到 segments[depth] */
-                int j;
-                for (j = 0; tok[j] && j < 63; j++) {
-                    segments[depth][j] = tok[j];
-                }
-                segments[depth][j] = '\0';
-                depth++;
-            }
-        }
-    }
-
-    /* 重新拼装 */
     char result[PATH_MAX_LEN];
     int  r = 0;
-    if (depth == 0) {
-        result[r++] = '/';
-    } else {
-        for (int k = 0; k < depth; k++) {
+    const char *p = path;
+
+    /* 跳过前导分隔符 */
+    while (*p && is_sep(*p)) p++;
+
+    /* 根 */
+    result[r++] = '/';
+
+    while (*p) {
+        /* 把当前段写进 result 尾部 */
+        int seg_start = r;
+        while (*p && !is_sep(*p) && r < PATH_MAX_LEN - 1) {
+            result[r++] = *p++;
+        }
+        int seg_len = r - seg_start;
+
+        /* 跳过后续分隔符 */
+        while (*p && is_sep(*p)) p++;
+
+        /* 空段（多重斜杠）：跳过 */
+        if (seg_len == 0) continue;
+
+        /* "."：撤销 */
+        if (seg_len == 1 && result[seg_start] == '.') {
+            r = seg_start;
+            continue;
+        }
+
+        /* ".."：回退一级 */
+        if (seg_len == 2 &&
+            result[seg_start] == '.' && result[seg_start + 1] == '.') {
+            r = seg_start;
+            /* 跳过尾部 '/' */
+            while (r > 0 && result[r - 1] == '/') r--;
+            /* 回退到上一个 '/' 之后 */
+            while (r > 1 && result[r - 1] != '/') r--;
+            /* 保持至少有根 */
+            if (r == 0) r = 1;
+            continue;
+        }
+
+        /* 正常段：后面还有内容就补 '/' */
+        if (*p && r < PATH_MAX_LEN - 1) {
             result[r++] = '/';
-            for (int j = 0; segments[k][j] && r < PATH_MAX_LEN - 1; j++) {
-                result[r++] = segments[k][j];
-            }
         }
     }
+
+    /* 去掉尾部 '/'（除非只有根） */
+    if (r > 1 && result[r - 1] == '/') r--;
+
     result[r] = '\0';
 
-    /* 拷回 path */
-    for (int k = 0; k <= r; k++) {
-        path[k] = result[k];
-    }
+    /* 拷回 */
+    for (int i = 0; i <= r; i++) path[i] = result[i];
 }
 
 /*

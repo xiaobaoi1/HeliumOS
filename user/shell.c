@@ -78,6 +78,8 @@ static void cmd_help(void) {
     printf("  clear        clear screen\n");
     printf("  help         show this help\n");
     printf("  exit         exit shell\n");
+    printf("  touch <file> create empty file\n");
+    printf("  sink <prog>  run program -> null\n");
     printf("  <prog>       run program\n");
 }
 
@@ -178,6 +180,18 @@ static void cmd_clear(void) {
     tty_clear();
 }
 
+static void cmd_touch(int argc, char **argv) {
+    if (argc < 2) { printf("usage: touch <file>\n"); return; }
+    int fd = fs_open(argv[1], FS_O_WRONLY | FS_O_CREAT);
+    if (fd < 0) {
+        set_color(VGA_LIGHT_RED, VGA_BLACK);
+        printf("touch: %s: error %d\n", argv[1], fd);
+        set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+        return;
+    }
+    fs_close(fd);
+}
+
 /* ---------- 主循环 ---------- */
 
 void _start(int _argc, char **_argv) {
@@ -199,6 +213,7 @@ void _start(int _argc, char **_argv) {
 
         int argc = tokenize(cmd, argv, ARGV_MAX);
         if (argc == 0) continue;
+        argv[argc] = NULL;
 
         const char *c = argv[0];
 
@@ -217,10 +232,30 @@ void _start(int _argc, char **_argv) {
             cmd_cat(argc, argv);
         } else if (strcmp(c, "clear") == 0) {
             cmd_clear();
+        } else if (strcmp(c, "touch") == 0) {
+            cmd_touch(argc, argv);
+        } else if (strcmp(c, "sink") == 0) {
+            /* 运行一个程序，丢弃其 stdout */
+            struct spawn_redirect r = {
+                .in_fd = SPAWN_FD_INHERIT,
+                .out_fd = SPAWN_FD_NULL,
+                .err_fd = SPAWN_FD_INHERIT,
+            };
+            r.size = sizeof(r);
+            if (argc < 2) { printf("usage: sink <prog>\n"); }
+            else {
+                int h = spawn(argv[1], argv + 1, &r);
+                if (h >= 0) {
+                    int st; wait(h, &st, 0); process_close(h);
+                }else{
+                    set_color(VGA_LIGHT_RED, VGA_BLACK);
+                    printf("spawn '%s' failed (error %d)\n", argv[1], h);
+                    set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+                }
+            }
         } else {
             /* 其他都当作可执行文件名 */
-            argv[argc] = NULL;
-            int h = spawn(c, argv);       /* ← 现在返回 handle */
+            int h = spawn(c, argv, NULL);       /* ← 现在返回 handle */
             if (h < 0) {
                 set_color(VGA_LIGHT_RED, VGA_BLACK);
                 printf("spawn '%s' failed (error %d)\n", c, h);

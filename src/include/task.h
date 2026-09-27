@@ -20,6 +20,11 @@ struct io_slot {
     int      fd;              /* IO_SLOT_FILE 时有效；其他为 -1 */
 };
 
+/* ---------- 进程 spawn 时的重定向参数 ---------- */
+#define SPAWN_FD_INHERIT   (-1)
+#define SPAWN_FD_NULL      (-2)
+#define SPAWN_FD_TTY       (-3)
+
 /* 进程状态 */
 #define TASK_STATE_READY         0   /* 就绪 */
 #define TASK_STATE_RUNNING       1   /* 运行中 */
