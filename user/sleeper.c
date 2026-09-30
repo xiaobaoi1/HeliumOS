@@ -6,7 +6,7 @@
 #include "syscall.h"
 #include "stdio.h"
 
-int _start(int argc, char **argv) {
+int main(int argc, char **argv) {
     (void)argc; (void)argv;
     printf("[sleeper] pid=%d, entering long sleep\n", getpid());
     for (;;) {

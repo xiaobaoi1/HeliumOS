@@ -194,7 +194,7 @@ static void cmd_touch(int argc, char **argv) {
 
 /* ---------- 主循环 ---------- */
 
-void _start(int _argc, char **_argv) {
+void main(int _argc, char **_argv) {
     (void)_argc; (void)_argv;
     printf("Welcome to HeliumOS Shell!\n");
     printf("Type 'help' for commands.\n\n");
@@ -246,7 +246,10 @@ void _start(int _argc, char **_argv) {
             else {
                 int h = spawn(argv[1], argv + 1, &r);
                 if (h >= 0) {
-                    int st; wait(h, &st, 0); process_close(h);
+                    tty_set_foreground(h);
+                    int st; wait(h, &st, 0); 
+                    tty_set_foreground(0);
+                    process_close(h);
                 }else{
                     set_color(VGA_LIGHT_RED, VGA_BLACK);
                     printf("spawn '%s' failed (error %d)\n", argv[1], h);
@@ -261,8 +264,10 @@ void _start(int _argc, char **_argv) {
                 printf("spawn '%s' failed (error %d)\n", c, h);
                 set_color(VGA_LIGHT_GRAY, VGA_BLACK);
             } else {
+                tty_set_foreground(h);
                 int status;
                 wait(h, &status, 0);
+                tty_set_foreground(0);
                 process_close(h);
             }
         }

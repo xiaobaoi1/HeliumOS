@@ -71,7 +71,6 @@ struct task {
      * 不再由入口 stub 维护。
      */
     uint32_t kernel_esp;
-    uint32_t user_stack_phys;        /* 仅记录，实际释放通过 pgd 遍历 */
     uint32_t user_stack_virt;
     uint32_t entry_point;
     struct task *next;

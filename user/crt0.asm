@@ -4,7 +4,7 @@
 
 section .text
 global _start_crt0
-extern _start
+extern main
 
 _start_crt0:
     xor ebp, ebp                ; 清空帧指针，方便调试
@@ -14,7 +14,7 @@ _start_crt0:
 
     push ebx                    ; 第二参数
     push eax                    ; 第一参数
-    call _start
+    call main
 
     ; _start 返回 eax = 退出码
     mov ebx, eax

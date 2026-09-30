@@ -52,7 +52,7 @@ static void section(const char *t) {
     tty_set_color(C_GRAY, C_BLACK);
 }
 
-int _start(int argc, char **argv) {
+int main(int argc, char **argv) {
     (void)argc; (void)argv;
 
     tty_clear();

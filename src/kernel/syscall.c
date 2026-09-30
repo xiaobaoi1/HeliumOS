@@ -447,6 +447,15 @@ static int sys_kill(proc_handle_t h, int status) {
     /* 唤醒所有等它的 */
     wake_up_waiters(target);
 
+    /* 如果 target 是前台，恢复父进程 */
+    if (tty_get_foreground() == target) {
+        struct task *parent = NULL;
+        if (target->creator_pid != 0) {
+            parent = proc_find_by_pid(target->creator_pid);
+        }
+        tty_set_foreground(parent);
+    }
+
     /* 释放 self 引用：被 kill 的进程不会再走 task_exit */
     proc_unref(target);
 
@@ -477,6 +486,23 @@ static int sys_sleep(uint32_t ms) {
     block_current(TASK_STATE_SLEEPING);
     schedule();
     return 0;
+}
+
+static int sys_tty_set_foreground(proc_handle_t h) {
+    struct task *cur = get_current_task();
+    if (!cur) return EINVAL;
+
+    if (h == 0) {
+        /* 显式清空（自己拿回键盘）*/
+        tty_set_foreground(cur);
+        return OK;
+    }
+
+    struct task *target = proc_handle_deref(h, PROC_QUERY);
+    if (!target) return EINVAL;
+
+    tty_set_foreground(target);
+    return OK;
 }
 
 /* 系统调用分发器 */
@@ -667,6 +693,9 @@ void syscall_handler(struct registers *regs) {
             } else {
                 ret = tty_debug_write((const char*)arg1, arg2);
             }
+            break;
+        case SYS_TTY_SET_FOREGROUND:
+            ret = sys_tty_set_foreground((proc_handle_t)arg1);
             break;
 
 

@@ -23,5 +23,6 @@
 #define EPIPE      -17    /* 管道破裂 */
 #define ECHILD     -18    /* 没有子进程 */
 #define ENOEXEC    -19    /* 可执行格式错误 */
+#define ENAMETOOLONG -20    /* 文件名过长 */
 
 #endif

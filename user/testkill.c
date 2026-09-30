@@ -171,7 +171,7 @@ static void test_wait_timeout_then_kill(void) {
 
 /* ---------- 主入口 ---------- */
 
-void _start(int argc, char **argv) {
+void main(int argc, char **argv) {
     (void)argc; (void)argv;
     // tty_clear();
 

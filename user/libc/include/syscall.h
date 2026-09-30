@@ -22,6 +22,7 @@
 #define SYS_TTY_SAVE_CURSOR          17
 #define SYS_TTY_RESTORE_CURSOR       18
 #define SYS_TTY_DEBUG_WRITE          19
+#define SYS_TTY_SET_FOREGROUND       20
 
 /* ========== 内存管理 (21~29) ========== */
 #define SYS_BRK        21
@@ -145,6 +146,10 @@ static inline void tty_restore_cursor(void) {
 
 static inline int tty_debug_write(const void *buf, unsigned int n) {
     return __syscall(SYS_TTY_DEBUG_WRITE, (int)buf, (int)n, 0);
+}
+
+static inline int tty_set_foreground(int handle) {
+    return __syscall(SYS_TTY_SET_FOREGROUND, handle, 0, 0);
 }
 
 /* 内存 */

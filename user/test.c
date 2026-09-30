@@ -792,7 +792,7 @@ static void test_slot_null(void) {
 
 /* ---------- 主入口 ---------- */
 
-void _start(int argc, char **argv) {
+void main(int argc, char **argv) {
     (void)argc; (void)argv;
     /* 清屏，保证从干净状态开始 */
     // tty_clear();

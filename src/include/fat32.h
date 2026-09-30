@@ -92,9 +92,6 @@ struct fat32_dir {
 /* ★ 挂载一个 FAT32 分区 */
 struct fat32_volume *fat32_mount(uint32_t partition_lba);
 
-/* ★ 获取第一个挂载的卷（兼容旧代码 / 单卷系统） */
-struct fat32_volume *fat32_get_default(void);
-
 /* ★ 所有操作都带 vol 参数 */
 int fat32_open_file(struct fat32_volume *vol, const char *path,
                     struct fat32_file *file);

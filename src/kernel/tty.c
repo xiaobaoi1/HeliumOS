@@ -19,6 +19,8 @@ static int saved_cursor_x = 0;
 static int saved_cursor_y = 0;
 static int cursor_saved    = 0;
 
+static struct task *fg_task = NULL;
+
 /* ---------- 内部辅助 ---------- */
 
 static void put_cell(int x, int y, char c, uint8_t attr) {
@@ -69,6 +71,14 @@ void tty_init(void) {
     cursor_saved   = 0;
 
     kprintf("[TTY] Initialized\n");
+}
+
+void tty_set_foreground(struct task *t) {
+    fg_task = t;
+}
+
+struct task *tty_get_foreground(void) {
+    return fg_task;
 }
 
 /* ---------- 输出 ---------- */
@@ -131,6 +141,13 @@ void tty_set_color(uint8_t fg, uint8_t bg) {
 
 int tty_read(char *buf, uint32_t n) {
     if (!buf || n == 0) return EINVAL;
+
+    /* 键盘归属检查：有前台且不是自己 → 读不到 */
+    struct task *cur = get_current_task();
+    if (fg_task && cur != fg_task) {
+        return 0;
+    }
+
     uint32_t got = 0;
     while (got < n && keyboard_has_data()) {
         buf[got++] = keyboard_getchar();

@@ -57,7 +57,7 @@ fd_t fs_open(const char *path, int flags) {
             } else {
                 r = fat32_open_file(fvol, rp.path, &h->u.fat32_file);
             }
-            if (r != OK) { h->used = 0; return FD_INVALID; }
+            if (r != OK) { h->used = 0; return r; }
             return fd;
         }
         default:

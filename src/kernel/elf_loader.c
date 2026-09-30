@@ -36,6 +36,20 @@ uint32_t load_elf_from_disk(struct fat32_volume *vol, const char *path,
         if (ret != (int)sizeof(ph)) return 0;
 
         if (ph.type == PT_LOAD) {
+            /* filesz 不能超过 memsz */
+            if (ph.filesz > ph.memsz) {
+                kprintf("[ELF] filesz > memsz\n");
+                return 0;
+            }
+            /* vaddr + memsz 不能溢出，且不能超出用户空间 */
+            if (ph.vaddr + ph.memsz < ph.vaddr) {
+                kprintf("[ELF] vaddr + memsz overflow\n");
+                return 0;
+            }
+            if (ph.vaddr + ph.memsz > USER_SPACE_END) {
+                kprintf("[ELF] segment beyond user space\n");
+                return 0;
+            }
             if (ph.vaddr < USER_SPACE_START) continue;
 
             #ifdef DEBUG_ELF

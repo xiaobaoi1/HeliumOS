@@ -6,6 +6,7 @@
 #include <stddef.h>
 #include <isr.h>
 #include <errno.h>
+#include <tty.h>
 
 extern void enter_user_mode(void);
 
@@ -108,6 +109,10 @@ void unblock_task(struct task *t, uint32_t new_state) {
     enqueue_task(&ready_queue_head, &ready_queue_tail, t);
 }
 
+/* 唤醒所有等待 target 退出的进程。
+ * wait_target == NULL 表示"等任意子进程退出"（waitpid(-1) 风格），
+ * 具体指针表示"等特定子进程"。
+ * 两种情况在同一个字段里区分——NULL 是通配，非 NULL 是精确匹配。 */
 void wake_up_waiters(struct task *target) {
     if (!target) return;
     for (struct task *t = blocked_list_head; t; ) {
@@ -255,7 +260,6 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd,
     task->stderr_slot.fd   = -1;
 
     task->kernel_stack_phys = kernel_stack;
-    task->user_stack_phys = stack_high;
     task->user_stack_virt = 0x7FFFE000;
 
     /* 3. 映射用户栈 */
@@ -466,6 +470,15 @@ void task_exit(struct task *task, int status) {
     /* 唤醒所有等它的进程 */
     wake_up_waiters(task);
 
+    /* 如果自己是键盘前台，恢复父进程为前台 */
+    if (tty_get_foreground() == task) {
+        struct task *parent = NULL;
+        if (task->creator_pid != 0) {
+            parent = proc_find_by_pid(task->creator_pid);
+        }
+        tty_set_foreground(parent);   /* 可能为 NULL */
+    }
+    
     /* 释放 self 引用。如果 refcount 归零且 t == current，
      * proc_unref 会把 task 挂入 graveyard，由 irq_handler 回收。 */
     proc_unref(task);
