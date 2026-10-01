@@ -501,6 +501,13 @@ void task_terminate(struct task *t, int status) {
     t->zombie = 1;
     t->state = TASK_STATE_ZOMBIE;
 
+    /* 释放持有的所有句柄——和 task_exit 一致。
+     * 不放这里会泄漏：pipe 计数不减、proc_handles 里的子进程 refcount 不减。 */
+    fs_release_all(t);
+    dev_release_all(t);
+    ipc_release_all(t);
+    proc_release_all_handles(t);
+
     /* 从任何队列移除 */
     remove_task_from_queue(&ready_queue_head, &ready_queue_tail, t);
     remove_task_from_queue(&blocked_list_head, &blocked_list_tail, t);

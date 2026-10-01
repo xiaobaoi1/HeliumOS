@@ -10,6 +10,7 @@
 #include <string.h>
 #include <errno.h>
 #include <stddef.h>
+#include <uaccess.h>
 
 /* ---------- 用户态 sigaction 镜像 ---------- */
 struct user_sigaction {
@@ -37,56 +38,6 @@ struct sigframe {
     uint32_t saved_user_ss;
     uint32_t saved_mask;
 } __attribute__((packed));
-
-/* ---------- 用户内存检查 + 拷贝 ---------- */
-static int user_range_mapped(uint32_t *pgd, uint32_t addr, uint32_t size) {
-    if (size == 0) return 1;
-    if (addr < USER_SPACE_START) return 0;
-    uint64_t end = (uint64_t)addr + size;
-    if (end > (uint64_t)USER_SPACE_END + 1) return 0;
-    uint32_t first = addr & ~0xFFF;
-    uint32_t last  = ((uint32_t)(end - 1)) & ~0xFFF;
-    for (uint32_t p = first; p <= last; p += 4096) {
-        if (!vmm_get_phys(pgd, p)) return 0;
-    }
-    return 1;
-}
-
-static int copy_to_user(uint32_t *pgd, uint32_t u_addr,
-                        const void *src, uint32_t n) {
-    if (!user_range_mapped(pgd, u_addr, n)) return -1;
-    const uint8_t *s = (const uint8_t*)src;
-    while (n > 0) {
-        uint32_t phys = vmm_get_phys(pgd, u_addr & ~0xFFF);
-        if (!phys) return -1;
-        uint32_t off = u_addr & 0xFFF;
-        uint32_t chunk = 0x1000 - off;
-        if (chunk > n) chunk = n;
-        memcpy((void*)(phys + off), s, chunk);
-        u_addr += chunk;
-        s += chunk;
-        n -= chunk;
-    }
-    return 0;
-}
-
-static int copy_from_user(uint32_t *pgd, void *dst,
-                          uint32_t u_addr, uint32_t n) {
-    if (!user_range_mapped(pgd, u_addr, n)) return -1;
-    uint8_t *d = (uint8_t*)dst;
-    while (n > 0) {
-        uint32_t phys = vmm_get_phys(pgd, u_addr & ~0xFFF);
-        if (!phys) return -1;
-        uint32_t off = u_addr & 0xFFF;
-        uint32_t chunk = 0x1000 - off;
-        if (chunk > n) chunk = n;
-        memcpy(d, (void*)(phys + off), chunk);
-        u_addr += chunk;
-        d += chunk;
-        n -= chunk;
-    }
-    return 0;
-}
 
 /* ---------- 默认行为表 ---------- */
 static int default_is_ignore(int sig) {
@@ -161,7 +112,7 @@ static void deliver_user_handler(struct registers *regs, struct task *cur,
     uint32_t frame_size = sizeof(struct sigframe);   /* 60 */
     uint32_t new_esp = (old_esp - frame_size) & ~3u;
 
-    if (!user_range_mapped(cur->pgd, new_esp, frame_size)) {
+    if (check_user_range(new_esp, frame_size) < 0) {
         kprintf("[SIG] pid=%d handler stack overflow\n", cur->pid);
         task_terminate(cur, 128 + SIGSEGV);
         proc_unref(cur);
@@ -187,7 +138,7 @@ static void deliver_user_handler(struct registers *regs, struct task *cur,
         .saved_mask     = cur->blocked_signals,
     };
 
-    if (copy_to_user(cur->pgd, new_esp, &f, sizeof(f)) < 0) {
+    if (copy_to_user(new_esp, &f, sizeof(f)) < 0) {
         kprintf("[SIG] pid=%d cannot write sigframe\n", cur->pid);
         task_terminate(cur, 128 + SIGSEGV);
         proc_unref(cur);
@@ -209,8 +160,8 @@ void sys_sigreturn(struct registers *regs) {
     uint32_t frame_esp = regs->user_esp;
     struct sigframe f;
 
-    if (!user_range_mapped(cur->pgd, frame_esp, sizeof(f)) ||
-        copy_from_user(cur->pgd, &f, frame_esp, sizeof(f)) < 0) {
+    if (check_user_range(frame_esp, sizeof(f)) < 0 ||
+        copy_from_user(&f, frame_esp, sizeof(f)) < 0) {
         kprintf("[SIG] pid=%d bad sigreturn frame\n", cur->pid);
         task_terminate(cur, 128 + SIGSEGV);
         proc_unref(cur);
@@ -251,8 +202,7 @@ int sys_sigaction(int sig, void *new_user, void *old_user) {
             .sa_flags    = cur->sig_actions[sig].flags,
             .sa_restorer = cur->sig_actions[sig].restorer,
         };
-        if (copy_to_user(cur->pgd, (uint32_t)old_user,
-                         &old, sizeof(old)) < 0) {
+        if (copy_to_user((uint32_t)old_user, &old, sizeof(old)) < 0) {
             return EFAULT;
         }
     }
@@ -260,8 +210,7 @@ int sys_sigaction(int sig, void *new_user, void *old_user) {
     /* 写新值 */
     if (new_user) {
         struct user_sigaction n;
-        if (copy_from_user(cur->pgd, &n, (uint32_t)new_user,
-                           sizeof(n)) < 0) {
+        if (copy_from_user(&n, (uint32_t)new_user, sizeof(n)) < 0) {
             return EFAULT;
         }
         /* handler 校验：DFL/IGN 或用户空间地址 */
@@ -284,8 +233,7 @@ int sys_sigprocmask(int how, uint32_t *set_user, uint32_t *old_user) {
 
     if (old_user) {
         uint32_t old = cur->blocked_signals;
-        if (copy_to_user(cur->pgd, (uint32_t)old_user,
-                         &old, sizeof(old)) < 0) {
+        if (copy_to_user((uint32_t)old_user, &old, sizeof(old)) < 0) {
             return EFAULT;
         }
     }
@@ -293,8 +241,7 @@ int sys_sigprocmask(int how, uint32_t *set_user, uint32_t *old_user) {
     if (!set_user) return OK;
 
     uint32_t set;
-    if (copy_from_user(cur->pgd, &set, (uint32_t)set_user,
-                       sizeof(set)) < 0) {
+    if (copy_from_user(&set, (uint32_t)set_user, sizeof(set)) < 0) {
         return EFAULT;
     }
 

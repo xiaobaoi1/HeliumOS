@@ -196,6 +196,58 @@ static void cmd_touch(int argc, char **argv) {
     fs_close(fd);
 }
 
+static int run_one(char *cmd) {
+    char *argv[ARGV_MAX];
+    int argc = tokenize(cmd, argv, ARGV_MAX);
+    if (argc == 0) return 0;
+    argv[argc] = NULL;
+
+    struct spawn_params p = {
+        .size = sizeof(p),
+        .in_fd = SPAWN_FD_INHERIT,
+        .out_fd = SPAWN_FD_INHERIT,
+        .err_fd = SPAWN_FD_INHERIT,
+        .in_pipe = -1,
+        .out_pipe = -1,
+        .err_pipe = -1,
+        .flags = 0,
+        .envp = (uint32_t)environ,
+    };
+
+    int h = spawn(argv[0], argv, &p);
+    if (h < 0) return h;
+
+    tty_set_foreground(h);
+    int status = 0;
+    wait(h, &status, 0);
+    tty_set_foreground(-1);
+    process_close(h);
+    return status;
+}
+
+/* 带 pipe 的单条命令 */
+static int run_one_with_pipes(char *cmd, int in_pipe, int out_pipe) {
+    char *argv[ARGV_MAX];
+    int argc = tokenize(cmd, argv, ARGV_MAX);
+    if (argc == 0) return 0;
+    argv[argc] = NULL;
+
+    struct spawn_params p = {
+        .size = sizeof(p),
+        .in_fd = SPAWN_FD_INHERIT,
+        .out_fd = SPAWN_FD_INHERIT,
+        .err_fd = SPAWN_FD_INHERIT,
+        .in_pipe = in_pipe,
+        .out_pipe = out_pipe,
+        .err_pipe = -1,
+        .flags = 0,
+        .envp = (uint32_t)environ,
+    };
+
+    int h = spawn(argv[0], argv, &p);
+    return h;   /* 返回 handle，调用者负责 wait/close */
+}
+
 /* ---------- 主循环 ---------- */
 
 void main(int _argc, char **_argv) {
@@ -236,8 +288,8 @@ void main(int _argc, char **_argv) {
             cmd_cd(argc, argv);
         } else if (strcmp(c, "pwd") == 0) {
             cmd_pwd();
-        } else if (strcmp(c, "cat") == 0) {
-            cmd_cat(argc, argv);
+        // } else if (strcmp(c, "cat") == 0) {
+        //     cmd_cat(argc, argv);
         } else if (strcmp(c, "clear") == 0) {
             cmd_clear();
         } else if (strcmp(c, "touch") == 0) {
@@ -266,32 +318,87 @@ void main(int _argc, char **_argv) {
                     set_color(VGA_LIGHT_GRAY, VGA_BLACK);
                 }
             }
-        } else {
-            /* 其他都当作可执行文件名 */
-            struct spawn_params p = {
-                .size   = sizeof(p),
-                .in_fd  = SPAWN_FD_INHERIT,
-                .out_fd = SPAWN_FD_INHERIT,
-                .err_fd = SPAWN_FD_INHERIT,
-                .flags  = 0,
-                .envp   = (unsigned int)environ,
-            };
-            int h = spawn(c, argv, &p);
-            if (h < 0) {
+                } else {
+            /* 在 argv 里找 | */
+            int pipe_idx = -1;
+            for (int i = 0; i < argc; i++) {
+                if (strcmp(argv[i], "|") == 0) {
+                    pipe_idx = i;
+                    break;
+                }
+            }
+
+            if (pipe_idx > 0 && pipe_idx < argc - 1) {
+                /* 有管道 */
+                int fds[2];
+                if (pipe(fds) < 0) {
+                    set_color(VGA_LIGHT_RED, VGA_BLACK);
+                    printf("pipe failed\n");
+                    set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+                } else {
+                    /* 左段 */
+                    argv[pipe_idx] = NULL;   /* 左段以 NULL 结尾 */
+                    struct spawn_params p1 = {
+                        .size = sizeof(p1),
+                        .in_fd = SPAWN_FD_INHERIT,
+                        .out_fd = SPAWN_FD_INHERIT,
+                        .err_fd = SPAWN_FD_INHERIT,
+                        .in_pipe = -1,
+                        .out_pipe = fds[1],
+                        .err_pipe = -1,
+                        .flags = 0,
+                        .envp = (uint32_t)environ,
+                    };
+                    int h1 = spawn(argv[0], &argv[0], &p1);
+
+                    /* 右段 */
+                    struct spawn_params p2 = {
+                        .size = sizeof(p2),
+                        .in_fd = SPAWN_FD_INHERIT,
+                        .out_fd = SPAWN_FD_INHERIT,
+                        .err_fd = SPAWN_FD_INHERIT,
+                        .in_pipe = fds[0],
+                        .out_pipe = -1,
+                        .err_pipe = -1,
+                        .flags = 0,
+                        .envp = (uint32_t)environ,
+                    };
+                    int h2 = spawn(argv[pipe_idx + 1], &argv[pipe_idx + 1], &p2);
+
+                    /* 关闭 shell 自己的两端 */
+                    ipc_close(fds[0]);
+                    ipc_close(fds[1]);
+
+                    if (h1 >= 0) {
+                        int st1; wait(h1, &st1, 0); process_close(h1);
+                    }
+                    if (h2 >= 0) {
+                        int st2; wait(h2, &st2, 0); process_close(h2);
+                    }
+                }
+            } else if (pipe_idx >= 0) {
                 set_color(VGA_LIGHT_RED, VGA_BLACK);
-                printf("spawn '%s' failed (error %d)\n", c, h);
+                printf("syntax error: empty pipe\n");
                 set_color(VGA_LIGHT_GRAY, VGA_BLACK);
             } else {
-                tty_set_foreground(h);
-                int status;
-                wait(h, &status, 0);
-                tty_set_foreground(-1);
-                if (status != 0) {
+                /* 普通 spawn */
+                int h = spawn(c, argv, NULL);
+                if (h < 0) {
                     set_color(VGA_LIGHT_RED, VGA_BLACK);
-                    printf("[shell] child exited with status %d\n", status);
+                    printf("spawn '%s' failed (error %d)\n", c, h);
                     set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+                } else {
+                    tty_set_foreground(h);
+                    int status = 0;
+                    wait(h, &status, 0);
+                    tty_set_foreground(-1);
+                    if (status != 0) {
+                        set_color(VGA_LIGHT_RED, VGA_BLACK);
+                        printf("[shell] child exited with status %d\n", status);
+                        set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+                    }
+                    process_close(h);
                 }
-                process_close(h);
             }
         }
     }

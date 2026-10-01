@@ -53,6 +53,12 @@
 #define SYS_SIGRETURN     72
 #define SYS_SIGPROCMASK   73
 
+/* ========== IPC (81~89) ========== */
+#define SYS_PIPE         81
+#define SYS_PIPE_READ    82
+#define SYS_PIPE_WRITE   83
+#define SYS_IPC_CLOSE    84
+
 /* 传给 spawn 的重定向描述。
  * size 字段必须填为 sizeof(struct spawn_params)。 */
 struct spawn_params {
@@ -60,13 +66,19 @@ struct spawn_params {
     int          in_fd;
     int          out_fd;
     int          err_fd;
+    int          in_pipe;
+    int          out_pipe;
+    int          err_pipe;
     unsigned int flags;
-    unsigned int envp;      /* char *const *，0 = 空环境 */
+    unsigned int envp;
 };
 
 #define SPAWN_FD_INHERIT   (-1)
 #define SPAWN_FD_NULL      (-2)
 #define SPAWN_FD_TTY       (-3)
+
+#define IPC_PIPE_READ   1
+#define IPC_PIPE_WRITE  2
 
 /* ---------- 原始系统调用（内联汇编） ---------- */
 static inline int __syscall(int num, int a, int b, int c) {
@@ -112,6 +124,19 @@ static inline int process_close(int handle) {
 
 static inline void sleep_ms(int ms) {
     __syscall(SYS_SLEEP, ms, 0, 0);
+}
+
+static inline int pipe(int fds[2]) {
+    return __syscall(SYS_PIPE, (int)fds, 0, 0);
+}
+static inline int pipe_read(int h, void *buf, unsigned int n) {
+    return __syscall(SYS_PIPE_READ, h, (int)buf, (int)n);
+}
+static inline int pipe_write(int h, const void *buf, unsigned int n) {
+    return __syscall(SYS_PIPE_WRITE, h, (int)buf, (int)n);
+}
+static inline int ipc_close(int h) {
+    return __syscall(SYS_IPC_CLOSE, h, 0, 0);
 }
 
 /* 控制台 I/O */

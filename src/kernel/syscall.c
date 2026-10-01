@@ -16,6 +16,7 @@
 #include <proc.h>
 #include <signal.h>
 #include <ipc.h>
+#include <uaccess.h>
 
 
 /* 用户态结构体镜像。字段顺序和 user/libc/include/syscall.h 保持一致。
@@ -34,81 +35,6 @@ struct spawn_params {
 
 #define SPAWN_FD_INHERIT   (-1)   /* 不重定向 */
 #define SPAWN_FD_NULL      (-2)   /* 丢弃 */
-
-/* ---------- 用户指针校验辅助 ---------- */
-
-/* 检查用户地址范围 [addr, addr+size) 是否完全在用户空间且已映射
- * 返回 0 成功，-1 失败
- */
-static int check_user_range(uint32_t addr, uint32_t size) {
-    if (size == 0) return 0;
-    if (addr < USER_SPACE_START) return -1;
-    uint64_t end = (uint64_t)addr + size;
-    if (end > (uint64_t)USER_SPACE_END + 1) return -1;
-
-    /* 逐页检查映射。前提：调用者是 syscall 分发器，current_task 一定存在。 */
-    struct task *cur = get_current_task();
-    if (!cur || !cur->pgd) return -1;
-
-    uint32_t first_page = addr & ~0xFFF;
-    uint32_t last_page  = ((uint32_t)(end - 1)) & ~0xFFF;
-
-    for (uint32_t p = first_page; p <= last_page; p += 4096) {
-        if (!vmm_get_phys(cur->pgd, p)) return -1;
-    }
-    return 0;
-}
-
-/* 从用户空间拷贝字符串到内核缓冲区
- * 返回 >= 0 成功（拷贝的字节数含 '\0'），< 0 失败
- */
-static int strncpy_from_user(char *dest, const char *src, size_t max_len) {
-    if (!src || !dest || max_len == 0) return -1;
-    if ((uint32_t)src < USER_SPACE_START) return -1;
-
-    struct task *cur = get_current_task();
-    if (!cur || !cur->pgd) return -1;
-
-    uint32_t u_src = (uint32_t)src;
-    uint32_t cur_page = u_src & ~0xFFF;
-    if (!vmm_get_phys(cur->pgd, cur_page)) return -1;
-
-    for (size_t i = 0; i < max_len; i++) {
-        uint32_t addr = u_src + i;
-        if (addr < USER_SPACE_START || addr > USER_SPACE_END) {
-            return -1;
-        }
-
-        /* 跨页时重新检查映射 */
-        uint32_t page = addr & ~0xFFF;
-        if (page != cur_page) {
-            if (!vmm_get_phys(cur->pgd, page)) return -1;
-            cur_page = page;
-        }
-
-        char c = src[i];
-        dest[i] = c;
-        if (c == '\0') return (int)(i + 1);
-    }
-    return -1;
-}
-
-/* 从用户空间拷贝 n 字节到内核缓冲。
- * 用户指针须已通过 check_user_range。 */
-static int memcpy_from_user(void *dest, const void *src, size_t n) {
-    if (n == 0) return 0;
-    if (!dest || !src) return -1;
-    if (check_user_range((uint32_t)src, n) < 0) return -1;
-    memcpy(dest, src, n);
-    return 0;
-}
-
-/* 从用户空间拷贝 n 字节（不做映射检查，由调用者保证）。 */
-static int copy_from_user(void *dst, uint32_t u_addr, uint32_t n) {
-    if (check_user_range(u_addr, n) < 0) return -1;
-    memcpy(dst, (void*)u_addr, n);
-    return 0;
-}
 
 static int sys_write(int fd, const char *buf, uint32_t count) {
     if (fd != 1) return EINVAL;
@@ -289,59 +215,53 @@ static int sys_brk(uint32_t new_brk) {
     struct task *cur = get_current_task();
     if (!cur) return EINVAL;
 
-    // 如果 new_brk == 0，仅返回当前 brk（查询用途）
     if (new_brk == 0) return cur->heap_brk;
-
-    // 边界检查
-    if (new_brk < cur->heap_base || new_brk > cur->heap_limit) {
-        return EINVAL;
-    }
+    if (new_brk < cur->heap_base || new_brk > cur->heap_limit) return EINVAL;
 
     uint32_t old_brk = cur->heap_brk;
-    uint32_t start = (old_brk < new_brk) ? old_brk : new_brk;
-    uint32_t end   = (old_brk < new_brk) ? new_brk : old_brk;
 
-    // 按页对齐操作（4KB 对齐）
-    uint32_t start_page = start & ~0xFFF;
-    uint32_t end_page = (end + 0xFFF) & ~0xFFF;
+    if (new_brk > old_brk) {
+        /* 扩展：从 old_brk 所在页向上扫到 new_brk。
+         * 已映射的页跳过——否则会重映射同一虚拟页，丢掉旧物理页。 */
+        uint32_t first_new = 0;
+        for (uint32_t page = old_brk & ~0xFFF; page < new_brk; page += 0x1000) {
+            if (vmm_get_phys(cur->pgd, page)) continue;
 
-    for (uint32_t addr = start_page; addr < end_page; addr += 4096) {
-            if (new_brk > old_brk) {
-            /* 扩展：逐页分配映射；失败时回滚已映射的部分 */
-            uint32_t next_unmapped = start_page;
-            for (uint32_t addr = start_page; addr < end_page; addr += 4096) {
-                uint32_t phys = pmm_alloc_page();
-                if (!phys) {
-                    /* 回滚：释放本次已映射的页 */
-                    for (uint32_t a = start_page; a < next_unmapped; a += 4096) {
+            uint32_t phys = pmm_alloc_page();
+            if (!phys) {
+                /* 回滚本次新映射的页 */
+                if (first_new) {
+                    for (uint32_t a = first_new; a < page; a += 0x1000) {
                         uint32_t p = vmm_get_phys(cur->pgd, a);
                         if (p) {
                             vmm_unmap_user_page(cur->pgd, a);
                             pmm_free_page(p);
                         }
                     }
-                    return ENOMEM;
                 }
-                vmm_map_user_page(cur->pgd, addr, phys, PTE_WRITE | PTE_USER);
-                next_unmapped = addr + 4096;
+                return ENOMEM;
             }
-        } else {
-            /* 收缩：逐页解映射并释放 */
-            for (uint32_t addr = start_page; addr < end_page; addr += 4096) {
-                uint32_t phys = vmm_get_phys(cur->pgd, addr);
-                if (phys) {
-                    vmm_unmap_user_page(cur->pgd, addr);
-                    pmm_free_page(phys);
-                }
+            vmm_map_user_page(cur->pgd, page, phys, PTE_WRITE | PTE_USER);
+            if (!first_new) first_new = page;
+        }
+    } else if (new_brk < old_brk) {
+        /* 收缩：只释放完整落在 [new_brk, old_brk) 内的页。
+         * 非对齐的 new_brk 不会 unmap 含它的活跃页——那页里有 [< new_brk] 的部分还在用。
+         * 非对齐的 old_brk 不会被越过——只释放到 old_brk 所在页之前。 */
+        for (uint32_t page = (new_brk + 0xFFF) & ~0xFFF;
+             page + 0x1000 <= old_brk;
+             page += 0x1000) {
+            uint32_t phys = vmm_get_phys(cur->pgd, page);
+            if (phys) {
+                vmm_unmap_user_page(cur->pgd, page);
+                pmm_free_page(phys);
             }
         }
-
-        cur->heap_brk = new_brk;
-        return 0;
     }
+    /* new_brk == old_brk：无操作 */
 
     cur->heap_brk = new_brk;
-    return 0; // 成功
+    return 0;
 }
 
 static int sys_spawn(const char *path, char *const argv[], void *params_user) {
@@ -366,11 +286,11 @@ static int sys_spawn(const char *path, char *const argv[], void *params_user) {
         if (check_user_range((uint32_t)params_user, sizeof(uint32_t)) < 0)
             return EFAULT;
         uint32_t user_size;
-        if (memcpy_from_user(&user_size, params_user, sizeof(uint32_t)) < 0)
+        if (copy_from_user(&user_size, (uint32_t)params_user, sizeof(uint32_t)) < 0)
             return EFAULT;
         if (user_size < sizeof(uint32_t)) return EINVAL;
         uint32_t to_copy = user_size < sizeof(p) ? user_size : sizeof(p);
-        if (memcpy_from_user(&p, params_user, to_copy) < 0)
+        if (copy_from_user(&p, (uint32_t)params_user, to_copy) < 0)
             return EFAULT;
         redir_in  = p.in_fd;
         redir_out = p.out_fd;

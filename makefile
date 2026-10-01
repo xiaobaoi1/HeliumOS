@@ -57,6 +57,8 @@ OBJS = $(BUILD_DIR)/start.o \
 	   $(BUILD_DIR)/scheduler.o \
 	   $(BUILD_DIR)/keyboard.o \
 	   $(BUILD_DIR)/device.o \
+	   $(BUILD_DIR)/ipc.o \
+	   $(BUILD_DIR)/uaccess.o 
 
 	   
 
@@ -110,7 +112,7 @@ $(ISO): $(KERNEL_ELF)
 	@echo "ISO 镜像生成成功: $(ISO)"
 
 # ==================== 硬盘镜像（用于测试文件系统写入） ====================
-$(DISK_IMG): $(KERNEL_ELF) $(BUILD_DIR)/SHELL.ELF $(BUILD_DIR)/IDLE.ELF $(BUILD_DIR)/TEST.ELF $(BUILD_DIR)/TESTKILL.ELF $(BUILD_DIR)/SLEEPER.ELF $(BUILD_DIR)/ARGTEST.ELF $(BUILD_DIR)/TESTWRITE.ELF $(BUILD_DIR)/TESTFAULT.ELF
+$(DISK_IMG): $(KERNEL_ELF) $(BUILD_DIR)/SHELL.ELF $(BUILD_DIR)/IDLE.ELF $(BUILD_DIR)/TEST.ELF $(BUILD_DIR)/TESTKILL.ELF $(BUILD_DIR)/SLEEPER.ELF $(BUILD_DIR)/ARGTEST.ELF $(BUILD_DIR)/TESTWRITE.ELF $(BUILD_DIR)/TESTFAULT.ELF $(BUILD_DIR)/TESTENV.ELF $(BUILD_DIR)/COUNT.ELF $(BUILD_DIR)/CAT.ELF
 	@echo "🛠️  正在创建 FAT32 硬盘镜像 (需要 sudo 权限)..."
 	dd if=/dev/zero of=$(DISK_IMG) bs=1M count=64 status=none
 	(echo o; echo n; echo p; echo 1; echo 2048; echo; echo t; echo c; echo a; echo 1; echo w) | fdisk $(DISK_IMG) > /dev/null 2>&1
@@ -131,6 +133,9 @@ $(DISK_IMG): $(KERNEL_ELF) $(BUILD_DIR)/SHELL.ELF $(BUILD_DIR)/IDLE.ELF $(BUILD_
 	sudo cp $(BUILD_DIR)/ARGTEST.ELF /mnt/build/ARGTEST.ELF; \
 	sudo cp $(BUILD_DIR)/TESTWRITE.ELF /mnt/build/TESTWRITE.ELF; \
 	sudo cp $(BUILD_DIR)/TESTFAULT.ELF /mnt/build/TESTFAULT.ELF; \
+	sudo cp $(BUILD_DIR)/TESTENV.ELF /mnt/build/TESTENV.ELF; \
+	sudo cp $(BUILD_DIR)/COUNT.ELF /mnt/build/COUNT.ELF; \
+	sudo cp $(BUILD_DIR)/CAT.ELF /mnt/build/CAT.ELF; \
 
 	sudo cp $(SRC_DIR)/kernel/kmain.c /mnt/build/kmain.c; \
 	sudo cp user/idle.c /mnt/build/idle.c; \
@@ -183,7 +188,8 @@ LIBC_OBJS = $(BUILD_DIR)/libc_string.o \
 			$(BUILD_DIR)/libc_printf.o \
 			$(BUILD_DIR)/libc_malloc.o \
 			$(BUILD_DIR)/libc_signal.o \
-            $(BUILD_DIR)/libc_sigreturn.o
+            $(BUILD_DIR)/libc_sigreturn.o \
+			$(BUILD_DIR)/libc_env.o
 
 $(BUILD_DIR)/libc_string.o: user/libc/string.c
 	$(CC) $(USER_CFLAGS) -c $< -o $@
@@ -204,6 +210,9 @@ $(BUILD_DIR)/libc_signal.o: user/libc/signal.c
 $(BUILD_DIR)/libc_sigreturn.o: user/libc/sigreturn.asm
 	@mkdir -p $(BUILD_DIR)
 	$(ASM) $(ASMFLAGS) $< -o $@
+
+$(BUILD_DIR)/libc_env.o: user/libc/env.c
+	$(CC) $(USER_CFLAGS) -c $< -o $@
 
 
 # shell
@@ -263,6 +272,26 @@ $(BUILD_DIR)/test_fault.o: user/test_fault.c
 $(BUILD_DIR)/TESTFAULT.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/test_fault.o $(LIBC_OBJS) user/linker.ld
 	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/test_fault.o $(LIBC_OBJS)
 
+# test_env
+$(BUILD_DIR)/test_env.o: user/test_env.c
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/TESTENV.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/test_env.o $(LIBC_OBJS) user/linker.ld
+	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/test_env.o $(LIBC_OBJS)
+
+# count
+$(BUILD_DIR)/count.o: user/count.c
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/COUNT.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/count.o $(LIBC_OBJS) user/linker.ld
+	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/count.o $(LIBC_OBJS)
+
+# cat
+$(BUILD_DIR)/cat.o: user/cat.c
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/CAT.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/cat.o $(LIBC_OBJS) user/linker.ld
+	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/cat.o $(LIBC_OBJS)
 
 
 

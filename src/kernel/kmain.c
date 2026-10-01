@@ -53,7 +53,8 @@ static struct task *create_task_from_elf(struct fat32_volume *vol,
                                     envc, envp,
                                     SPAWN_FD_INHERIT,
                                     SPAWN_FD_INHERIT,
-                                    SPAWN_FD_INHERIT);
+                                    SPAWN_FD_INHERIT,
+                                    -1, -1, -1);
 
     if (!task) {
         kprintf("[KERNEL] Failed to create task for %s\n", path);

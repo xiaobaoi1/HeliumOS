@@ -6,6 +6,7 @@
 #include <string.h>
 #include <errno.h>
 #include <stddef.h>
+#include <uaccess.h>
 
 /* ---------- 全局 pipe 池 ---------- */
 static struct pipe g_pipes[IPC_MAX_PIPES];

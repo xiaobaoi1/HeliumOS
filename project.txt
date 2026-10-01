@@ -1,3 +1,52 @@
+==================== ./user/cat.c ====================
+#include "syscall.h"
+#include "stdio.h"
+#include "string.h"
+#include "signal.h"
+#include "stdlib.h"
+
+#define VGA_BLACK        0
+#define VGA_LIGHT_GRAY   7
+#define VGA_LIGHT_BLUE   9
+#define VGA_LIGHT_GREEN  10
+#define VGA_LIGHT_RED    12
+
+#define CMD_MAX          128
+#define ARGV_MAX         8
+#define CAT_BUF_SIZE     512
+
+static void set_color(int fg, int bg) {
+    tty_set_color(fg, bg);
+}
+
+int main(int argc, char **argv){
+    (void)argc; (void)argv;
+    if (argc < 2) {
+        printf("usage: cat <file>\n");
+        return;
+    }
+
+    int fd = fs_open(argv[1], FS_O_RDONLY);
+    if (fd < 0) {
+        set_color(VGA_LIGHT_RED, VGA_BLACK);
+        printf("cat: %s: error %d\n", argv[1], fd);
+        set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+        return;
+    }
+
+    char buf[CAT_BUF_SIZE];
+    int n;
+    while ((n = fs_read(fd, buf, sizeof(buf))) > 0) {
+        write(1, buf, n);
+    }
+    fs_close(fd);
+
+    if (n < 0) {
+        set_color(VGA_LIGHT_RED, VGA_BLACK);
+        printf("\ncat: read error %d\n", n);
+        set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+    }
+}
 ==================== ./user/argtest.c ====================
 /* user/argtest.c
  * 打印自己的 argc/argv，用于验证 spawn 传参。
@@ -11,6 +60,22 @@ int main(int argc, char **argv) {
         printf("  argv[%d] = \"%s\"\n", i, argv[i]);
     }
     return argc;
+}
+==================== ./user/count.c ====================
+// user/count.c
+#include "syscall.h"
+#include "stdio.h"
+
+int main(int argc, char **argv) {
+    (void)argc; (void)argv;
+    char buf[256];
+    int total = 0;
+    int n;
+    while ((n = read(0, buf, sizeof(buf))) > 0) {
+        total += n;
+    }
+    printf("count: %d bytes\n", total);
+    return 0;
 }
 ==================== ./user/test_write.c ====================
 /* user/test_write.c
@@ -190,6 +255,124 @@ int main(int argc, char **argv) {
     }
     return 0;
 }
+==================== ./user/libc/env.c ====================
+#include <stddef.h>
+#include <string.h>
+#include <stdlib.h>
+
+char **environ = NULL;
+
+static char **_heap_env = NULL;
+static int    _heap_cap = 0;
+
+/* crt0 调用：把 envp 拷到堆上 */
+void __libc_init_environ(char **envp) {
+    int n = 0;
+    if (envp) {
+        while (envp[n]) n++;
+    }
+    int cap = n + 16;
+    _heap_env = (char**)malloc(cap * sizeof(char*));
+    if (!_heap_env) {
+        environ = envp;
+        return;
+    }
+    for (int i = 0; i < n; i++) {
+        int len = strlen(envp[i]) + 1;
+        char *copy = (char*)malloc(len);
+        if (copy) {
+            memcpy(copy, envp[i], len);
+            _heap_env[i] = copy;
+        } else {
+            _heap_env[i] = NULL;
+        }
+    }
+    _heap_env[n] = NULL;
+    _heap_cap = cap;
+    environ = _heap_env;
+}
+
+/* 内部：找 name 对应项的下标；未找到返回 -1 */
+static int find_env(const char *name) {
+    if (!name || !environ) return -1;
+    int nlen = strlen(name);
+    for (int i = 0; environ[i]; i++) {
+        const char *e = environ[i];
+        int j = 0;
+        while (j < nlen && e[j] && e[j] == name[j]) j++;
+        if (j == nlen && e[j] == '=') return i;
+    }
+    return -1;
+}
+
+char *getenv(const char *name) {
+    int i = find_env(name);
+    if (i < 0) return NULL;
+    int nlen = strlen(name);
+    return environ[i] + nlen + 1;
+}
+
+int setenv(const char *name, const char *value, int overwrite) {
+    if (!name || !value || !*name) return -1;
+    if (strchr(name, '=')) return -1;
+    if (environ != _heap_env) return -1;
+
+    int nlen = strlen(name);
+    int vlen = strlen(value);
+    int total = nlen + 1 + vlen + 1;
+
+    int i = find_env(name);
+    if (i >= 0) {
+        if (!overwrite) return 0;
+        char *new_e = (char*)malloc(total);
+        if (!new_e) return -1;
+        memcpy(new_e, name, nlen);
+        new_e[nlen] = '=';
+        memcpy(new_e + nlen + 1, value, vlen);
+        new_e[total - 1] = '\0';
+        free(environ[i]);
+        environ[i] = new_e;
+        return 0;
+    }
+
+    /* 追加 */
+    int n = 0;
+    while (environ[n]) n++;
+    if (n + 1 >= _heap_cap) {
+        int new_cap = _heap_cap * 2;
+        char **new_env = (char**)malloc(new_cap * sizeof(char*));
+        if (!new_env) return -1;
+        for (int k = 0; k < n; k++) new_env[k] = environ[k];
+        free(environ);
+        _heap_env = new_env;
+        environ = new_env;
+        _heap_cap = new_cap;
+    }
+
+    char *new_e = (char*)malloc(total);
+    if (!new_e) return -1;
+    memcpy(new_e, name, nlen);
+    new_e[nlen] = '=';
+    memcpy(new_e + nlen + 1, value, vlen);
+    new_e[total - 1] = '\0';
+    environ[n] = new_e;
+    environ[n + 1] = NULL;
+    return 0;
+}
+
+int unsetenv(const char *name) {
+    if (!name || !*name) return -1;
+    if (strchr(name, '=')) return -1;
+    if (environ != _heap_env) return -1;
+
+    int i = find_env(name);
+    if (i < 0) return 0;
+    free(environ[i]);
+    for (int k = i; environ[k]; k++) {
+        environ[k] = environ[k + 1];
+    }
+    return 0;
+}
 ==================== ./user/libc/include/stdlib.h ====================
 #ifndef USER_STDLIB_H
 #define USER_STDLIB_H
@@ -202,6 +385,14 @@ void *calloc(size_t n, size_t size);
 void *realloc(void *ptr, size_t new_size);
 
 void  exit(int status);
+
+/* 环境变量 */
+char *getenv(const char *name);
+int   setenv(const char *name, const char *value, int overwrite);
+int   unsetenv(const char *name);
+
+/* libc 内部，由 crt0 调用 */
+void  __libc_init_environ(char **envp);
 
 #endif
 ==================== ./user/libc/include/string.h ====================
@@ -220,6 +411,7 @@ char  *strcpy(char *dest, const char *src);
 char  *strncpy(char *dest, const char *src, size_t n);
 int    strcmp(const char *a, const char *b);
 int    strncmp(const char *a, const char *b, size_t n);
+char  *strchr(const char *s, int c);
 
 #endif
 ==================== ./user/libc/include/stdio.h ====================
@@ -243,6 +435,56 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap);
 
 /* 格式化输出到指定 fd */
 int dprintf(int fd, const char *fmt, ...);
+
+#endif
+==================== ./user/libc/include/signal.h ====================
+#ifndef USER_SIGNAL_H
+#define USER_SIGNAL_H
+
+#include <stdint.h>
+#include "syscall.h"
+
+/* 与内核 signal.h 一致 */
+#define SIGHUP      1
+#define SIGINT      2
+#define SIGQUIT     3
+#define SIGILL      4
+#define SIGTRAP     5
+#define SIGABRT     6
+#define SIGBUS      7
+#define SIGFPE      8
+#define SIGKILL     9
+#define SIGUSR1     10
+#define SIGSEGV     11
+#define SIGUSR2     12
+#define SIGPIPE     13
+#define SIGALRM     14
+#define SIGTERM     15
+#define SIGCHLD     17
+#define SIGCONT     18
+#define SIGSTOP     19
+#define SIGTSTP     20
+
+#define SIG_DFL     0
+#define SIG_IGN     1
+
+#define SIG_BLOCK    0
+#define SIG_UNBLOCK  1
+#define SIG_SETMASK  2
+
+struct sigaction {
+    uint32_t sa_handler;
+    uint32_t sa_mask;
+    uint32_t sa_flags;
+    uint32_t sa_restorer;
+};
+
+int sigaction(int sig, const struct sigaction *act, struct sigaction *oldact);
+int sigprocmask(int how, const uint32_t *set, uint32_t *oldset);
+
+static inline int raise(int sig) {
+    return __syscall(SYS_KILL, -1, sig, 0);
+}
 
 #endif
 ==================== ./user/libc/include/errno.h ====================
@@ -324,19 +566,37 @@ int dprintf(int fd, const char *fmt, ...);
 #define SYS_GETCWD        61
 #define SYS_CHDIR         62
 
+/* ========== 信号 (71~79) ========== */
+#define SYS_SIGACTION     71
+#define SYS_SIGRETURN     72
+#define SYS_SIGPROCMASK   73
+
+/* ========== IPC (81~89) ========== */
+#define SYS_PIPE         81
+#define SYS_PIPE_READ    82
+#define SYS_PIPE_WRITE   83
+#define SYS_IPC_CLOSE    84
+
 /* 传给 spawn 的重定向描述。
- * size 字段必须填为 sizeof(struct spawn_redirect)。 */
-struct spawn_redirect {
+ * size 字段必须填为 sizeof(struct spawn_params)。 */
+struct spawn_params {
     unsigned int size;
     int          in_fd;
     int          out_fd;
     int          err_fd;
+    int          in_pipe;
+    int          out_pipe;
+    int          err_pipe;
     unsigned int flags;
+    unsigned int envp;
 };
 
 #define SPAWN_FD_INHERIT   (-1)
 #define SPAWN_FD_NULL      (-2)
 #define SPAWN_FD_TTY       (-3)
+
+#define IPC_PIPE_READ   1
+#define IPC_PIPE_WRITE  2
 
 /* ---------- 原始系统调用（内联汇编） ---------- */
 static inline int __syscall(int num, int a, int b, int c) {
@@ -364,7 +624,7 @@ static inline int getpid(void) {
 
 /* 进程控制 */
 static inline int spawn(const char *path, char *const argv[],
-                        struct spawn_redirect *redir) {
+                        struct spawn_params *redir) {
     return __syscall(SYS_SPAWN, (int)path, (int)argv, (int)redir);
 }
 
@@ -382,6 +642,19 @@ static inline int process_close(int handle) {
 
 static inline void sleep_ms(int ms) {
     __syscall(SYS_SLEEP, ms, 0, 0);
+}
+
+static inline int pipe(int fds[2]) {
+    return __syscall(SYS_PIPE, (int)fds, 0, 0);
+}
+static inline int pipe_read(int h, void *buf, unsigned int n) {
+    return __syscall(SYS_PIPE_READ, h, (int)buf, (int)n);
+}
+static inline int pipe_write(int h, const void *buf, unsigned int n) {
+    return __syscall(SYS_PIPE_WRITE, h, (int)buf, (int)n);
+}
+static inline int ipc_close(int h) {
+    return __syscall(SYS_IPC_CLOSE, h, 0, 0);
 }
 
 /* 控制台 I/O */
@@ -518,6 +791,13 @@ struct dirent {
 #define DEV_TYPE_ATA       4
 
 #endif
+==================== ./user/libc/sigreturn.asm ====================
+section .text
+global __sigreturn_trampoline
+__sigreturn_trampoline:
+    mov eax, 72
+    int 0x80
+    hlt
 ==================== ./user/libc/string.c ====================
 #include "string.h"
 
@@ -583,6 +863,14 @@ int strncmp(const char *a, const char *b, size_t n) {
     while (n && *a && (*a == *b)) { a++; b++; n--; }
     if (n == 0) return 0;
     return (unsigned char)*a - (unsigned char)*b;
+}
+
+char *strchr(const char *s, int c) {
+    while (*s) {
+        if (*s == (char)c) return (char*)s;
+        s++;
+    }
+    return (c == '\0') ? (char*)s : NULL;
 }
 ==================== ./user/libc/printf.c ====================
 #include "stdio.h"
@@ -881,31 +1169,87 @@ void *realloc(void *ptr, size_t new_size) {
 void exit(int status) {
     _exit(status);
 }
-==================== ./user/crt0.asm ====================
-; user/crt0.asm
-; 用户态启动桩：从栈上读 argc/argv，调用 _start(argc, argv)
-; _start 返回后执行 SYS_EXIT
+==================== ./user/libc/signal.c ====================
+#include "signal.h"
+#include "syscall.h"
 
+extern void __sigreturn_trampoline(void);
+
+int sigaction(int sig, const struct sigaction *act, struct sigaction *oldact) {
+    struct sigaction new_act;
+    const void *new_p = 0;
+    void *old_p = 0;
+
+    if (act) {
+        new_act = *act;
+        if (new_act.sa_handler != SIG_DFL && new_act.sa_handler != SIG_IGN) {
+            new_act.sa_restorer = (uint32_t)__sigreturn_trampoline;
+        }
+        new_p = &new_act;
+    }
+    if (oldact) old_p = oldact;
+
+    return __syscall(SYS_SIGACTION, sig, (int)new_p, (int)old_p);
+}
+
+int sigprocmask(int how, const uint32_t *set, uint32_t *oldset) {
+    return __syscall(SYS_SIGPROCMASK, how, (int)set, (int)oldset);
+}
+==================== ./user/crt0.asm ====================
 section .text
 global _start_crt0
 extern main
+extern __libc_init_environ
 
 _start_crt0:
-    xor ebp, ebp                ; 清空帧指针，方便调试
+    xor ebp, ebp
 
-    mov eax, [esp]              ; argc
-    lea ebx, [esp + 4]          ; &argv[0]
+    mov esi, [esp]              ; argc
+    lea edi, [esp + 4]          ; argv
 
-    push ebx                    ; 第二参数
-    push eax                    ; 第一参数
+    ; envp = &argv[argc+1] = esp + 8 + 4*argc
+    lea ecx, [esp + 8 + esi*4]
+
+    ; 初始化 libc 环境
+    push ecx
+    call __libc_init_environ
+    add esp, 4
+
+    ; 调 main(argc, argv)
+    push edi
+    push esi
     call main
 
-    ; _start 返回 eax = 退出码
+    ; main 返回 eax = 退出码
     mov ebx, eax
-    mov eax, 1                  ; SYS_EXIT
+    mov eax, 1
     int 0x80
+    hlt
+==================== ./user/test_env.c ====================
+#include "syscall.h"
+#include "stdio.h"
+#include "stdlib.h"
+#include "string.h"
 
-    hlt                         ; 不会到达
+int main(int argc, char **argv) {
+    (void)argc; (void)argv;
+
+    printf("PATH     = %s\n", getenv("PATH"));
+    printf("HOME     = %s\n", getenv("HOME"));
+    printf("TERM     = %s\n", getenv("TERM"));
+    printf("NONEXIST = %s\n", getenv("NONEXIST"));
+
+    setenv("MYVAR", "hello", 1);
+    printf("MYVAR    = %s\n", getenv("MYVAR"));
+
+    setenv("MYVAR", "world", 1);
+    printf("MYVAR    = %s (after overwrite)\n", getenv("MYVAR"));
+
+    unsetenv("MYVAR");
+    printf("MYVAR    = %s (after unset)\n", getenv("MYVAR"));
+
+    return 0;
+}
 ==================== ./user/test_fault.c ====================
 /* user/test_fault.c
  * 用户态异常测试：验证每种异常都被捕获且系统存活。
@@ -926,7 +1270,7 @@ static void title(const char *s) {
     tty_set_color(C_GRAY, C_BLACK);
 }
 
-int _start(int argc, char **argv) {
+int main(int argc, char **argv) {
     (void)argc; (void)argv;
 
     tty_set_color(C_YELLOW, C_BLACK);
@@ -1005,6 +1349,7 @@ int _start(int argc, char **argv) {
 #include "string.h"
 #include "stdlib.h"
 #include "errno.h"
+#include "signal.h"
 
 /* VGA 颜色 */
 #define C_BLACK   0
@@ -1413,12 +1758,12 @@ static void test_blocking_syscall(void) {
     check_eq(r, EAGAIN, "wait timeout again -> EAGAIN");
 
     /* kill 后 wait 应该立即成功，且返回退出状态 */
-    r = kill(h, 99);
+    r = kill(h, SIGKILL);
     check_eq(r, OK, "kill -> OK");
 
     r = wait(h, &status, 100);
     check_eq(r, OK, "wait after kill -> OK");
-    check_eq(status, 99, "wait status = 99");
+    check_eq(status, 137, "wait status = 137");
 
     /* close 后 handle 应该失效 */
     r = process_close(h);
@@ -1723,10 +2068,10 @@ static void test_spawn_stress(void) {
 
         sleep_ms(5);
 
-        if (kill(h, i) != OK) { failures++; process_close(h); continue; }
+        if (kill(h, SIGKILL) != OK) { failures++; process_close(h); continue; }
 
         int status = -1;
-        if (wait(h, &status, 100) != OK || status != i) {
+        if (wait(h, &status, 100) != OK || status != 137) {
             failures++;
             process_close(h);
             continue;
@@ -1764,12 +2109,13 @@ static void test_dev_vga(void) {
 static void test_slot_null(void) {
     section("slot null");
 
-    struct spawn_redirect r = {
-        .size = sizeof(r),
-        .in_fd = SPAWN_FD_INHERIT,
+    struct spawn_params r = {
+        .size   = sizeof(r),
+        .in_fd  = SPAWN_FD_INHERIT,
         .out_fd = SPAWN_FD_NULL,
         .err_fd = SPAWN_FD_INHERIT,
-        .flags = 0,
+        .flags  = 0,
+        .envp   = 0,
     };
 
     /* 用 TEST.ELF 自己，但 stdout 丢弃——屏幕上不应有输出 */
@@ -1838,6 +2184,8 @@ void main(int argc, char **argv) {
 #include "syscall.h"
 #include "stdio.h"
 #include "string.h"
+#include "signal.h"
+#include "stdlib.h"
 
 /* VGA 颜色常量（用户态独立定义） */
 #define VGA_BLACK        0
@@ -1849,6 +2197,8 @@ void main(int argc, char **argv) {
 #define CMD_MAX          128
 #define ARGV_MAX         8
 #define CAT_BUF_SIZE     512
+
+extern char **environ;
 
 /* ---------- 基础输入：读一行，带退格支持 ---------- */
 
@@ -2029,10 +2379,66 @@ static void cmd_touch(int argc, char **argv) {
     fs_close(fd);
 }
 
+static int run_one(char *cmd) {
+    char *argv[ARGV_MAX];
+    int argc = tokenize(cmd, argv, ARGV_MAX);
+    if (argc == 0) return 0;
+    argv[argc] = NULL;
+
+    struct spawn_params p = {
+        .size = sizeof(p),
+        .in_fd = SPAWN_FD_INHERIT,
+        .out_fd = SPAWN_FD_INHERIT,
+        .err_fd = SPAWN_FD_INHERIT,
+        .in_pipe = -1,
+        .out_pipe = -1,
+        .err_pipe = -1,
+        .flags = 0,
+        .envp = (uint32_t)environ,
+    };
+
+    int h = spawn(argv[0], argv, &p);
+    if (h < 0) return h;
+
+    tty_set_foreground(h);
+    int status = 0;
+    wait(h, &status, 0);
+    tty_set_foreground(-1);
+    process_close(h);
+    return status;
+}
+
+/* 带 pipe 的单条命令 */
+static int run_one_with_pipes(char *cmd, int in_pipe, int out_pipe) {
+    char *argv[ARGV_MAX];
+    int argc = tokenize(cmd, argv, ARGV_MAX);
+    if (argc == 0) return 0;
+    argv[argc] = NULL;
+
+    struct spawn_params p = {
+        .size = sizeof(p),
+        .in_fd = SPAWN_FD_INHERIT,
+        .out_fd = SPAWN_FD_INHERIT,
+        .err_fd = SPAWN_FD_INHERIT,
+        .in_pipe = in_pipe,
+        .out_pipe = out_pipe,
+        .err_pipe = -1,
+        .flags = 0,
+        .envp = (uint32_t)environ,
+    };
+
+    int h = spawn(argv[0], argv, &p);
+    return h;   /* 返回 handle，调用者负责 wait/close */
+}
+
 /* ---------- 主循环 ---------- */
 
 void main(int _argc, char **_argv) {
     (void)_argc; (void)_argv;
+    /* shell 忽略 SIGINT —— 按 Ctrl+C 不杀 shell */
+    struct sigaction sa = {0};
+    sa.sa_handler = SIG_IGN;
+    sigaction(SIGINT, &sa, 0);
     printf("Welcome to HeliumOS Shell!\n");
     printf("Type 'help' for commands.\n\n");
 
@@ -2065,27 +2471,29 @@ void main(int _argc, char **_argv) {
             cmd_cd(argc, argv);
         } else if (strcmp(c, "pwd") == 0) {
             cmd_pwd();
-        } else if (strcmp(c, "cat") == 0) {
-            cmd_cat(argc, argv);
+        // } else if (strcmp(c, "cat") == 0) {
+        //     cmd_cat(argc, argv);
         } else if (strcmp(c, "clear") == 0) {
             cmd_clear();
         } else if (strcmp(c, "touch") == 0) {
             cmd_touch(argc, argv);
         } else if (strcmp(c, "sink") == 0) {
             /* 运行一个程序，丢弃其 stdout */
-            struct spawn_redirect r = {
-                .in_fd = SPAWN_FD_INHERIT,
+            struct spawn_params p = {
+                .size   = sizeof(p),
+                .in_fd  = SPAWN_FD_INHERIT,
                 .out_fd = SPAWN_FD_NULL,
                 .err_fd = SPAWN_FD_INHERIT,
+                .flags  = 0,
+                .envp   = (unsigned int)environ,
             };
-            r.size = sizeof(r);
             if (argc < 2) { printf("usage: sink <prog>\n"); }
             else {
-                int h = spawn(argv[1], argv + 1, &r);
+                int h = spawn(argv[1], argv + 1, &p);
                 if (h >= 0) {
                     tty_set_foreground(h);
                     int st; wait(h, &st, 0); 
-                    tty_set_foreground(0);
+                    tty_set_foreground(-1);
                     process_close(h);
                 }else{
                     set_color(VGA_LIGHT_RED, VGA_BLACK);
@@ -2093,19 +2501,87 @@ void main(int _argc, char **_argv) {
                     set_color(VGA_LIGHT_GRAY, VGA_BLACK);
                 }
             }
-        } else {
-            /* 其他都当作可执行文件名 */
-            int h = spawn(c, argv, NULL);       /* ← 现在返回 handle */
-            if (h < 0) {
+                } else {
+            /* 在 argv 里找 | */
+            int pipe_idx = -1;
+            for (int i = 0; i < argc; i++) {
+                if (strcmp(argv[i], "|") == 0) {
+                    pipe_idx = i;
+                    break;
+                }
+            }
+
+            if (pipe_idx > 0 && pipe_idx < argc - 1) {
+                /* 有管道 */
+                int fds[2];
+                if (pipe(fds) < 0) {
+                    set_color(VGA_LIGHT_RED, VGA_BLACK);
+                    printf("pipe failed\n");
+                    set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+                } else {
+                    /* 左段 */
+                    argv[pipe_idx] = NULL;   /* 左段以 NULL 结尾 */
+                    struct spawn_params p1 = {
+                        .size = sizeof(p1),
+                        .in_fd = SPAWN_FD_INHERIT,
+                        .out_fd = SPAWN_FD_INHERIT,
+                        .err_fd = SPAWN_FD_INHERIT,
+                        .in_pipe = -1,
+                        .out_pipe = fds[1],
+                        .err_pipe = -1,
+                        .flags = 0,
+                        .envp = (uint32_t)environ,
+                    };
+                    int h1 = spawn(argv[0], &argv[0], &p1);
+
+                    /* 右段 */
+                    struct spawn_params p2 = {
+                        .size = sizeof(p2),
+                        .in_fd = SPAWN_FD_INHERIT,
+                        .out_fd = SPAWN_FD_INHERIT,
+                        .err_fd = SPAWN_FD_INHERIT,
+                        .in_pipe = fds[0],
+                        .out_pipe = -1,
+                        .err_pipe = -1,
+                        .flags = 0,
+                        .envp = (uint32_t)environ,
+                    };
+                    int h2 = spawn(argv[pipe_idx + 1], &argv[pipe_idx + 1], &p2);
+
+                    /* 关闭 shell 自己的两端 */
+                    ipc_close(fds[0]);
+                    ipc_close(fds[1]);
+
+                    if (h1 >= 0) {
+                        int st1; wait(h1, &st1, 0); process_close(h1);
+                    }
+                    if (h2 >= 0) {
+                        int st2; wait(h2, &st2, 0); process_close(h2);
+                    }
+                }
+            } else if (pipe_idx >= 0) {
                 set_color(VGA_LIGHT_RED, VGA_BLACK);
-                printf("spawn '%s' failed (error %d)\n", c, h);
+                printf("syntax error: empty pipe\n");
                 set_color(VGA_LIGHT_GRAY, VGA_BLACK);
             } else {
-                tty_set_foreground(h);
-                int status;
-                wait(h, &status, 0);
-                tty_set_foreground(0);
-                process_close(h);
+                /* 普通 spawn */
+                int h = spawn(c, argv, NULL);
+                if (h < 0) {
+                    set_color(VGA_LIGHT_RED, VGA_BLACK);
+                    printf("spawn '%s' failed (error %d)\n", c, h);
+                    set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+                } else {
+                    tty_set_foreground(h);
+                    int status = 0;
+                    wait(h, &status, 0);
+                    tty_set_foreground(-1);
+                    if (status != 0) {
+                        set_color(VGA_LIGHT_RED, VGA_BLACK);
+                        printf("[shell] child exited with status %d\n", status);
+                        set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+                    }
+                    process_close(h);
+                }
             }
         }
     }
@@ -2123,17 +2599,14 @@ SECTIONS
 }
 ==================== ./user/testkill.c ====================
 /* user/test_kill.c
- * 测试 kill 路径：
- *   T1: spawn + kill(正在 sleep) + wait + close   → 走 sys_kill 的完整路径
- *   T2: spawn + kill + close（不 wait）            → 检查 refcount 是否正常
- *   T3: 连续 20 轮，观察是否稳定（内存不泄漏、不崩）
- *   T4: kill 后 wait 立即返回（不等超时）
+ * 测试 kill 路径。
  */
 
 #include "syscall.h"
 #include "stdio.h"
 #include "string.h"
 #include "errno.h"
+#include "signal.h"
 
 #define C_BLACK   0
 #define C_GREEN   10
@@ -2166,7 +2639,6 @@ static void section(const char *title) {
     tty_set_color(C_GRAY, C_BLACK);
 }
 
-/* 生成一个 "PID" 用于 log，不通过内核 API */
 static int spawn_sleeper(void) {
     int h = spawn("SLEEPER.ELF", NULL, NULL);
     if (h < 0) {
@@ -2177,30 +2649,31 @@ static int spawn_sleeper(void) {
     return h;
 }
 
-/* ---------- T1: kill 一个正在 sleep 的进程 + wait ---------- */
-
+/* ---------- T1: kill(正在 sleep) + wait ----------
+ *
+ * SIGTERM = 15 → 进 pending → sleeper 被唤醒 → sleep 返回 EINTR
+ * → 无 handler（SIG_DFL）→ 终止，退出码 = 128 + 15 = 143
+ */
 static void test_kill_sleeping(void) {
-    section("kill sleeping + wait");
+    section("kill sleeping + wait (SIGTERM)");
 
     int h = spawn_sleeper();
     if (h < 0) { fail("spawn", "returned error"); return; }
     ok("spawn SLEEPER.ELF");
 
-    /* 让 sleeper 进入 sleep 状态（肯定在 blocked_list 里） */
     sleep_ms(50);
 
-    int r = kill(h, 42);
-    if (r == OK) ok("kill(h, 42)");
+    int r = kill(h, SIGTERM);
+    if (r == OK) ok("kill(h, SIGTERM)");
     else         fail("kill", "returned error");
 
-    /* wait 应该立即返回（进程已是僵尸） */
     int status = -1;
     int wr = wait(h, &status, 0);
-    if (wr == OK && status == 42) {
-        ok("wait returns exit_status=42");
+    if (wr == OK && status == 143) {
+        ok("wait returns status=143 (128+SIGTERM)");
     } else {
         char buf[64];
-        snprintf(buf, sizeof(buf), "wr=%d status=%d", wr, status);
+        snprintf(buf, sizeof(buf), "wr=%d status=%d (expect 143)", wr, status);
         fail("wait", buf);
     }
 
@@ -2209,10 +2682,10 @@ static void test_kill_sleeping(void) {
     else          fail("process_close", "returned error");
 }
 
-/* ---------- T2: kill 后直接 close（不 wait） ---------- */
+/* ---------- T2: kill(SIGKILL) 后直接 close ---------- */
 
 static void test_kill_then_close(void) {
-    section("kill then close (no wait)");
+    section("kill then close (no wait, SIGKILL)");
 
     int h = spawn_sleeper();
     if (h < 0) { fail("spawn", "returned error"); return; }
@@ -2220,18 +2693,19 @@ static void test_kill_then_close(void) {
 
     sleep_ms(50);
 
-    if (kill(h, 99) == OK) ok("kill(h, 99)");
-    else                    fail("kill", "returned error");
+    if (kill(h, SIGKILL) == OK) ok("kill(h, SIGKILL)");
+    else                        fail("kill", "returned error");
 
-    /* 不 wait，直接 close —— refcount 应该递减到 0，PCB 释放 */
     if (process_close(h) == OK) ok("process_close without wait");
-    else                         fail("process_close", "returned error");
+    else                        fail("process_close", "returned error");
 }
 
-/* ---------- T3: 连跑 20 轮 ---------- */
-
+/* ---------- T3: 连跑 20 轮 ----------
+ *
+ * SIGKILL = 9 → 立即终止，退出码 = 128 + 9 = 137
+ */
 static void test_stress(void) {
-    section("stress: 20 rounds of spawn/kill/wait/close");
+    section("stress: 20 rounds spawn/SIGKILL/wait/close");
 
     int failures = 0;
     for (int i = 0; i < 20; i++) {
@@ -2239,10 +2713,10 @@ static void test_stress(void) {
         if (h < 0) { failures++; continue; }
 
         sleep_ms(10);
-        if (kill(h, i) != OK) { failures++; process_close(h); continue; }
+        if (kill(h, SIGKILL) != OK) { failures++; process_close(h); continue; }
 
         int status = -1;
-        if (wait(h, &status, 0) != OK || status != i) {
+        if (wait(h, &status, 0) != OK || status != 137) {
             failures++;
             process_close(h);
             continue;
@@ -2259,16 +2733,15 @@ static void test_stress(void) {
     }
 }
 
-/* ---------- T4: wait 超时后进程仍在跑，再 kill ---------- */
+/* ---------- T4: wait 超时 → SIGKILL ---------- */
 
 static void test_wait_timeout_then_kill(void) {
-    section("wait timeout then kill");
+    section("wait timeout then SIGKILL");
 
     int h = spawn_sleeper();
     if (h < 0) { fail("spawn", "returned error"); return; }
     ok("spawn SLEEPER.ELF");
 
-    /* 不给它时间 sleep，直接 wait(50ms) —— 应该超时 */
     int status = 0;
     int wr = wait(h, &status, 50);
     if (wr == EAGAIN) {
@@ -2279,15 +2752,15 @@ static void test_wait_timeout_then_kill(void) {
         fail("wait timeout", buf);
     }
 
-    /* 现在 kill 它 */
-    if (kill(h, 7) == OK) ok("kill after timeout");
-    else                   fail("kill", "returned error");
+    if (kill(h, SIGKILL) == OK) ok("kill(SIGKILL) after timeout");
+    else                        fail("kill", "returned error");
 
-    /* 再 wait 应该立即成功 */
-    if (wait(h, &status, 100) == OK && status == 7) {
-        ok("wait after kill returns status=7");
+    if (wait(h, &status, 100) == OK && status == 137) {
+        ok("wait after SIGKILL returns 137");
     } else {
-        fail("wait after kill", "wrong result");
+        char buf[48];
+        snprintf(buf, sizeof(buf), "status=%d (expect 137)", status);
+        fail("wait after kill", buf);
     }
 
     process_close(h);
@@ -2297,7 +2770,6 @@ static void test_wait_timeout_then_kill(void) {
 
 void main(int argc, char **argv) {
     (void)argc; (void)argv;
-    // tty_clear();
 
     tty_set_color(C_YELLOW, C_BLACK);
     printf("========================================\n");
@@ -2563,6 +3035,260 @@ void pic_unmask_irq(uint8_t irq) {
     }
     outb(port, mask);
 }
+==================== ./src/kernel/ipc.c ====================
+#include <ipc.h>
+#include <task.h>
+#include <scheduler.h>
+#include <vmm.h>
+#include <printf.h>
+#include <string.h>
+#include <errno.h>
+#include <stddef.h>
+#include <uaccess.h>
+
+/* ---------- 全局 pipe 池 ---------- */
+static struct pipe g_pipes[IPC_MAX_PIPES];
+
+void ipc_init(void) {
+    memset(g_pipes, 0, sizeof(g_pipes));
+}
+
+/* ---------- pipe 分配/释放 ---------- */
+struct pipe *pipe_alloc(void) {
+    for (int i = 0; i < IPC_MAX_PIPES; i++) {
+        if (!g_pipes[i].used) {
+            struct pipe *p = &g_pipes[i];
+            memset(p, 0, sizeof(*p));
+            p->used = 1;
+            return p;
+        }
+    }
+    return NULL;
+}
+
+void pipe_free(struct pipe *p) {
+    if (!p) return;
+    p->used = 0;
+}
+
+/* ---------- 句柄管理 ---------- */
+int ipc_handle_alloc(struct task *t, struct pipe *p, int type) {
+    if (!t || !p) return -1;
+    for (int i = 0; i < IPC_MAX_HANDLES; i++) {
+        if (!t->ipc_handles[i].used) {
+            t->ipc_handles[i].used = 1;
+            t->ipc_handles[i].type = type;
+            t->ipc_handles[i].pipe = p;
+            if (type == IPC_PIPE_READ) p->readers++;
+            else                       p->writers++;
+            p->refcount++;
+            return i;
+        }
+    }
+    return -1;
+}
+
+void ipc_handle_close(struct task *t, int h) {
+    if (!t || h < 0 || h >= IPC_MAX_HANDLES) return;
+    if (!t->ipc_handles[h].used) return;
+
+    struct pipe *p = t->ipc_handles[h].pipe;
+    int type = t->ipc_handles[h].type;
+
+    t->ipc_handles[h].used = 0;
+    t->ipc_handles[h].pipe = NULL;
+
+    if (p) {
+        if (type == IPC_PIPE_READ) p->readers--;
+        else                       p->writers--;
+        p->refcount--;
+
+        /* 关闭后唤醒所有等这个 pipe 的进程 */
+        pipe_wakeup_all(p);
+
+        if (p->refcount == 0) {
+            pipe_free(p);
+        }
+    }
+}
+
+/* ---------- 唤醒 ---------- */
+void pipe_wakeup_all(struct pipe *p) {
+    if (!p) return;
+    for (struct task *t = blocked_list_head; t; ) {
+        struct task *next = t->next;
+        if (t->state == TASK_STATE_WAITING_PIPE && t->wait_pipe == p) {
+            t->wait_pipe = NULL;
+            unblock_task(t, TASK_STATE_READY);
+        }
+        t = next;
+    }
+}
+
+/* ---------- 读 ---------- */
+int pipe_read(struct pipe *p, uint8_t *buf, uint32_t n) {
+    if (!p || !buf) return EINVAL;
+    if (n == 0) return 0;
+
+    while (1) {
+        /* 有数据 */
+        if (p->count > 0) {
+            uint32_t to_read = n < p->count ? n : p->count;
+            for (uint32_t i = 0; i < to_read; i++) {
+                buf[i] = p->buf[p->read_pos];
+                p->read_pos = (p->read_pos + 1) % PIPE_BUF_SIZE;
+            }
+            p->count -= to_read;
+
+            /* 读完了——唤醒等写的人 */
+            pipe_wakeup_all(p);
+            return (int)to_read;
+        }
+
+        /* 无数据且没有写端 → EOF */
+        if (p->writers == 0) {
+            return 0;
+        }
+
+        /* 阻塞前检查信号 */
+        struct task *cur = get_current_task();
+        if (!cur) return EINVAL;
+        if (cur->pending_signals & ~cur->blocked_signals) {
+            return EINTR;
+        }
+
+        cur->wait_pipe = p;
+        block_current(TASK_STATE_WAITING_PIPE);
+        schedule();
+        cur->wait_pipe = NULL;
+    }
+}
+
+/* ---------- 写 ---------- */
+int pipe_write(struct pipe *p, const uint8_t *buf, uint32_t n) {
+    if (!p || !buf) return EINVAL;
+    if (n == 0) return 0;
+
+    while (1) {
+        /* 有空间 */
+        if (p->count < PIPE_BUF_SIZE) {
+            uint32_t space = PIPE_BUF_SIZE - p->count;
+            uint32_t to_write = n < space ? n : space;
+            for (uint32_t i = 0; i < to_write; i++) {
+                p->buf[p->write_pos] = buf[i];
+                p->write_pos = (p->write_pos + 1) % PIPE_BUF_SIZE;
+            }
+            p->count += to_write;
+
+            /* 写完——唤醒等读的人 */
+            pipe_wakeup_all(p);
+            return (int)to_write;
+        }
+
+        /* 无空间且没有读端 → EPIPE */
+        if (p->readers == 0) {
+            return EPIPE;
+        }
+
+        /* 阻塞前检查信号 */
+        struct task *cur = get_current_task();
+        if (!cur) return EINVAL;
+        if (cur->pending_signals & ~cur->blocked_signals) {
+            return EINTR;
+        }
+
+        cur->wait_pipe = p;
+        block_current(TASK_STATE_WAITING_PIPE);
+        schedule();
+        cur->wait_pipe = NULL;
+    }
+}
+
+/* ---------- spawn 用：复制句柄 ---------- */
+int ipc_dup_handle(struct task *parent, int parent_h, struct task *child,
+                   int *out_child_h, int *out_child_type) {
+    if (!parent || !child) return -1;
+    if (parent_h < 0 || parent_h >= IPC_MAX_HANDLES) return -1;
+    if (!parent->ipc_handles[parent_h].used) return -1;
+
+    struct pipe *p = parent->ipc_handles[parent_h].pipe;
+    int type = parent->ipc_handles[parent_h].type;
+
+    int new_h = ipc_handle_alloc(child, p, type);
+    if (new_h < 0) return -1;
+
+    if (out_child_h) *out_child_h = new_h;
+    if (out_child_type) *out_child_type = type;
+    return 0;
+}
+
+/* ---------- 进程退出清理 ---------- */
+void ipc_release_all(struct task *t) {
+    if (!t) return;
+    for (int i = 0; i < IPC_MAX_HANDLES; i++) {
+        if (t->ipc_handles[i].used) {
+            ipc_handle_close(t, i);
+        }
+    }
+}
+
+/* ---------- 系统调用 ---------- */
+int sys_pipe(int *fds_user) {
+    struct task *cur = get_current_task();
+    if (!cur) return EINVAL;
+
+    if (check_user_range((uint32_t)fds_user, 8) < 0) return EFAULT;
+
+    struct pipe *p = pipe_alloc();
+    if (!p) return ENOSPC;
+
+    int rd = ipc_handle_alloc(cur, p, IPC_PIPE_READ);
+    if (rd < 0) { pipe_free(p); return ENOSPC; }
+
+    int wr = ipc_handle_alloc(cur, p, IPC_PIPE_WRITE);
+    if (wr < 0) {
+        ipc_handle_close(cur, rd);
+        return ENOSPC;
+    }
+
+    fds_user[0] = rd;
+    fds_user[1] = wr;
+    return OK;
+}
+
+int sys_pipe_read(int h, void *buf_user, uint32_t n) {
+    struct task *cur = get_current_task();
+    if (!cur) return EINVAL;
+    if (h < 0 || h >= IPC_MAX_HANDLES) return EINVAL;
+    if (!cur->ipc_handles[h].used) return EINVAL;
+    if (cur->ipc_handles[h].type != IPC_PIPE_READ) return EINVAL;
+    if (check_user_range((uint32_t)buf_user, n) < 0) return EFAULT;
+    if (n == 0) return 0;
+
+    return pipe_read(cur->ipc_handles[h].pipe, (uint8_t*)buf_user, n);
+}
+
+int sys_pipe_write(int h, const void *buf_user, uint32_t n) {
+    struct task *cur = get_current_task();
+    if (!cur) return EINVAL;
+    if (h < 0 || h >= IPC_MAX_HANDLES) return EINVAL;
+    if (!cur->ipc_handles[h].used) return EINVAL;
+    if (cur->ipc_handles[h].type != IPC_PIPE_WRITE) return EINVAL;
+    if (check_user_range((uint32_t)buf_user, n) < 0) return EFAULT;
+    if (n == 0) return 0;
+
+    return pipe_write(cur->ipc_handles[h].pipe, (const uint8_t*)buf_user, n);
+}
+
+int sys_ipc_close(int h) {
+    struct task *cur = get_current_task();
+    if (!cur) return EINVAL;
+    if (h < 0 || h >= IPC_MAX_HANDLES) return EINVAL;
+    if (!cur->ipc_handles[h].used) return EINVAL;
+
+    ipc_handle_close(cur, h);
+    return OK;
+}
 ==================== ./src/kernel/string.c ====================
 #include <string.h>
 #include <stddef.h>
@@ -2609,6 +3335,93 @@ char *strncpy(char *dest, const char *src, size_t n) {
     for (i = 0; i < n && src[i]; i++) dest[i] = src[i];
     for (; i < n; i++) dest[i] = '\0';
     return dest;
+}
+==================== ./src/kernel/uaccess.c ====================
+#include <uaccess.h>
+#include <task.h>
+#include <vmm.h>
+#include <string.h>
+#include <stddef.h>
+
+int check_user_range(uint32_t addr, uint32_t size) {
+    if (size == 0) return 0;
+    if (addr < USER_SPACE_START) return -1;
+    uint64_t end = (uint64_t)addr + size;
+    if (end > (uint64_t)USER_SPACE_END + 1) return -1;
+
+    struct task *cur = get_current_task();
+    if (!cur || !cur->pgd) return -1;
+
+    uint32_t first_page = addr & ~0xFFF;
+    uint32_t last_page  = ((uint32_t)(end - 1)) & ~0xFFF;
+
+    for (uint32_t p = first_page; p <= last_page; p += 4096) {
+        if (!vmm_get_phys(cur->pgd, p)) return -1;
+    }
+    return 0;
+}
+
+int strncpy_from_user(char *dst, const char *src, uint32_t max_len) {
+    if (!src || !dst || max_len == 0) return -1;
+    if ((uint32_t)src < USER_SPACE_START) return -1;
+
+    struct task *cur = get_current_task();
+    if (!cur || !cur->pgd) return -1;
+
+    uint32_t u_src = (uint32_t)src;
+    uint32_t cur_page = u_src & ~0xFFF;
+    if (!vmm_get_phys(cur->pgd, cur_page)) return -1;
+
+    for (uint32_t i = 0; i < max_len; i++) {
+        uint32_t addr = u_src + i;
+        if (addr < USER_SPACE_START || addr > USER_SPACE_END) return -1;
+
+        uint32_t page = addr & ~0xFFF;
+        if (page != cur_page) {
+            if (!vmm_get_phys(cur->pgd, page)) return -1;
+            cur_page = page;
+        }
+
+        char c = src[i];
+        dst[i] = c;
+        if (c == '\0') return (int)(i + 1);
+    }
+    return -1;
+}
+
+static int copy_bytes(uint32_t u_addr, void *kbuf, uint32_t n, int to_user) {
+    if (n == 0) return 0;
+    if (check_user_range(u_addr, n) < 0) return -1;
+
+    struct task *cur = get_current_task();
+    if (!cur || !cur->pgd) return -1;
+
+    uint8_t *p = (uint8_t*)kbuf;
+    while (n > 0) {
+        uint32_t phys = vmm_get_phys(cur->pgd, u_addr & ~0xFFF);
+        if (!phys) return -1;
+        uint32_t off = u_addr & 0xFFF;
+        uint32_t chunk = 0x1000 - off;
+        if (chunk > n) chunk = n;
+
+        if (to_user) {
+            memcpy((void*)(phys + off), p, chunk);
+        } else {
+            memcpy(p, (void*)(phys + off), chunk);
+        }
+        u_addr += chunk;
+        p += chunk;
+        n -= chunk;
+    }
+    return 0;
+}
+
+int copy_from_user(void *dst, uint32_t u_addr, uint32_t n) {
+    return copy_bytes(u_addr, dst, n, 0);
+}
+
+int copy_to_user(uint32_t u_addr, const void *src, uint32_t n) {
+    return copy_bytes(u_addr, (void*)src, n, 1);
 }
 ==================== ./src/kernel/printf.c ====================
 #include <printf.h>
@@ -2799,88 +3612,27 @@ void kprintf(const char *fmt, ...) {
 #include <tty.h>
 #include <path.h>
 #include <proc.h>
+#include <signal.h>
+#include <ipc.h>
+#include <uaccess.h>
 
 
 /* 用户态结构体镜像。字段顺序和 user/libc/include/syscall.h 保持一致。
  * size 用于版本兼容：内核只读 min(size, 本结构体大小) 字节。 */
-struct spawn_redirect {
+struct spawn_params {
     uint32_t size;
     int32_t  in_fd;
     int32_t  out_fd;
     int32_t  err_fd;
+    int32_t  in_pipe;
+    int32_t  out_pipe;
+    int32_t  err_pipe;
     uint32_t flags;
+    uint32_t envp;
 };
 
 #define SPAWN_FD_INHERIT   (-1)   /* 不重定向 */
 #define SPAWN_FD_NULL      (-2)   /* 丢弃 */
-
-/* ---------- 用户指针校验辅助 ---------- */
-
-/* 检查用户地址范围 [addr, addr+size) 是否完全在用户空间且已映射
- * 返回 0 成功，-1 失败
- */
-static int check_user_range(uint32_t addr, uint32_t size) {
-    if (size == 0) return 0;
-    if (addr < USER_SPACE_START) return -1;
-    uint64_t end = (uint64_t)addr + size;
-    if (end > (uint64_t)USER_SPACE_END + 1) return -1;
-
-    /* 逐页检查映射。前提：调用者是 syscall 分发器，current_task 一定存在。 */
-    struct task *cur = get_current_task();
-    if (!cur || !cur->pgd) return -1;
-
-    uint32_t first_page = addr & ~0xFFF;
-    uint32_t last_page  = ((uint32_t)(end - 1)) & ~0xFFF;
-
-    for (uint32_t p = first_page; p <= last_page; p += 4096) {
-        if (!vmm_get_phys(cur->pgd, p)) return -1;
-    }
-    return 0;
-}
-
-/* 从用户空间拷贝字符串到内核缓冲区
- * 返回 >= 0 成功（拷贝的字节数含 '\0'），< 0 失败
- */
-static int strncpy_from_user(char *dest, const char *src, size_t max_len) {
-    if (!src || !dest || max_len == 0) return -1;
-    if ((uint32_t)src < USER_SPACE_START) return -1;
-
-    struct task *cur = get_current_task();
-    if (!cur || !cur->pgd) return -1;
-
-    uint32_t u_src = (uint32_t)src;
-    uint32_t cur_page = u_src & ~0xFFF;
-    if (!vmm_get_phys(cur->pgd, cur_page)) return -1;
-
-    for (size_t i = 0; i < max_len; i++) {
-        uint32_t addr = u_src + i;
-        if (addr < USER_SPACE_START || addr > USER_SPACE_END) {
-            return -1;
-        }
-
-        /* 跨页时重新检查映射 */
-        uint32_t page = addr & ~0xFFF;
-        if (page != cur_page) {
-            if (!vmm_get_phys(cur->pgd, page)) return -1;
-            cur_page = page;
-        }
-
-        char c = src[i];
-        dest[i] = c;
-        if (c == '\0') return (int)(i + 1);
-    }
-    return -1;
-}
-
-/* 从用户空间拷贝 n 字节到内核缓冲。
- * 用户指针须已通过 check_user_range。 */
-static int memcpy_from_user(void *dest, const void *src, size_t n) {
-    if (n == 0) return 0;
-    if (!dest || !src) return -1;
-    if (check_user_range((uint32_t)src, n) < 0) return -1;
-    memcpy(dest, src, n);
-    return 0;
-}
 
 static int sys_write(int fd, const char *buf, uint32_t count) {
     if (fd != 1) return EINVAL;
@@ -2890,20 +3642,24 @@ static int sys_write(int fd, const char *buf, uint32_t count) {
     struct task *cur = get_current_task();
     if (!cur) return EINVAL;
     
-    switch (cur->stdout_slot.type) {
+        switch (cur->stdout_slot.type) {
         case IO_SLOT_DEFAULT:
             return tty_write(buf, count);
-
         case IO_SLOT_FILE: {
             int h = cur->stdout_slot.fd;
             if (h < 0 || h >= FS_MAX_HANDLES) return EINVAL;
             if (!cur->fs_handles[h].used) return EINVAL;
             return fs_write(h, buf, count);
         }
-
+        case IO_SLOT_PIPE_WRITE: {
+            int h = cur->stdout_slot.fd;
+            if (h < 0 || h >= IPC_MAX_HANDLES) return EINVAL;
+            if (!cur->ipc_handles[h].used) return EINVAL;
+            return pipe_write(cur->ipc_handles[h].pipe,
+                              (const uint8_t*)buf, count);
+        }
         case IO_SLOT_NULL:
             return (int)count;
-
         default:
             return ENOSYS;
     }
@@ -2927,10 +3683,18 @@ static int sys_read(int fd, char *buf, uint32_t count) {
             if (!cur->fs_handles[h].used) return EINVAL;
             return fs_read(h, buf, count);
         }
+        
+        case IO_SLOT_PIPE_READ: {
+            int h = cur->stdin_slot.fd;
+            if (h < 0 || h >= IPC_MAX_HANDLES) return EINVAL;
+            if (!cur->ipc_handles[h].used) return EINVAL;
+            return pipe_read(cur->ipc_handles[h].pipe,
+                             (uint8_t*)buf, count);
+        }
+
 
         case IO_SLOT_NULL:
             return 0;    /* EOF */
-
         default:
             return ENOSYS;
     }
@@ -2953,6 +3717,10 @@ static int wait_impl(struct task *cur, struct task *target,
     if (timeout_ms > 0) deadline = get_ticks() + timeout_ms;
 
     while (1) {
+        /* 被信号打断 */
+        if (cur->pending_signals & ~cur->blocked_signals) {
+            return EINTR;
+        }
         /* 1. 目标已退出 */
         if (target) {
             if (target->zombie) {
@@ -3100,7 +3868,7 @@ static int sys_brk(uint32_t new_brk) {
     return 0; // 成功
 }
 
-static int sys_spawn(const char *path, char *const argv[], void *redir_user) {
+static int sys_spawn(const char *path, char *const argv[], void *params_user) {
     struct task *parent = get_current_task();
     if (!parent) return EINVAL;
 
@@ -3108,29 +3876,36 @@ static int sys_spawn(const char *path, char *const argv[], void *redir_user) {
     if (strncpy_from_user(path_buf, path, sizeof(path_buf)) < 0)
         return EFAULT;
 
-    /* 解析重定向 */
+    /* 解析 params */
     int redir_in = SPAWN_FD_INHERIT;
     int redir_out = SPAWN_FD_INHERIT;
     int redir_err = SPAWN_FD_INHERIT;
+    int redir_in_pipe = -1;
+    int redir_out_pipe = -1;
+    int redir_err_pipe = -1;
+    uint32_t envp_user = 0;
 
-    if (redir_user) {
-        struct spawn_redirect r = {0};
-        if (check_user_range((uint32_t)redir_user, sizeof(uint32_t)) < 0)
+    if (params_user) {
+        struct spawn_params p = {0};
+        if (check_user_range((uint32_t)params_user, sizeof(uint32_t)) < 0)
             return EFAULT;
-        /* 先读 size */
         uint32_t user_size;
-        if (memcpy_from_user(&user_size, redir_user, sizeof(uint32_t)) < 0)
+        if (copy_from_user(&user_size, (uint32_t)params_user, sizeof(uint32_t)) < 0)
             return EFAULT;
         if (user_size < sizeof(uint32_t)) return EINVAL;
-        uint32_t to_copy = user_size < sizeof(r) ? user_size : sizeof(r);
-        if (memcpy_from_user(&r, redir_user, to_copy) < 0)
+        uint32_t to_copy = user_size < sizeof(p) ? user_size : sizeof(p);
+        if (copy_from_user(&p, (uint32_t)params_user, to_copy) < 0)
             return EFAULT;
-        redir_in = r.in_fd;
-        redir_out = r.out_fd;
-        redir_err = r.err_fd;
+        redir_in  = p.in_fd;
+        redir_out = p.out_fd;
+        redir_err = p.err_fd;
+        redir_in_pipe  = p.in_pipe;
+        redir_out_pipe = p.out_pipe;
+        redir_err_pipe = p.err_pipe;
+        envp_user = p.envp;
     }
 
-    /* argv 拷贝（同前） */
+    /* 拷贝 argv */
     char *k_argv[ARGV_MAX];
     int argc = 0;
     int ret = 0;
@@ -3151,6 +3926,27 @@ static int sys_spawn(const char *path, char *const argv[], void *redir_user) {
                 goto cleanup;
             }
             k_argv[argc++] = k_arg;
+        }
+    }
+
+    /* 拷贝 envp */
+    char *k_envp[ENVP_MAX];
+    int envc = 0;
+
+    if (envp_user) {
+        for (int i = 0; i < ENVP_MAX; i++) {
+            uint32_t entry_addr = envp_user + i * 4;
+            if (check_user_range(entry_addr, sizeof(char*)) < 0) break;
+            char *u_env;
+            if (copy_from_user(&u_env, entry_addr, sizeof(u_env)) < 0) break;
+            if (!u_env) break;
+            char *k_env = kmalloc(ENV_MAX);
+            if (!k_env) break;
+            if (strncpy_from_user(k_env, u_env, ENV_MAX) < 0) {
+                kfree(k_env);
+                break;
+            }
+            k_envp[envc++] = k_env;
         }
     }
 
@@ -3180,7 +3976,9 @@ static int sys_spawn(const char *path, char *const argv[], void *redir_user) {
     }
 
     struct task *child = task_create(entry, pgd_child, argc, k_argv,
-                                     redir_in, redir_out, redir_err);
+                                     envc, k_envp,
+                                     redir_in, redir_out, redir_err,
+                                     redir_in_pipe, redir_out_pipe, redir_err_pipe);
     if (!child) {
         vmm_free_process_address_space(pgd_child);
         ret = ENOMEM;
@@ -3197,53 +3995,52 @@ static int sys_spawn(const char *path, char *const argv[], void *redir_user) {
     }
 
     for (int i = 0; i < argc; i++) kfree(k_argv[i]);
+    for (int i = 0; i < envc; i++) kfree(k_envp[i]);
     return h;
 
 cleanup:
     for (int i = 0; i < argc; i++) kfree(k_argv[i]);
+    for (int i = 0; i < envc; i++) kfree(k_envp[i]);
     return ret;
 }
 
-/* 注意：本函数的"允许 kill 非子进程"这一行为，
- * 当前依赖"句柄只能由 spawn 分配给子进程"来约束。
- * 将来引入句柄继承/传递后，需要额外的权限检查。 */
-static int sys_kill(proc_handle_t h, int status) {
+/* kill(handle, sig)
+ *   handle == 0 表示发给自己
+ *   sig == SIGKILL：立即终止（不允许自杀）
+ *   其他 sig：进入 pending，唤醒阻塞中的目标 */
+static int sys_kill(proc_handle_t h, int sig) {
     struct task *cur = get_current_task();
     if (!cur) return EINVAL;
 
-    struct task *target = proc_handle_deref(h, PROC_TERMINATE);
-    if (!target) return EINVAL;
+    if (sig < 1 || sig > 31) return EINVAL;
 
-    if (target == cur) return EPERM;    /* 不允许 kill 自己 */
-    if (target->zombie) return EINVAL;  /* 已经退出 */
-
-    /* 标记退出 */
-    target->exit_status = status;
-    target->zombie = 1;
-    target->state = TASK_STATE_ZOMBIE;
-
-    /* 从任何队列移除 */
-    remove_task_from_queue(&ready_queue_head, &ready_queue_tail, target);
-    remove_task_from_queue(&blocked_list_head, &blocked_list_tail, target);
-
-    /* 加入 blocked_list */
-    enqueue_task(&blocked_list_head, &blocked_list_tail, target);
-
-    /* 唤醒所有等它的 */
-    wake_up_waiters(target);
-
-    /* 如果 target 是前台，恢复父进程 */
-    if (tty_get_foreground() == target) {
-        struct task *parent = NULL;
-        if (target->creator_pid != 0) {
-            parent = proc_find_by_pid(target->creator_pid);
-        }
-        tty_set_foreground(parent);
+    struct task *target;
+    if (h == -1) {
+        target = cur;    /* 发给自己 */
+    } else {
+        target = proc_handle_deref(h, PROC_TERMINATE);
+        if (!target) return EINVAL;
     }
 
-    /* 释放 self 引用：被 kill 的进程不会再走 task_exit */
-    proc_unref(target);
+    if (target->zombie) return EINVAL;
 
+    if (sig == SIGKILL) {
+        if (target == cur) return EPERM;   /* 自杀用 exit */
+        task_terminate(target, 128 + SIGKILL);
+        proc_unref(target);
+        return OK;
+    }
+
+    /* 其他：进 pending */
+    target->pending_signals |= (1u << sig);
+
+    /* 唤醒阻塞中的目标——让它尽快返回 EINTR 或处理信号 */
+    if (target->state == TASK_STATE_SLEEPING ||
+        target->state == TASK_STATE_WAITING_CHILD) {
+        remove_task_from_queue(&blocked_list_head, &blocked_list_tail, target);
+        target->state = TASK_STATE_READY;
+        enqueue_task(&ready_queue_head, &ready_queue_tail, target);
+    }
     return OK;
 }
 
@@ -3270,6 +4067,11 @@ static int sys_sleep(uint32_t ms) {
     cur->sleep_ticks = ms;
     block_current(TASK_STATE_SLEEPING);
     schedule();
+
+    /* 被信号打断 */
+    if (cur->pending_signals & ~cur->blocked_signals) {
+        return EINTR;
+    }
     return 0;
 }
 
@@ -3277,7 +4079,7 @@ static int sys_tty_set_foreground(proc_handle_t h) {
     struct task *cur = get_current_task();
     if (!cur) return EINVAL;
 
-    if (h == 0) {
+    if (h == -1) {
         /* 显式清空（自己拿回键盘）*/
         tty_set_foreground(cur);
         return OK;
@@ -3329,6 +4131,31 @@ void syscall_handler(struct registers *regs) {
             break;
         case SYS_PROC_CLOSE:
             ret = sys_process_close((proc_handle_t)arg1);
+            break;
+        
+        case SYS_SIGACTION:
+            ret = sys_sigaction((int)arg1, (void*)arg2, (void*)arg3);
+            break;
+        case SYS_SIGPROCMASK:
+            ret = sys_sigprocmask((int)arg1, (uint32_t*)arg2, (uint32_t*)arg3);
+            break;
+        case SYS_SIGRETURN:
+            sys_sigreturn(regs);
+            return;   /* 跳过 regs->eax = ret */
+
+        
+
+        case SYS_PIPE:
+            ret = sys_pipe((int*)arg1);
+            break;
+        case SYS_PIPE_READ:
+            ret = sys_pipe_read((int)arg1, (void*)arg2, (uint32_t)arg3);
+            break;
+        case SYS_PIPE_WRITE:
+            ret = sys_pipe_write((int)arg1, (const void*)arg2, (uint32_t)arg3);
+            break;
+        case SYS_IPC_CLOSE:
+            ret = sys_ipc_close((int)arg1);
             break;
         
 
@@ -3495,6 +4322,14 @@ void syscall_handler(struct registers *regs) {
 
 
     regs->eax = ret;
+
+    /* 返回用户态前投递 pending signals。
+     * 可能改 regs->eip / user_esp（投递 handler）
+     * 或杀进程 + schedule（不返回）。 */
+    struct task *cur = get_current_task();
+    if (cur) {
+        signal_deliver_pending(regs, cur);
+    }
 }
 ==================== ./src/kernel/gdt.c ====================
 #include <gdt.h>
@@ -3585,6 +4420,288 @@ void tss_init(void) {
 void tss_set_kernel_stack(uint32_t esp0) {
     tss.esp0 = esp0;
 }
+==================== ./src/kernel/signal.c ====================
+#include <signal.h>
+#include <task.h>
+#include <scheduler.h>
+#include <isr.h>
+#include <tty.h>
+#include <proc.h>
+#include <pmm.h>
+#include <vmm.h>
+#include <printf.h>
+#include <string.h>
+#include <errno.h>
+#include <stddef.h>
+#include <uaccess.h>
+
+/* ---------- 用户态 sigaction 镜像 ---------- */
+struct user_sigaction {
+    uint32_t sa_handler;
+    uint32_t sa_mask;
+    uint32_t sa_flags;
+    uint32_t sa_restorer;
+};
+
+/* ---------- sigframe（60 字节，用户栈上） ---------- */
+struct sigframe {
+    uint32_t ret_addr;
+    uint32_t sig;
+    uint32_t saved_edi;
+    uint32_t saved_esi;
+    uint32_t saved_ebp;
+    uint32_t saved_ebx;
+    uint32_t saved_edx;
+    uint32_t saved_ecx;
+    uint32_t saved_eax;
+    uint32_t saved_eip;
+    uint32_t saved_cs;
+    uint32_t saved_eflags;
+    uint32_t saved_user_esp;
+    uint32_t saved_user_ss;
+    uint32_t saved_mask;
+} __attribute__((packed));
+
+/* ---------- 默认行为表 ---------- */
+static int default_is_ignore(int sig) {
+    return sig == SIGCHLD || sig == SIGCONT ||
+           sig == SIGUSR1 || sig == SIGUSR2;
+}
+
+/* ---------- 前置 ---------- */
+static void deliver_user_handler(struct registers *regs, struct task *cur,
+                                  int sig, struct sig_action *a);
+
+/* ---------- 异常 → 信号 ---------- */
+int signal_from_exception(int int_no) {
+    switch (int_no) {
+        case 0:  return SIGFPE;
+        case 4:  return SIGSEGV;   /* INTO overflow */
+        case 6:  return SIGILL;
+        case 13: return SIGSEGV;   /* GP fault */
+        case 14: return SIGSEGV;   /* Page fault */
+        default: return SIGSEGV;
+    }
+}
+
+/* ---------- 投递 ---------- */
+void signal_deliver_pending(struct registers *regs, struct task *cur) {
+    if (!cur) return;
+    if ((regs->cs & 3) != 3) return;   /* 只对用户态来路 */
+
+    /* 循环：一次投递一个 handler；无 handler 的默认行为直接处理 */
+    for (int iter = 0; iter < 32; iter++) {
+        uint32_t pending = cur->pending_signals & ~cur->blocked_signals;
+        if (pending == 0) return;
+
+        /* 选最低位的 sig */
+        int sig = 0;
+        for (int i = 1; i < 32; i++) {
+            if (pending & (1u << i)) { sig = i; break; }
+        }
+        if (sig == 0) return;
+
+        cur->pending_signals &= ~(1u << sig);
+
+        if (sig == SIGKILL) {
+            task_terminate(cur, 128 + SIGKILL);
+            proc_unref(cur);
+            schedule();
+            return;   /* 不返回 */
+        }
+
+        struct sig_action *a = &cur->sig_actions[sig];
+
+        if (a->handler == SIG_IGN) continue;
+
+        if (a->handler == SIG_DFL) {
+            if (default_is_ignore(sig)) continue;
+            task_terminate(cur, 128 + sig);
+            proc_unref(cur);
+            schedule();
+            return;
+        }
+
+        /* 用户 handler */
+        deliver_user_handler(regs, cur, sig, a);
+        return;   /* 只投递一个 */
+    }
+}
+
+/* ---------- 用户 handler 投递 ---------- */
+static void deliver_user_handler(struct registers *regs, struct task *cur,
+                                  int sig, struct sig_action *a) {
+    uint32_t old_esp = regs->user_esp;
+    uint32_t frame_size = sizeof(struct sigframe);   /* 60 */
+    uint32_t new_esp = (old_esp - frame_size) & ~3u;
+
+    if (check_user_range(new_esp, frame_size) < 0) {
+        kprintf("[SIG] pid=%d handler stack overflow\n", cur->pid);
+        task_terminate(cur, 128 + SIGSEGV);
+        proc_unref(cur);
+        schedule();
+        return;
+    }
+
+    struct sigframe f = {
+        .ret_addr       = a->restorer,
+        .sig            = (uint32_t)sig,
+        .saved_edi      = regs->edi,
+        .saved_esi      = regs->esi,
+        .saved_ebp      = regs->ebp,
+        .saved_ebx      = regs->ebx,
+        .saved_edx      = regs->edx,
+        .saved_ecx      = regs->ecx,
+        .saved_eax      = regs->eax,
+        .saved_eip      = regs->eip,
+        .saved_cs       = regs->cs,
+        .saved_eflags   = regs->eflags,
+        .saved_user_esp = regs->user_esp,
+        .saved_user_ss  = regs->user_ss,
+        .saved_mask     = cur->blocked_signals,
+    };
+
+    if (copy_to_user(new_esp, &f, sizeof(f)) < 0) {
+        kprintf("[SIG] pid=%d cannot write sigframe\n", cur->pid);
+        task_terminate(cur, 128 + SIGSEGV);
+        proc_unref(cur);
+        schedule();
+        return;
+    }
+
+    regs->eip      = a->handler;
+    regs->user_esp = new_esp;
+
+    cur->blocked_signals |= a->mask | (1u << sig);
+}
+
+/* ---------- sigreturn ---------- */
+void sys_sigreturn(struct registers *regs) {
+    struct task *cur = get_current_task();
+    if (!cur) return;
+
+    uint32_t frame_esp = regs->user_esp;
+    struct sigframe f;
+
+    if (check_user_range(frame_esp, sizeof(f)) < 0 ||
+        copy_from_user(&f, frame_esp, sizeof(f)) < 0) {
+        kprintf("[SIG] pid=%d bad sigreturn frame\n", cur->pid);
+        task_terminate(cur, 128 + SIGSEGV);
+        proc_unref(cur);
+        schedule();
+        return;
+    }
+
+    /* 恢复所有寄存器 */
+    regs->edi       = f.saved_edi;
+    regs->esi       = f.saved_esi;
+    regs->ebp       = f.saved_ebp;
+    regs->ebx       = f.saved_ebx;
+    regs->edx       = f.saved_edx;
+    regs->ecx       = f.saved_ecx;
+    regs->eax       = f.saved_eax;
+    regs->eip       = f.saved_eip;
+    regs->cs        = f.saved_cs;
+    regs->eflags    = f.saved_eflags;
+    regs->user_esp  = f.saved_user_esp;
+    regs->user_ss   = f.saved_user_ss;
+
+    cur->blocked_signals = f.saved_mask;
+}
+
+/* ---------- 系统调用：sigaction ---------- */
+int sys_sigaction(int sig, void *new_user, void *old_user) {
+    if (sig < 1 || sig > 31) return EINVAL;
+    if (sig == SIGKILL || sig == SIGSTOP) return EINVAL;
+
+    struct task *cur = get_current_task();
+    if (!cur) return EINVAL;
+
+    /* 读旧值 */
+    if (old_user) {
+        struct user_sigaction old = {
+            .sa_handler  = cur->sig_actions[sig].handler,
+            .sa_mask     = cur->sig_actions[sig].mask,
+            .sa_flags    = cur->sig_actions[sig].flags,
+            .sa_restorer = cur->sig_actions[sig].restorer,
+        };
+        if (copy_to_user((uint32_t)old_user, &old, sizeof(old)) < 0) {
+            return EFAULT;
+        }
+    }
+
+    /* 写新值 */
+    if (new_user) {
+        struct user_sigaction n;
+        if (copy_from_user(&n, (uint32_t)new_user, sizeof(n)) < 0) {
+            return EFAULT;
+        }
+        /* handler 校验：DFL/IGN 或用户空间地址 */
+        if (n.sa_handler != SIG_DFL && n.sa_handler != SIG_IGN) {
+            if (n.sa_handler < USER_SPACE_START) return EINVAL;
+        }
+        cur->sig_actions[sig].handler  = n.sa_handler;
+        cur->sig_actions[sig].mask     = n.sa_mask;
+        cur->sig_actions[sig].flags    = n.sa_flags;
+        cur->sig_actions[sig].restorer = n.sa_restorer;
+    }
+
+    return OK;
+}
+
+/* ---------- 系统调用：sigprocmask ---------- */
+int sys_sigprocmask(int how, uint32_t *set_user, uint32_t *old_user) {
+    struct task *cur = get_current_task();
+    if (!cur) return EINVAL;
+
+    if (old_user) {
+        uint32_t old = cur->blocked_signals;
+        if (copy_to_user((uint32_t)old_user, &old, sizeof(old)) < 0) {
+            return EFAULT;
+        }
+    }
+
+    if (!set_user) return OK;
+
+    uint32_t set;
+    if (copy_from_user(&set, (uint32_t)set_user, sizeof(set)) < 0) {
+        return EFAULT;
+    }
+
+    /* SIGKILL / SIGSTOP 永远不可屏蔽 */
+    set &= ~((1u << SIGKILL) | (1u << SIGSTOP));
+
+    switch (how) {
+        case SIG_BLOCK:   cur->blocked_signals |= set;  break;
+        case SIG_UNBLOCK: cur->blocked_signals &= ~set; break;
+        case SIG_SETMASK: cur->blocked_signals  = set;  break;
+        default: return EINVAL;
+    }
+    return OK;
+}
+
+/* ---------- 前台信号 ---------- */
+void signal_foreground(int sig) {
+    struct task *fg = tty_get_foreground();
+    if (!fg) return;
+    if (fg->zombie) return;
+
+    if (sig == SIGKILL) {
+        task_terminate(fg, 128 + SIGKILL);
+        proc_unref(fg);
+        return;
+    }
+
+    fg->pending_signals |= (1u << sig);
+
+    /* 唤醒阻塞中的前台，让它尽快处理信号 */
+    if (fg->state == TASK_STATE_SLEEPING ||
+        fg->state == TASK_STATE_WAITING_CHILD) {
+        remove_task_from_queue(&blocked_list_head, &blocked_list_tail, fg);
+        fg->state = TASK_STATE_READY;
+        enqueue_task(&ready_queue_head, &ready_queue_tail, fg);
+    }
+}
 ==================== ./src/kernel/isr.c ====================
 #include <isr.h>
 #include <syscall.h>
@@ -3594,6 +4711,7 @@ void tss_set_kernel_stack(uint32_t esp0) {
 #include <stddef.h>
 #include <keyboard.h>
 #include <io.h>
+#include <signal.h>
 
 extern void sleep_tick(void);
 
@@ -3607,22 +4725,28 @@ void isr_handler(struct registers *regs) {
 
     if (from_user) {
         struct task *cur = get_current_task();
-        kprintf("[USER FAULT] pid=%d int=%d err=0x%x cr2=0x%x eip=0x%x\n",
+        int sig = signal_from_exception(regs->int_no);
+
+        kprintf("[USER FAULT] pid=%d int=%d sig=%d cr2=0x%x eip=0x%x\n",
                 cur ? (int)cur->pid : -1,
-                (int)regs->int_no, regs->err_code, cr2, regs->eip);
+                (int)regs->int_no, sig, cr2, regs->eip);
 
         if (cur) {
-            /* 标记 zombie，唤醒等待者，恢复前台 */
-            task_terminate(cur, 128 + (int)regs->int_no);
+            struct sig_action *a = &cur->sig_actions[sig];
 
-            /* 释放 self 引用。refcount 归零时进 graveyard */
-            proc_unref(cur);
+            if (a->handler == SIG_DFL || a->handler == SIG_IGN) {
+                /* 无 handler（或忽略）：直接终止 */
+                task_terminate(cur, 128 + sig);
+                proc_unref(cur);
+                schedule();
+                return;   /* 不返回 */
+            }
+
+            /* 有 handler：投递 */
+            cur->pending_signals |= (1u << sig);
+            signal_deliver_pending(regs, cur);
+            return;
         }
-
-        /* 让出 CPU。current 是 zombie，schedule 会跳过它 */
-        schedule();
-
-        /* schedule 不会返回（切到别的进程） */
     }
 
     /* 内核态异常：无法恢复 */
@@ -3661,6 +4785,10 @@ void irq_handler(struct registers *regs) {
     } else if (regs->int_no == 33) {
         keyboard_handle_irq();
     }
+    struct task *cur = get_current_task();
+    if (cur) {
+        signal_deliver_pending(regs, cur);
+    }
 }
 
 /* 系统调用处理入口 */
@@ -3688,11 +4816,21 @@ void isr_syscall_handler(struct registers *regs) {
 #include <device.h>
 #include <keyboard.h>
 #include <tty.h>
+#include <ipc.h>
+
+
+static const char *shell_env[] = {
+    "PATH=SYS:/",
+    "HOME=SYS:/",
+    "TERM=helium",
+    NULL,
+};
 
 /* ---------- 内部辅助：从一个 ELF 路径创建进程 ---------- */
 
 static struct task *create_task_from_elf(struct fat32_volume *vol,
-                                          const char *path) {
+                                          const char *path,
+                                          int envc, char *const envp[]) {
     /* 1. 创建页目录 */
     uint32_t *pgd = vmm_create_process_page_directory();
     if (!pgd) {
@@ -3709,10 +4847,13 @@ static struct task *create_task_from_elf(struct fat32_volume *vol,
     }
 
     /* 3. 创建 PCB */
-    struct task *task = task_create(entry, pgd, 0, NULL, 
-                                SPAWN_FD_INHERIT,
-                                SPAWN_FD_INHERIT,
-                                SPAWN_FD_INHERIT);
+    struct task *task = task_create(entry, pgd, 0, NULL,
+                                    envc, envp,
+                                    SPAWN_FD_INHERIT,
+                                    SPAWN_FD_INHERIT,
+                                    SPAWN_FD_INHERIT,
+                                    -1, -1, -1);
+
     if (!task) {
         kprintf("[KERNEL] Failed to create task for %s\n", path);
         return NULL;
@@ -3724,7 +4865,7 @@ static struct task *create_task_from_elf(struct fat32_volume *vol,
 /* ---------- 创建 IDLE 进程 ---------- */
 
 void create_idle_task(struct fat32_volume *vol) {
-    struct task *task = create_task_from_elf(vol, "/IDLE.ELF");
+    struct task *task = create_task_from_elf(vol, "/IDLE.ELF", 0, NULL);
     if (!task) {
         kprintf("[KERNEL] FATAL: cannot create idle task\n");
         while (1) __asm__("hlt");
@@ -3742,7 +4883,7 @@ void create_idle_task(struct fat32_volume *vol) {
 /* ---------- 创建 SHELL 进程 ---------- */
 
 void create_shell_task(struct fat32_volume *vol) {
-    struct task *task = create_task_from_elf(vol, "/SHELL.ELF");
+    struct task *task = create_task_from_elf(vol, "/SHELL.ELF", 3, (char *const*)shell_env);
     if (!task) {
         kprintf("[KERNEL] FATAL: cannot create shell task\n");
         while (1) __asm__("hlt");
@@ -3764,6 +4905,7 @@ void kmain(uint32_t magic, uint32_t addr) {
     serial_init();
     screen_init();
     tty_init();
+    ipc_init();
 
     kprintf("========================================\n");
     kprintf(" HeliumOS Kernel Started (1GB/3GB)\n");
@@ -4188,6 +5330,7 @@ void proc_unref(struct task *t) {
 /* 真正释放：pgd + 内核栈 + PCB 本身 */
 void proc_free_pcb(struct task *t) {
     if (!t) return;
+    kprintf("[TASK] Process %d is cleaned.\n", t->pid);
 
     /* 先从所有队列里摘掉，再释放内存 */
     remove_task_from_queue(&blocked_list_head, &blocked_list_tail, t);
@@ -4949,12 +6092,16 @@ int split_volume_prefix(const char *input, char *vol_name, int name_size,
 #include <fs.h>
 #include <device.h>
 #include <proc.h>
+#include <signal.h>
+#include <ipc.h>
 
 /* ---------- I/O slot（进程的标准流端点） ---------- */
 
 #define IO_SLOT_DEFAULT   0   /* 用内核默认（tty） */
 #define IO_SLOT_FILE      1   /* 绑到一个 fs_handle */
 #define IO_SLOT_NULL      2   /* 丢弃 */
+#define IO_SLOT_PIPE_READ   3
+#define IO_SLOT_PIPE_WRITE  4
 
 struct io_slot {
     uint8_t  type;
@@ -4973,12 +6120,16 @@ struct io_slot {
 #define TASK_STATE_WAITING_CHILD 2   /* 等子进程退出（waitpid） */
 #define TASK_STATE_SLEEPING      3   /* 睡眠中（sleep） */
 #define TASK_STATE_ZOMBIE        4   /* 已退出，等父进程回收 */
+#define TASK_STATE_WAITING_PIPE  5
 
 #define TIME_SLICE_TICKS 10
 
 /* 传参 */
 #define ARGV_MAX  16
 #define ARG_MAX   256
+
+#define ENVP_MAX  16
+#define ENV_MAX   256
 
 /* 就绪队列（在 task.c 中定义） */
 extern struct task *ready_queue_head;
@@ -5043,6 +6194,17 @@ struct task {
     struct io_slot stdin_slot;
     struct io_slot stdout_slot;
     struct io_slot stderr_slot;
+
+    /* ---------- 信号 ---------- */
+    uint32_t pending_signals;            /* 位图：bit N = 信号 N pending */
+    uint32_t blocked_signals;            /* 信号掩码 */
+    struct sig_action sig_actions[32];   /* 每信号的 handler */
+
+    /* ---------- 状态字段扩展 ---------- */
+    struct pipe *wait_pipe;   /* WAITING_PIPE 时有效 */
+
+    /* ---------- IPC ---------- */
+    struct ipc_handle ipc_handles[IPC_MAX_HANDLES];
 };
 
 void enqueue_task(struct task **head, struct task **tail, struct task *task);
@@ -5056,11 +6218,22 @@ void wake_up_waiters(struct task *target);
 
 struct task *task_create(uint32_t entry_point, uint32_t *pgd,
                          int argc, char *const argv[],
-                         int redir_in_fd, int redir_out_fd, int redir_err_fd);
+                         int envc, char *const envp[],
+                         int redir_in_fd, int redir_out_fd, int redir_err_fd,
+                         int redir_in_pipe, int redir_out_pipe, int redir_err_pipe);
 struct task *get_current_task(void);
 void set_current_task(struct task *task);
 void scheduler_start(void) __attribute__((noreturn));
 void task_exit(struct task *task, int status);
+
+/* 强制终止进程（不释放 self 引用——由调用者决定）。
+ * 语义：
+ *   - 标记 zombie
+ *   - 从所有队列移除，挂到 blocked_list
+ *   - 唤醒等待者
+ *   - 如果它是键盘前台，恢复父进程为前台
+ * 被 kill 或用户异常时使用。 */
+void task_terminate(struct task *t, int status);
 
 #endif
 ==================== ./src/include/scheduler.h ====================
@@ -5173,6 +6346,75 @@ void kprintf(const char *fmt, ...);
 void vkprintf(const char *fmt, va_list args);
 
 #endif
+==================== ./src/include/ipc.h ====================
+#ifndef IPC_H
+#define IPC_H
+
+#include <stdint.h>
+
+/* ---------- 常量 ---------- */
+#define IPC_MAX_PIPES     16
+#define IPC_MAX_HANDLES   8
+#define PIPE_BUF_SIZE     4096
+
+/* ---------- handle 类型 ---------- */
+#define IPC_PIPE_READ     1
+#define IPC_PIPE_WRITE    2
+
+/* ---------- pipe ---------- */
+struct pipe {
+    uint8_t  buf[PIPE_BUF_SIZE];
+    uint32_t read_pos;
+    uint32_t write_pos;
+    uint32_t count;
+    uint32_t refcount;
+    uint8_t  readers;
+    uint8_t  writers;
+    uint8_t  used;
+    uint8_t  reserved;
+};
+
+/* ---------- 每进程句柄 ---------- */
+struct ipc_handle {
+    uint8_t       used;
+    uint8_t       type;
+    uint16_t      reserved;
+    struct pipe  *pipe;
+};
+
+/* 前向声明 */
+struct task;
+
+/* ---------- 生命周期 ---------- */
+void  ipc_init(void);
+void  ipc_release_all(struct task *t);
+
+/* ---------- pipe 对象 ---------- */
+struct pipe *pipe_alloc(void);
+void         pipe_free(struct pipe *p);
+
+/* ---------- 句柄分配 ---------- */
+int   ipc_handle_alloc(struct task *t, struct pipe *p, int type);
+void  ipc_handle_close(struct task *t, int h);
+
+/* ---------- 读写 ---------- */
+int   pipe_read(struct pipe *p, uint8_t *buf, uint32_t n);
+int   pipe_write(struct pipe *p, const uint8_t *buf, uint32_t n);
+
+/* ---------- spawn 用：复制父进程的 handle 到子进程 ---------- */
+int   ipc_dup_handle(struct task *parent, int parent_h, struct task *child,
+                     int *out_child_h, int *out_child_type);
+
+/* ---------- 唤醒 ---------- */
+void  pipe_wakeup_all(struct pipe *p);
+
+/* ---------- 系统调用 ---------- */
+int   sys_pipe(int *fds_user);
+int   sys_pipe_read(int h, void *buf_user, uint32_t n);
+int   sys_pipe_write(int h, const void *buf_user, uint32_t n);
+int   sys_ipc_close(int h);
+
+#endif
 ==================== ./src/include/heap.h ====================
 #ifndef HEAP_H
 #define HEAP_H
@@ -5257,6 +6499,28 @@ void serial_write_string(const char *str);
 
 // 检查发送缓冲区是否为空（非阻塞发送用）
 int serial_is_transmit_empty(void);
+
+#endif
+==================== ./src/include/uaccess.h ====================
+#ifndef UACCESS_H
+#define UACCESS_H
+
+#include <stdint.h>
+
+/* 检查 [addr, addr+size) 是否完全在用户空间且已映射。
+ * 用 current_task->pgd。
+ * 返回 0 成功，-1 失败。 */
+int check_user_range(uint32_t addr, uint32_t size);
+
+/* 从用户空间拷贝字符串到内核缓冲。跨页时逐页检查。
+ * 返回拷贝的字节数（含 '\0'），失败返回 -1。 */
+int strncpy_from_user(char *dst, const char *src, uint32_t max_len);
+
+/* 定长拷贝：用户 → 内核。返回 0 成功，-1 失败。 */
+int copy_from_user(void *dst, uint32_t u_addr, uint32_t n);
+
+/* 定长拷贝：内核 → 用户。返回 0 成功，-1 失败。 */
+int copy_to_user(uint32_t u_addr, const void *src, uint32_t n);
 
 #endif
 ==================== ./src/include/fat32.h ====================
@@ -5548,6 +6812,75 @@ void idt_init(void);
 
 /* 设置中断门 */
 void idt_set_gate(uint8_t num, uint32_t base, uint16_t sel, uint8_t flags);
+
+#endif
+==================== ./src/include/signal.h ====================
+#ifndef SIGNAL_H
+#define SIGNAL_H
+
+#include <stdint.h>
+
+/* ---------- 信号编号（标准 POSIX i386） ---------- */
+#define SIGHUP      1
+#define SIGINT      2
+#define SIGQUIT     3
+#define SIGILL      4
+#define SIGTRAP     5
+#define SIGABRT     6
+#define SIGBUS      7
+#define SIGFPE      8
+#define SIGKILL     9    /* 不可捕获/阻塞/忽略 */
+#define SIGUSR1     10
+#define SIGSEGV     11
+#define SIGUSR2     12
+#define SIGPIPE     13
+#define SIGALRM     14
+#define SIGTERM     15
+#define SIGCHLD     17
+#define SIGCONT     18
+#define SIGSTOP     19   /* 不可捕获/阻塞/忽略 */
+#define SIGTSTP     20
+
+/* ---------- 特殊 handler 值 ---------- */
+#define SIG_DFL     0
+#define SIG_IGN     1
+
+/* ---------- sigprocmask 的 how ---------- */
+#define SIG_BLOCK    0
+#define SIG_UNBLOCK  1
+#define SIG_SETMASK  2
+
+/* ---------- 内核态 sigaction ---------- */
+struct sig_action {
+    uint32_t handler;
+    uint32_t mask;
+    uint32_t flags;
+    uint32_t restorer;
+};
+
+/* 前向声明 */
+struct task;
+struct registers;
+
+/* ---------- 核心 API ---------- */
+
+/* 从内核态返回用户态前投递 pending signals。
+ * 可能：
+ *   - 投递用户 handler（改 regs->eip / user_esp）
+ *   - 默认行为终止进程（调 task_terminate + schedule，不返回）
+ *   - 无 pending 或全被屏蔽 → 立即返回 */
+void signal_deliver_pending(struct registers *regs, struct task *cur);
+
+/* 用户异常 int_no → 信号编号 */
+int signal_from_exception(int int_no);
+
+/* 给键盘前台进程发信号（Ctrl+C 用） */
+void signal_foreground(int sig);
+
+/* ---------- 系统调用实现 ---------- */
+int  sys_sigaction(int sig, void *new_user, void *old_user);
+int  sys_sigprocmask(int how, uint32_t *set_user, uint32_t *old_user);
+void sys_sigreturn(struct registers *regs);
 
 #endif
 ==================== ./src/include/elf.h ====================
@@ -5944,6 +7277,17 @@ uint32_t pmm_get_free_count(void);
 #define SYS_GETCWD        61
 #define SYS_CHDIR         62
 
+/* ========== 信号 (71~79) ========== */
+#define SYS_SIGACTION     71
+#define SYS_SIGRETURN     72
+#define SYS_SIGPROCMASK   73
+
+/* ========== IPC (81~89) ========== */
+#define SYS_PIPE         81
+#define SYS_PIPE_READ    82
+#define SYS_PIPE_WRITE   83
+#define SYS_IPC_CLOSE    84
+
 /* 系统调用处理函数声明 */
 void syscall_handler(struct registers *regs);
 
@@ -5955,6 +7299,7 @@ void syscall_handler(struct registers *regs);
 #include <stddef.h>
 #include <device.h>
 #include <errno.h>
+#include <signal.h>
 
 #define KEYBOARD_DATA_PORT   0x60
 #define KB_BUF_SIZE          128
@@ -5982,6 +7327,13 @@ static char scancode_to_ascii(uint8_t scancode) {
 
     // for test ESC
     if (scancode == 0x01) return 27;
+
+    /* Ctrl+C */
+    if (ctrl_pressed && scancode == 0x2E) {
+        extern void signal_foreground(int sig);
+        signal_foreground(SIGINT);
+        return 0;
+    }
 
     // ===== 2. 忽略其他释放码 =====
     if (scancode & 0x80) return 0;
@@ -8181,24 +9533,38 @@ static void setup_slot(struct io_slot *child_slot,
                        const struct io_slot *parent_slot,
                        struct task *child,
                        struct task *parent,
-                       int redir_fd) {
-    /* 1. NULL：丢弃 */
+                       int redir_fd,
+                       int redir_pipe) {
+    /* 0. pipe 优先 */
+    if (redir_pipe >= 0 && parent) {
+        int new_h, new_type;
+        if (ipc_dup_handle(parent, redir_pipe, child,
+                           &new_h, &new_type) == 0) {
+            if (new_type == IPC_PIPE_READ) {
+                child_slot->type = IO_SLOT_PIPE_READ;
+            } else {
+                child_slot->type = IO_SLOT_PIPE_WRITE;
+            }
+            child_slot->fd = new_h;
+            return;
+        }
+        /* 复制失败 → fallback */
+    }
+
+    /* 1. NULL */
     if (redir_fd == SPAWN_FD_NULL) {
         child_slot->type = IO_SLOT_NULL;
-        child_slot->fd   = -1;
+        child_slot->fd = -1;
         return;
     }
     /* 2. TTY */
     if (redir_fd == SPAWN_FD_TTY) {
         child_slot->type = IO_SLOT_DEFAULT;
-        child_slot->fd   = -1;
+        child_slot->fd = -1;
         return;
     }
 
-    /* 无父进程（内核早期创建 idle/shell）：保持 DEFAULT */
-    if (!parent) {
-        return;
-    }
+    if (!parent) return;
 
     /* 3. 显式 fd */
     if (redir_fd >= 0) {
@@ -8207,40 +9573,39 @@ static void setup_slot(struct io_slot *child_slot,
         fd_t new_fd = fs_dup_handle(parent, redir_fd, child);
         if (new_fd >= 0) {
             child_slot->type = IO_SLOT_FILE;
-            child_slot->fd   = new_fd;
+            child_slot->fd = new_fd;
         }
         return;
     }
 
-    /* 3. INHERIT：继承父 slot */
+    /* 4. INHERIT */
     if (!parent_slot) return;
-
     child_slot->type = parent_slot->type;
-    child_slot->fd   = parent_slot->fd;
-
+    child_slot->fd = parent_slot->fd;
     if (parent_slot->type == IO_SLOT_FILE) {
-        /* 父 slot 指向 fs_handle，子在 fs_handles 里复制一份 */
         if (parent_slot->fd < 0 || parent_slot->fd >= FS_MAX_HANDLES) {
             child_slot->type = IO_SLOT_DEFAULT;
-            child_slot->fd   = -1;
+            child_slot->fd = -1;
             return;
         }
         fd_t new_fd = fs_dup_handle(parent, parent_slot->fd, child);
-        if (new_fd >= 0) {
-            child_slot->fd = new_fd;
-        } else {
-            /* 复制失败，fallback */
-            child_slot->type = IO_SLOT_DEFAULT;
-            child_slot->fd   = -1;
-        }
+        if (new_fd >= 0) child_slot->fd = new_fd;
+        else { child_slot->type = IO_SLOT_DEFAULT; child_slot->fd = -1; }
     }
-    /* DEFAULT / NULL：直接继承 type，fd 保持 -1（已经是） */
+    /* PIPE 类型暂不继承（in_pipe 显式传） */
+    if (parent_slot->type == IO_SLOT_PIPE_READ ||
+        parent_slot->type == IO_SLOT_PIPE_WRITE) {
+        child_slot->type = IO_SLOT_DEFAULT;
+        child_slot->fd = -1;
+    }
 }
 
 /* ---------- 进程创建 ---------- */
 struct task *task_create(uint32_t entry_point, uint32_t *pgd,
                          int argc, char *const argv[],
-                         int redir_in_fd, int redir_out_fd, int redir_err_fd) {
+                         int envc, char *const envp[],
+                         int redir_in_fd, int redir_out_fd, int redir_err_fd,
+                         int redir_in_pipe, int redir_out_pipe, int redir_err_pipe) {
     /* 1. 分配所有物理资源，任何一步失败都回滚 */
     struct task *task = (struct task*)pmm_alloc_page();
     if (!task) {
@@ -8300,6 +9665,24 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd,
     task->stderr_slot.type = IO_SLOT_DEFAULT;
     task->stderr_slot.fd   = -1;
 
+    /* 初始化信号 */
+    task->pending_signals = 0;
+    task->blocked_signals = 0;
+    for (int i = 0; i < 32; i++) {
+        task->sig_actions[i].handler  = SIG_DFL;
+        task->sig_actions[i].mask     = 0;
+        task->sig_actions[i].flags    = 0;
+        task->sig_actions[i].restorer = 0;
+    }
+
+    /* 初始化 IPC */
+    for (int i = 0; i < IPC_MAX_HANDLES; i++) {
+        task->ipc_handles[i].used = 0;
+        task->ipc_handles[i].pipe = NULL;
+    }
+    task->wait_pipe = NULL;
+
+
     task->kernel_stack_phys = kernel_stack;
     task->user_stack_virt = 0x7FFFE000;
 
@@ -8338,25 +9721,41 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd,
         task->dev_handles[i].used = 0;
     }
 
-    /* 8. 在用户栈上构造 argc/argv
+        /* 8. 在用户栈上构造 argc/argv/envp
      *
      * 栈布局（从高地址到低地址）：
-     *   user_stack_virt (0x7FFFE000) ← 栈顶
-     *     "argv[0]\0"
-     *     "argv[1]\0"
-     *     ...
-     *     "argv[N-1]\0"
-     *     [4 字节对齐]
-     *     ptr(argv[0]), ptr(argv[1]), ..., NULL
-     *     argc
+     *   环境变量字符串
+     *   参数字符串
+     *   [4 字节对齐]
+     *   envp[0..envc-1], NULL
+     *   argv[0..argc-1], NULL
+     *   argc
      *   ← user_sp（新的 esp）
      */
     uint32_t user_sp = task->user_stack_virt;
     uint32_t arg_addrs[ARGV_MAX];
+    uint32_t env_addrs[ENVP_MAX];
     int valid_argc = 0;
+    int valid_envc = 0;
 
+    /* ----- 环境变量字符串（最高地址） ----- */
+    if (envc > ENVP_MAX) envc = ENVP_MAX;
+    if (envc > 0 && envp) {
+        for (int i = 0; i < envc; i++) {
+            if (!envp[i]) break;
+            uint32_t len = strlen(envp[i]) + 1;
+            if (len > ENV_MAX) len = ENV_MAX;
+            user_sp -= len;
+            if (write_to_child_stack(pgd, user_sp, envp[i], len) < 0) {
+                user_sp += len;
+                break;
+            }
+            env_addrs[valid_envc++] = user_sp;
+        }
+    }
+
+    /* ----- 参数字符串 ----- */
     if (argc > ARGV_MAX) argc = ARGV_MAX;
-
     if (argc > 0 && argv) {
         for (int i = 0; i < argc; i++) {
             if (!argv[i]) break;
@@ -8375,7 +9774,15 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd,
     /* 4 字节对齐 */
     user_sp &= ~3u;
 
-    /* argv 数组 + NULL */
+    /* ----- envp 数组 + NULL ----- */
+    user_sp -= (valid_envc + 1) * 4;
+    uint32_t envp_arr = user_sp;
+    for (int i = 0; i < valid_envc; i++) {
+        write_u32_to_child(pgd, envp_arr + i * 4, env_addrs[i]);
+    }
+    write_u32_to_child(pgd, envp_arr + valid_envc * 4, 0);
+
+    /* ----- argv 数组 + NULL ----- */
     user_sp -= (valid_argc + 1) * 4;
     uint32_t argv_arr = user_sp;
     for (int i = 0; i < valid_argc; i++) {
@@ -8383,7 +9790,7 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd,
     }
     write_u32_to_child(pgd, argv_arr + valid_argc * 4, 0);
 
-    /* argc */
+    /* ----- argc ----- */
     user_sp -= 4;
     write_u32_to_child(pgd, user_sp, (uint32_t)valid_argc);
 
@@ -8396,15 +9803,13 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd,
 
     setup_slot(&task->stdin_slot,
                parent ? &parent->stdin_slot : NULL,
-               task, parent, redir_in_fd);
-
+               task, parent, redir_in_fd, redir_in_pipe);
     setup_slot(&task->stdout_slot,
                parent ? &parent->stdout_slot : NULL,
-               task, parent, redir_out_fd);
-
+               task, parent, redir_out_fd, redir_out_pipe);
     setup_slot(&task->stderr_slot,
                parent ? &parent->stderr_slot : NULL,
-               task, parent, redir_err_fd);
+               task, parent, redir_err_fd, redir_err_pipe);
 
 
     /* 10. 构造内核栈（iret 帧的 user esp 指向 argc 位置） */
@@ -8478,6 +9883,37 @@ void scheduler_start(void) {
     while (1) __asm__("cli; hlt");
 }
 
+/* ---------- 强制终止 ---------- */
+void task_terminate(struct task *t, int status) {
+    if (!t) return;
+    if (t->zombie) return;
+
+    kprintf("[TASK] Process %d is terminated with status %d\n", t->pid, status);
+
+    t->exit_status = status;
+    t->zombie = 1;
+    t->state = TASK_STATE_ZOMBIE;
+
+    /* 从任何队列移除 */
+    remove_task_from_queue(&ready_queue_head, &ready_queue_tail, t);
+    remove_task_from_queue(&blocked_list_head, &blocked_list_tail, t);
+
+    /* 加入 blocked_list 作为僵尸 */
+    enqueue_task(&blocked_list_head, &blocked_list_tail, t);
+
+    /* 唤醒所有等它的 */
+    wake_up_waiters(t);
+
+    /* 如果它是键盘前台，恢复父进程为前台 */
+    if (tty_get_foreground() == t) {
+        struct task *parent = NULL;
+        if (t->creator_pid != 0) {
+            parent = proc_find_by_pid(t->creator_pid);
+        }
+        tty_set_foreground(parent);
+    }
+}
+
 /* task_exit: 进程退出。
  *
  * 不释放 kernel_stack / pgd / PCB——这些由 proc_free_pcb 释放。
@@ -8498,6 +9934,7 @@ void task_exit(struct task *task, int status) {
     /* 释放自己持有的所有句柄（对子进程的引用） */
     fs_release_all(task);
     dev_release_all(task);
+    ipc_release_all(task);
     proc_release_all_handles(task);
 
     /* 从就绪队列移除 */
