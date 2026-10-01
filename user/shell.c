@@ -1,6 +1,7 @@
 #include "syscall.h"
 #include "stdio.h"
 #include "string.h"
+#include "signal.h"
 
 /* VGA 颜色常量（用户态独立定义） */
 #define VGA_BLACK        0
@@ -196,6 +197,10 @@ static void cmd_touch(int argc, char **argv) {
 
 void main(int _argc, char **_argv) {
     (void)_argc; (void)_argv;
+    /* shell 忽略 SIGINT —— 按 Ctrl+C 不杀 shell */
+    struct sigaction sa = {0};
+    sa.sa_handler = SIG_IGN;
+    sigaction(SIGINT, &sa, 0);
     printf("Welcome to HeliumOS Shell!\n");
     printf("Type 'help' for commands.\n\n");
 

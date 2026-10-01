@@ -1,15 +1,12 @@
 /* user/test_kill.c
- * 测试 kill 路径：
- *   T1: spawn + kill(正在 sleep) + wait + close   → 走 sys_kill 的完整路径
- *   T2: spawn + kill + close（不 wait）            → 检查 refcount 是否正常
- *   T3: 连续 20 轮，观察是否稳定（内存不泄漏、不崩）
- *   T4: kill 后 wait 立即返回（不等超时）
+ * 测试 kill 路径。
  */
 
 #include "syscall.h"
 #include "stdio.h"
 #include "string.h"
 #include "errno.h"
+#include "signal.h"
 
 #define C_BLACK   0
 #define C_GREEN   10
@@ -42,7 +39,6 @@ static void section(const char *title) {
     tty_set_color(C_GRAY, C_BLACK);
 }
 
-/* 生成一个 "PID" 用于 log，不通过内核 API */
 static int spawn_sleeper(void) {
     int h = spawn("SLEEPER.ELF", NULL, NULL);
     if (h < 0) {
@@ -53,30 +49,31 @@ static int spawn_sleeper(void) {
     return h;
 }
 
-/* ---------- T1: kill 一个正在 sleep 的进程 + wait ---------- */
-
+/* ---------- T1: kill(正在 sleep) + wait ----------
+ *
+ * SIGTERM = 15 → 进 pending → sleeper 被唤醒 → sleep 返回 EINTR
+ * → 无 handler（SIG_DFL）→ 终止，退出码 = 128 + 15 = 143
+ */
 static void test_kill_sleeping(void) {
-    section("kill sleeping + wait");
+    section("kill sleeping + wait (SIGTERM)");
 
     int h = spawn_sleeper();
     if (h < 0) { fail("spawn", "returned error"); return; }
     ok("spawn SLEEPER.ELF");
 
-    /* 让 sleeper 进入 sleep 状态（肯定在 blocked_list 里） */
     sleep_ms(50);
 
-    int r = kill(h, 42);
-    if (r == OK) ok("kill(h, 42)");
+    int r = kill(h, SIGTERM);
+    if (r == OK) ok("kill(h, SIGTERM)");
     else         fail("kill", "returned error");
 
-    /* wait 应该立即返回（进程已是僵尸） */
     int status = -1;
     int wr = wait(h, &status, 0);
-    if (wr == OK && status == 42) {
-        ok("wait returns exit_status=42");
+    if (wr == OK && status == 143) {
+        ok("wait returns status=143 (128+SIGTERM)");
     } else {
         char buf[64];
-        snprintf(buf, sizeof(buf), "wr=%d status=%d", wr, status);
+        snprintf(buf, sizeof(buf), "wr=%d status=%d (expect 143)", wr, status);
         fail("wait", buf);
     }
 
@@ -85,10 +82,10 @@ static void test_kill_sleeping(void) {
     else          fail("process_close", "returned error");
 }
 
-/* ---------- T2: kill 后直接 close（不 wait） ---------- */
+/* ---------- T2: kill(SIGKILL) 后直接 close ---------- */
 
 static void test_kill_then_close(void) {
-    section("kill then close (no wait)");
+    section("kill then close (no wait, SIGKILL)");
 
     int h = spawn_sleeper();
     if (h < 0) { fail("spawn", "returned error"); return; }
@@ -96,18 +93,19 @@ static void test_kill_then_close(void) {
 
     sleep_ms(50);
 
-    if (kill(h, 99) == OK) ok("kill(h, 99)");
-    else                    fail("kill", "returned error");
+    if (kill(h, SIGKILL) == OK) ok("kill(h, SIGKILL)");
+    else                        fail("kill", "returned error");
 
-    /* 不 wait，直接 close —— refcount 应该递减到 0，PCB 释放 */
     if (process_close(h) == OK) ok("process_close without wait");
-    else                         fail("process_close", "returned error");
+    else                        fail("process_close", "returned error");
 }
 
-/* ---------- T3: 连跑 20 轮 ---------- */
-
+/* ---------- T3: 连跑 20 轮 ----------
+ *
+ * SIGKILL = 9 → 立即终止，退出码 = 128 + 9 = 137
+ */
 static void test_stress(void) {
-    section("stress: 20 rounds of spawn/kill/wait/close");
+    section("stress: 20 rounds spawn/SIGKILL/wait/close");
 
     int failures = 0;
     for (int i = 0; i < 20; i++) {
@@ -115,10 +113,10 @@ static void test_stress(void) {
         if (h < 0) { failures++; continue; }
 
         sleep_ms(10);
-        if (kill(h, i) != OK) { failures++; process_close(h); continue; }
+        if (kill(h, SIGKILL) != OK) { failures++; process_close(h); continue; }
 
         int status = -1;
-        if (wait(h, &status, 0) != OK || status != i) {
+        if (wait(h, &status, 0) != OK || status != 137) {
             failures++;
             process_close(h);
             continue;
@@ -135,16 +133,15 @@ static void test_stress(void) {
     }
 }
 
-/* ---------- T4: wait 超时后进程仍在跑，再 kill ---------- */
+/* ---------- T4: wait 超时 → SIGKILL ---------- */
 
 static void test_wait_timeout_then_kill(void) {
-    section("wait timeout then kill");
+    section("wait timeout then SIGKILL");
 
     int h = spawn_sleeper();
     if (h < 0) { fail("spawn", "returned error"); return; }
     ok("spawn SLEEPER.ELF");
 
-    /* 不给它时间 sleep，直接 wait(50ms) —— 应该超时 */
     int status = 0;
     int wr = wait(h, &status, 50);
     if (wr == EAGAIN) {
@@ -155,15 +152,15 @@ static void test_wait_timeout_then_kill(void) {
         fail("wait timeout", buf);
     }
 
-    /* 现在 kill 它 */
-    if (kill(h, 7) == OK) ok("kill after timeout");
-    else                   fail("kill", "returned error");
+    if (kill(h, SIGKILL) == OK) ok("kill(SIGKILL) after timeout");
+    else                        fail("kill", "returned error");
 
-    /* 再 wait 应该立即成功 */
-    if (wait(h, &status, 100) == OK && status == 7) {
-        ok("wait after kill returns status=7");
+    if (wait(h, &status, 100) == OK && status == 137) {
+        ok("wait after SIGKILL returns 137");
     } else {
-        fail("wait after kill", "wrong result");
+        char buf[48];
+        snprintf(buf, sizeof(buf), "status=%d (expect 137)", status);
+        fail("wait after kill", buf);
     }
 
     process_close(h);
@@ -173,7 +170,6 @@ static void test_wait_timeout_then_kill(void) {
 
 void main(int argc, char **argv) {
     (void)argc; (void)argv;
-    // tty_clear();
 
     tty_set_color(C_YELLOW, C_BLACK);
     printf("========================================\n");

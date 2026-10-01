@@ -1,0 +1,708 @@
+diff --git a/linker.ld b/linker.ld
+index f43c98b..b3f7690 100644
+--- a/linker.ld
++++ b/linker.ld
+@@ -2,12 +2,13 @@ ENTRY(_start)
+ 
+ SECTIONS
+ {
+-    /* 内核加载到物理 1MB (0x100000)，虚拟地址等于物理地址 (平坦映射) */
+-    . = 1M;
++    . = 0x100000;
++
++    _kernel_start = .;
+ 
+     .text ALIGN(4K) :
+     {
+-        *(.multiboot)  /* 必须放在最前面，保证 GRUB 能识别 */
++        *(.multiboot)
+         *(.text)
+     }
+ 
+@@ -26,4 +27,6 @@ SECTIONS
+         *(COMMON)
+         *(.bss)
+     }
++
++    _kernel_end = .;
+ }
+\ No newline at end of file
+diff --git a/makefile b/makefile
+index 2dc9de2..34240f4 100644
+--- a/makefile
++++ b/makefile
+@@ -1,48 +1,104 @@
+-# 工具链
+-ASM = nasm
+-CC = gcc
+-LD = ld
+-QEMU = qemu-system-i386
+-GRUB_MKRESCUE = grub-mkrescue
+-
+-# 编译参数（32位，独立环境，无标准库，生成调试信息）
+-CFLAGS = -m32 -ffreestanding -nostdlib -fno-pie -Wall -Wextra -g -I src/include
++# ====================================================================
++# HeliumOS Makefile
++# 默认: 生成 ISO 镜像 (便于快速启动)
++# 可选: 生成 FAT32 硬盘镜像 (用于测试文件系统写入)
++# 头文件管理: 公共头文件位于 src/include，通过 -I 引用
++# ====================================================================
++
++# -------------------- 工具链 --------------------
++ASM     = nasm
++CC      = gcc
++LD      = ld
++QEMU    = qemu-system-i386
++GRUB    = grub-mkrescue
++
++# -------------------- 编译参数 --------------------
++CFLAGS  = -m32 -ffreestanding -nostdlib -fno-pie -Wall -Wextra -g \
++          -I src/include                          # 公共头文件路径
+ ASMFLAGS = -f elf32
+ LDFLAGS = -m elf_i386 -T linker.ld -nostdlib
+ 
+-# 目录
+-SRC_DIR = src
+-BUILD_DIR = build
+-BOOT_DIR = $(SRC_DIR)/boot
+-KERNEL_DIR = $(SRC_DIR)/kernel
++# -------------------- 目录结构 --------------------
++SRC_DIR     = src
++BUILD_DIR   = build
++BOOT_DIR    = $(SRC_DIR)/boot
++KERNEL_DIR  = $(SRC_DIR)/kernel
++DRIVERS_DIR = $(SRC_DIR)/drivers
++INCLUDE_DIR = $(SRC_DIR)/include
++MEMORY_DIR = $(SRC_DIR)/memory
++PROCESS_DIR = $(SRC_DIR)/process
++FILESYS_DIR = $(SRC_DIR)/fs
+ 
+-# 目标文件
++# -------------------- 目标文件列表 --------------------
+ OBJS = $(BUILD_DIR)/start.o \
+        $(BUILD_DIR)/kmain.o \
+-       $(BUILD_DIR)/screen.o
++       $(BUILD_DIR)/screen.o \
++       $(BUILD_DIR)/serial.o \
++	   $(BUILD_DIR)/tty.o \
++	   $(BUILD_DIR)/pmm.o \
++	   $(BUILD_DIR)/vmm.o \
++	   $(BUILD_DIR)/heap.o \
++	   $(BUILD_DIR)/gdt.o \
++	   $(BUILD_DIR)/tss.o \
++	   $(BUILD_DIR)/task.o \
++	   $(BUILD_DIR)/proc.o \
++	   $(BUILD_DIR)/signal.o \
++	   $(BUILD_DIR)/printf.o \
++	   $(BUILD_DIR)/string.o \
++	   $(BUILD_DIR)/idt.o \
++	   $(BUILD_DIR)/isr.o \
++	   $(BUILD_DIR)/volume.o \
++       $(BUILD_DIR)/path.o \
++	   $(BUILD_DIR)/ata.o \
++	   $(BUILD_DIR)/fat32.o \
++	   $(BUILD_DIR)/elf_loader.o \
++	   $(BUILD_DIR)/fs.o \
++	   $(BUILD_DIR)/syscall.o \
++	   $(BUILD_DIR)/scheduler.o \
++	   $(BUILD_DIR)/keyboard.o \
++	   $(BUILD_DIR)/device.o \
+ 
+-# 最终内核
++	   
++
++# -------------------- 最终产物 --------------------
+ KERNEL_ELF = $(BUILD_DIR)/kernel.elf
+-ISO = HeliumOS.iso
++ISO        = HeliumOS.iso
++DISK_IMG   = $(BUILD_DIR)/HeliumOS.img
+ 
+-# 默认目标
++# ==================== 默认目标 ====================
+ all: $(ISO)
+ 
+-# 编译汇编
++# ==================== 编译规则 ====================
+ $(BUILD_DIR)/start.o: $(BOOT_DIR)/start.asm
+ 	@mkdir -p $(BUILD_DIR)
+ 	$(ASM) $(ASMFLAGS) $< -o $@
+ 
+-# 编译 C 文件
++# 通用规则：编译 src/kernel/ 和 src/drivers/ 下的 .c 文件
+ $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.c
+ 	@mkdir -p $(BUILD_DIR)
+ 	$(CC) $(CFLAGS) -c $< -o $@
+ 
+-# 链接内核
++$(BUILD_DIR)/%.o: $(DRIVERS_DIR)/%.c
++	@mkdir -p $(BUILD_DIR)
++	$(CC) $(CFLAGS) -c $< -o $@
++
++$(BUILD_DIR)/%.o: $(MEMORY_DIR)/%.c
++	@mkdir -p $(BUILD_DIR)
++	$(CC) $(CFLAGS) -c $< -o $@
++
++$(BUILD_DIR)/%.o: $(PROCESS_DIR)/%.c
++	@mkdir -p $(BUILD_DIR)
++	$(CC) $(CFLAGS) -c $< -o $@
++
++$(BUILD_DIR)/%.o: $(FILESYS_DIR)/%.c
++	@mkdir -p $(BUILD_DIR)
++	$(CC) $(CFLAGS) -c $< -o $@
++
+ $(KERNEL_ELF): $(OBJS)
+ 	$(LD) $(LDFLAGS) $(OBJS) -o $@
+ 
+-# 生成 ISO（包含 GRUB 和内核）
++
++# ==================== ISO 镜像（默认） ====================
+ $(ISO): $(KERNEL_ELF)
+ 	@mkdir -p $(BUILD_DIR)/iso_root/boot/grub
+ 	cp $(KERNEL_ELF) $(BUILD_DIR)/iso_root/boot/
+@@ -50,18 +106,166 @@ $(ISO): $(KERNEL_ELF)
+ 	@echo "menuentry \"HeliumOS\" {" >> $(BUILD_DIR)/iso_root/boot/grub/grub.cfg
+ 	@echo "  multiboot2 /boot/kernel.elf" >> $(BUILD_DIR)/iso_root/boot/grub/grub.cfg
+ 	@echo "}" >> $(BUILD_DIR)/iso_root/boot/grub/grub.cfg
+-	$(GRUB_MKRESCUE) -o $(ISO) $(BUILD_DIR)/iso_root
++	$(GRUB) -o $(ISO) $(BUILD_DIR)/iso_root > /dev/null 2>&1
++	@echo "ISO 镜像生成成功: $(ISO)"
+ 
+-# 运行 QEMU
++# ==================== 硬盘镜像（用于测试文件系统写入） ====================
++$(DISK_IMG): $(KERNEL_ELF) $(BUILD_DIR)/SHELL.ELF $(BUILD_DIR)/IDLE.ELF $(BUILD_DIR)/TEST.ELF $(BUILD_DIR)/TESTKILL.ELF $(BUILD_DIR)/SLEEPER.ELF $(BUILD_DIR)/ARGTEST.ELF $(BUILD_DIR)/TESTWRITE.ELF $(BUILD_DIR)/TESTFAULT.ELF
++	@echo "🛠️  正在创建 FAT32 硬盘镜像 (需要 sudo 权限)..."
++	dd if=/dev/zero of=$(DISK_IMG) bs=1M count=64 status=none
++	(echo o; echo n; echo p; echo 1; echo 2048; echo; echo t; echo c; echo a; echo 1; echo w) | fdisk $(DISK_IMG) > /dev/null 2>&1
++	@OFFSET=$$((2048*512)); \
++	sudo losetup /dev/loop22 $(DISK_IMG); \
++	sudo losetup /dev/loop23 $(DISK_IMG) -o $$OFFSET; \
++	sudo mkfs.vfat -F 32 /dev/loop23 > /dev/null; \
++	sudo mount /dev/loop23 /mnt/build; \
++	sudo mkdir -p /mnt/build/boot/grub; \
++	sudo cp $(KERNEL_ELF) /mnt/build/boot/; \
++
++
++	sudo cp $(BUILD_DIR)/IDLE.ELF /mnt/build/IDLE.ELF; \
++	sudo cp $(BUILD_DIR)/SHELL.ELF /mnt/build/SHELL.ELF; \
++	sudo cp $(BUILD_DIR)/TEST.ELF /mnt/build/TEST.ELF; \
++	sudo cp $(BUILD_DIR)/TESTKILL.ELF /mnt/build/TESTKILL.ELF; \
++	sudo cp $(BUILD_DIR)/SLEEPER.ELF /mnt/build/SLEEPER.ELF; \
++	sudo cp $(BUILD_DIR)/ARGTEST.ELF /mnt/build/ARGTEST.ELF; \
++	sudo cp $(BUILD_DIR)/TESTWRITE.ELF /mnt/build/TESTWRITE.ELF; \
++	sudo cp $(BUILD_DIR)/TESTFAULT.ELF /mnt/build/TESTFAULT.ELF; \
++
++	sudo cp $(SRC_DIR)/kernel/kmain.c /mnt/build/kmain.c; \
++	sudo cp user/idle.c /mnt/build/idle.c; \
++
++	echo "set timeout=5" | sudo tee /mnt/build/boot/grub/grub.cfg > /dev/null; \
++	echo "menuentry \"HeliumOS\" {" | sudo tee -a /mnt/build/boot/grub/grub.cfg > /dev/null; \
++	echo "  multiboot2 /boot/kernel.elf" | sudo tee -a /mnt/build/boot/grub/grub.cfg > /dev/null; \
++	echo "}" | sudo tee -a /mnt/build/boot/grub/grub.cfg > /dev/null; \
++	sudo grub-install --target=i386-pc --boot-directory=/mnt/build/boot --modules="biosdisk part_msdos fat" /dev/loop22 > /dev/null 2>&1; \
++	sync; \
++	sudo umount /mnt/build; \
++	sudo losetup -d /dev/loop23; \
++	sudo losetup -d /dev/loop22
++	@echo "硬盘镜像生成成功: $(DISK_IMG)"
++
++# ==================== 运行目标 ====================
++# 默认运行 ISO（省事）
+ run: $(ISO)
+-	$(QEMU) -cdrom $(ISO) -serial stdio -s -S
++	$(QEMU) -cdrom $(ISO) -serial stdio 
+ 
+-# 调试（开启 GDB 端口）
++# 运行硬盘镜像（测试文件系统时使用）
++run-disk: $(DISK_IMG)
++	$(QEMU) -drive file=$(DISK_IMG),format=raw -serial stdio -m 1024
++
++# 调试（与 run 相同，只是名称更明确）
+ debug: $(ISO)
+ 	$(QEMU) -cdrom $(ISO) -serial stdio -s -S
+ 
+-# 清理
++debug-disk: $(DISK_IMG)
++	$(QEMU) -drive file=$(DISK_IMG),format=raw -serial stdio -s -S
++
++# ==================== 清理 ====================
+ clean:
+-	rm -rf $(BUILD_DIR) $(ISO)
++	rm -rf $(BUILD_DIR) $(ISO) $(DISK_IMG)
++
++gdb: $(ISO)
++	gdb-multiarch -ex "target remote localhost:1234" -ex "symbol-file build/kernel.elf" build/kernel.elf
++
++pack:
++	find . -type f \( -name "*.c" -o -name "*.h" -o -name "*.asm" -o -name "*.ld" -o -name "Makefile" \) -print0 | xargs -0 -I {} sh -c 'echo "==================== {} ===================="; cat "{}"; echo ""' > project.txt
++
++
++
++
++
++# USER BUILD
++USER_CFLAGS = -m32 -ffreestanding -fno-pic -fno-stack-protector -Iuser/ -Iuser/libc/include
++LIBC_SRCS = user/libc/string.c user/libc/printf.c user/libc/malloc.c
++LIBC_OBJS = $(BUILD_DIR)/libc_string.o \
++			$(BUILD_DIR)/libc_printf.o \
++			$(BUILD_DIR)/libc_malloc.o \
++			$(BUILD_DIR)/libc_signal.o \
++            $(BUILD_DIR)/libc_sigreturn.o
++
++$(BUILD_DIR)/libc_string.o: user/libc/string.c
++	$(CC) $(USER_CFLAGS) -c $< -o $@
++
++$(BUILD_DIR)/libc_printf.o: user/libc/printf.c
++	$(CC) $(USER_CFLAGS) -c $< -o $@
++
++$(BUILD_DIR)/libc_malloc.o: user/libc/malloc.c
++	$(CC) $(USER_CFLAGS) -c $< -o $@
++
++$(BUILD_DIR)/crt0.o: user/crt0.asm
++	@mkdir -p $(BUILD_DIR)
++	$(ASM) $(ASMFLAGS) $< -o $@
++
++$(BUILD_DIR)/libc_signal.o: user/libc/signal.c
++	$(CC) $(USER_CFLAGS) -c $< -o $@
++
++$(BUILD_DIR)/libc_sigreturn.o: user/libc/sigreturn.asm
++	@mkdir -p $(BUILD_DIR)
++	$(ASM) $(ASMFLAGS) $< -o $@
++
++
++# shell
++$(BUILD_DIR)/shell.o: user/shell.c
++	$(CC) $(USER_CFLAGS) -c $< -o $@
++
++$(BUILD_DIR)/SHELL.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/shell.o $(LIBC_OBJS) user/linker.ld
++	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/shell.o $(LIBC_OBJS)
++
++# idle
++$(BUILD_DIR)/idle.o: user/idle.c
++	$(CC) $(USER_CFLAGS) -c $< -o $@
++
++$(BUILD_DIR)/IDLE.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/idle.o $(LIBC_OBJS) user/linker.ld
++	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/idle.o $(LIBC_OBJS)
++
++
++# test
++$(BUILD_DIR)/test.o: user/test.c
++	$(CC) $(USER_CFLAGS) -c $< -o $@
++
++$(BUILD_DIR)/TEST.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/test.o $(LIBC_OBJS) user/linker.ld
++	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/test.o $(LIBC_OBJS)
++
++# testkill
++$(BUILD_DIR)/testkill.o: user/testkill.c
++	$(CC) $(USER_CFLAGS) -c $< -o $@
++
++$(BUILD_DIR)/TESTKILL.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/testkill.o $(LIBC_OBJS) user/linker.ld
++	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/testkill.o $(LIBC_OBJS)
++
++# sleeper
++$(BUILD_DIR)/sleeper.o: user/sleeper.c
++	$(CC) $(USER_CFLAGS) -c $< -o $@
++
++$(BUILD_DIR)/SLEEPER.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/sleeper.o $(LIBC_OBJS) user/linker.ld
++	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/sleeper.o $(LIBC_OBJS)
++
++# argtest
++$(BUILD_DIR)/argtest.o: user/argtest.c
++	$(CC) $(USER_CFLAGS) -c $< -o $@
++
++$(BUILD_DIR)/ARGTEST.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/argtest.o $(LIBC_OBJS) user/linker.ld
++	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/argtest.o $(LIBC_OBJS)
++
++# test_write
++$(BUILD_DIR)/test_write.o: user/test_write.c
++	$(CC) $(USER_CFLAGS) -c $< -o $@
++
++$(BUILD_DIR)/TESTWRITE.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/test_write.o $(LIBC_OBJS) user/linker.ld
++	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/test_write.o $(LIBC_OBJS)
++
++# test_fault
++$(BUILD_DIR)/test_fault.o: user/test_fault.c
++	$(CC) $(USER_CFLAGS) -c $< -o $@
++
++$(BUILD_DIR)/TESTFAULT.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/test_fault.o $(LIBC_OBJS) user/linker.ld
++	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/test_fault.o $(LIBC_OBJS)
++
++
++
++
+ 
+-.PHONY: all run debug clean
+\ No newline at end of file
++# 声明伪目标
++.PHONY: all run run-disk debug debug-disk clean gdb pack
+\ No newline at end of file
+diff --git a/src/drivers/keyboard.c b/src/drivers/keyboard.c
+index eb530b5..7601803 100644
+--- a/src/drivers/keyboard.c
++++ b/src/drivers/keyboard.c
+@@ -4,6 +4,7 @@
+ #include <stddef.h>
+ #include <device.h>
+ #include <errno.h>
++#include <signal.h>
+ 
+ #define KEYBOARD_DATA_PORT   0x60
+ #define KB_BUF_SIZE          128
+@@ -32,6 +33,13 @@ static char scancode_to_ascii(uint8_t scancode) {
+     // for test ESC
+     if (scancode == 0x01) return 27;
+ 
++    /* Ctrl+C */
++    if (ctrl_pressed && scancode == 0x2E) {
++        extern void signal_foreground(int sig);
++        signal_foreground(SIGINT);
++        return 0;
++    }
++
+     // ===== 2. 忽略其他释放码 =====
+     if (scancode & 0x80) return 0;
+ 
+diff --git a/src/include/syscall.h b/src/include/syscall.h
+index deb6db5..cf6bbc9 100644
+--- a/src/include/syscall.h
++++ b/src/include/syscall.h
+@@ -51,6 +51,11 @@
+ #define SYS_GETCWD        61
+ #define SYS_CHDIR         62
+ 
++/* ========== 信号 (71~79) ========== */
++#define SYS_SIGACTION     71
++#define SYS_SIGRETURN     72
++#define SYS_SIGPROCMASK   73
++
+ /* 系统调用处理函数声明 */
+ void syscall_handler(struct registers *regs);
+ 
+diff --git a/src/include/task.h b/src/include/task.h
+index 57e3174..74a3dcd 100644
+--- a/src/include/task.h
++++ b/src/include/task.h
+@@ -7,6 +7,7 @@
+ #include <fs.h>
+ #include <device.h>
+ #include <proc.h>
++#include <signal.h>
+ 
+ /* ---------- I/O slot（进程的标准流端点） ---------- */
+ 
+@@ -101,6 +102,11 @@ struct task {
+     struct io_slot stdin_slot;
+     struct io_slot stdout_slot;
+     struct io_slot stderr_slot;
++
++    /* ---------- 信号 ---------- */
++    uint32_t pending_signals;            /* 位图：bit N = 信号 N pending */
++    uint32_t blocked_signals;            /* 信号掩码 */
++    struct sig_action sig_actions[32];   /* 每信号的 handler */
+ };
+ 
+ void enqueue_task(struct task **head, struct task **tail, struct task *task);
+diff --git a/src/kernel/isr.c b/src/kernel/isr.c
+index 2e31666..5e8d0d2 100644
+--- a/src/kernel/isr.c
++++ b/src/kernel/isr.c
+@@ -6,6 +6,7 @@
+ #include <stddef.h>
+ #include <keyboard.h>
+ #include <io.h>
++#include <signal.h>
+ 
+ extern void sleep_tick(void);
+ 
+@@ -19,22 +20,28 @@ void isr_handler(struct registers *regs) {
+ 
+     if (from_user) {
+         struct task *cur = get_current_task();
+-        kprintf("[USER FAULT] pid=%d int=%d err=0x%x cr2=0x%x eip=0x%x\n",
++        int sig = signal_from_exception(regs->int_no);
++
++        kprintf("[USER FAULT] pid=%d int=%d sig=%d cr2=0x%x eip=0x%x\n",
+                 cur ? (int)cur->pid : -1,
+-                (int)regs->int_no, regs->err_code, cr2, regs->eip);
++                (int)regs->int_no, sig, cr2, regs->eip);
+ 
+         if (cur) {
+-            /* 标记 zombie，唤醒等待者，恢复前台 */
+-            task_terminate(cur, 128 + (int)regs->int_no);
+-
+-            /* 释放 self 引用。refcount 归零时进 graveyard */
+-            proc_unref(cur);
+-        }
++            struct sig_action *a = &cur->sig_actions[sig];
+ 
+-        /* 让出 CPU。current 是 zombie，schedule 会跳过它 */
+-        schedule();
++            if (a->handler == SIG_DFL || a->handler == SIG_IGN) {
++                /* 无 handler（或忽略）：直接终止 */
++                task_terminate(cur, 128 + sig);
++                proc_unref(cur);
++                schedule();
++                return;   /* 不返回 */
++            }
+ 
+-        /* schedule 不会返回（切到别的进程） */
++            /* 有 handler：投递 */
++            cur->pending_signals |= (1u << sig);
++            signal_deliver_pending(regs, cur);
++            return;
++        }
+     }
+ 
+     /* 内核态异常：无法恢复 */
+@@ -73,6 +80,10 @@ void irq_handler(struct registers *regs) {
+     } else if (regs->int_no == 33) {
+         keyboard_handle_irq();
+     }
++    struct task *cur = get_current_task();
++    if (cur) {
++        signal_deliver_pending(regs, cur);
++    }
+ }
+ 
+ /* 系统调用处理入口 */
+diff --git a/src/kernel/syscall.c b/src/kernel/syscall.c
+index a37b4b0..19dce8f 100644
+--- a/src/kernel/syscall.c
++++ b/src/kernel/syscall.c
+@@ -14,6 +14,7 @@
+ #include <tty.h>
+ #include <path.h>
+ #include <proc.h>
++#include <signal.h>
+ 
+ 
+ /* 用户态结构体镜像。字段顺序和 user/libc/include/syscall.h 保持一致。
+@@ -168,6 +169,10 @@ static int wait_impl(struct task *cur, struct task *target,
+     if (timeout_ms > 0) deadline = get_ticks() + timeout_ms;
+ 
+     while (1) {
++        /* 被信号打断 */
++        if (cur->pending_signals & ~cur->blocked_signals) {
++            return EINTR;
++        }
+         /* 1. 目标已退出 */
+         if (target) {
+             if (target->zombie) {
+@@ -419,24 +424,43 @@ cleanup:
+     return ret;
+ }
+ 
+-/* 注意：本函数的"允许 kill 非子进程"这一行为，
+- * 当前依赖"句柄只能由 spawn 分配给子进程"来约束。
+- * 将来引入句柄继承/传递后，需要额外的权限检查。 */
+-static int sys_kill(proc_handle_t h, int status) {
++/* kill(handle, sig)
++ *   handle == 0 表示发给自己
++ *   sig == SIGKILL：立即终止（不允许自杀）
++ *   其他 sig：进入 pending，唤醒阻塞中的目标 */
++static int sys_kill(proc_handle_t h, int sig) {
+     struct task *cur = get_current_task();
+     if (!cur) return EINVAL;
+ 
+-    struct task *target = proc_handle_deref(h, PROC_TERMINATE);
+-    if (!target) return EINVAL;
++    if (sig < 1 || sig > 31) return EINVAL;
++
++    struct task *target;
++    if (h == 0) {
++        target = cur;    /* 发给自己 */
++    } else {
++        target = proc_handle_deref(h, PROC_TERMINATE);
++        if (!target) return EINVAL;
++    }
+ 
+-    if (target == cur) return EPERM;
+     if (target->zombie) return EINVAL;
+ 
+-    task_terminate(target, status);
++    if (sig == SIGKILL) {
++        if (target == cur) return EPERM;   /* 自杀用 exit */
++        task_terminate(target, 128 + SIGKILL);
++        proc_unref(target);
++        return OK;
++    }
+ 
+-    /* self 引用由 kill 释放（target 不会再走 task_exit） */
+-    proc_unref(target);
++    /* 其他：进 pending */
++    target->pending_signals |= (1u << sig);
+ 
++    /* 唤醒阻塞中的目标——让它尽快返回 EINTR 或处理信号 */
++    if (target->state == TASK_STATE_SLEEPING ||
++        target->state == TASK_STATE_WAITING_CHILD) {
++        remove_task_from_queue(&blocked_list_head, &blocked_list_tail, target);
++        target->state = TASK_STATE_READY;
++        enqueue_task(&ready_queue_head, &ready_queue_tail, target);
++    }
+     return OK;
+ }
+ 
+@@ -463,6 +487,11 @@ static int sys_sleep(uint32_t ms) {
+     cur->sleep_ticks = ms;
+     block_current(TASK_STATE_SLEEPING);
+     schedule();
++
++    /* 被信号打断 */
++    if (cur->pending_signals & ~cur->blocked_signals) {
++        return EINTR;
++    }
+     return 0;
+ }
+ 
+@@ -524,6 +553,16 @@ void syscall_handler(struct registers *regs) {
+             ret = sys_process_close((proc_handle_t)arg1);
+             break;
+         
++        case SYS_SIGACTION:
++            ret = sys_sigaction((int)arg1, (void*)arg2, (void*)arg3);
++            break;
++        case SYS_SIGPROCMASK:
++            ret = sys_sigprocmask((int)arg1, (uint32_t*)arg2, (uint32_t*)arg3);
++            break;
++        case SYS_SIGRETURN:
++            sys_sigreturn(regs);
++            return;   /* 跳过 regs->eax = ret */
++        
+ 
+ 
+                 /* ---------- 文件系统 ---------- */
+@@ -688,4 +727,12 @@ void syscall_handler(struct registers *regs) {
+ 
+ 
+     regs->eax = ret;
++
++    /* 返回用户态前投递 pending signals。
++     * 可能改 regs->eip / user_esp（投递 handler）
++     * 或杀进程 + schedule（不返回）。 */
++    struct task *cur = get_current_task();
++    if (cur) {
++        signal_deliver_pending(regs, cur);
++    }
+ }
+\ No newline at end of file
+diff --git a/src/process/task.c b/src/process/task.c
+index 3c181a3..4ed0d30 100644
+--- a/src/process/task.c
++++ b/src/process/task.c
+@@ -259,6 +259,16 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd,
+     task->stderr_slot.type = IO_SLOT_DEFAULT;
+     task->stderr_slot.fd   = -1;
+ 
++    /* 初始化信号 */
++    task->pending_signals = 0;
++    task->blocked_signals = 0;
++    for (int i = 0; i < 32; i++) {
++        task->sig_actions[i].handler  = SIG_DFL;
++        task->sig_actions[i].mask     = 0;
++        task->sig_actions[i].flags    = 0;
++        task->sig_actions[i].restorer = 0;
++    }
++
+     task->kernel_stack_phys = kernel_stack;
+     task->user_stack_virt = 0x7FFFE000;
+ 
+@@ -442,6 +452,8 @@ void task_terminate(struct task *t, int status) {
+     if (!t) return;
+     if (t->zombie) return;
+ 
++    kprintf("[TASK] Process %d is terminated with status %d\n", t->pid, status);
++
+     t->exit_status = status;
+     t->zombie = 1;
+     t->state = TASK_STATE_ZOMBIE;
+diff --git a/user/libc/include/syscall.h b/user/libc/include/syscall.h
+index e692561..cb779a7 100644
+--- a/user/libc/include/syscall.h
++++ b/user/libc/include/syscall.h
+@@ -48,6 +48,11 @@
+ #define SYS_GETCWD        61
+ #define SYS_CHDIR         62
+ 
++/* ========== 信号 (71~79) ========== */
++#define SYS_SIGACTION     71
++#define SYS_SIGRETURN     72
++#define SYS_SIGPROCMASK   73
++
+ /* 传给 spawn 的重定向描述。
+  * size 字段必须填为 sizeof(struct spawn_redirect)。 */
+ struct spawn_redirect {
+diff --git a/user/shell.c b/user/shell.c
+index 006f491..d463c2b 100644
+--- a/user/shell.c
++++ b/user/shell.c
+@@ -1,6 +1,7 @@
+ #include "syscall.h"
+ #include "stdio.h"
+ #include "string.h"
++#include "signal.h"
+ 
+ /* VGA 颜色常量（用户态独立定义） */
+ #define VGA_BLACK        0
+@@ -196,6 +197,10 @@ static void cmd_touch(int argc, char **argv) {
+ 
+ void main(int _argc, char **_argv) {
+     (void)_argc; (void)_argv;
++    /* shell 忽略 SIGINT —— 按 Ctrl+C 不杀 shell */
++    struct sigaction sa = {0};
++    sa.sa_handler = SIG_IGN;
++    sigaction(SIGINT, &sa, 0);
+     printf("Welcome to HeliumOS Shell!\n");
+     printf("Type 'help' for commands.\n\n");
+ 
+diff --git a/user/testkill.c b/user/testkill.c
+index 9ffd8d0..e46e07e 100644
+--- a/user/testkill.c
++++ b/user/testkill.c
+@@ -10,6 +10,7 @@
+ #include "stdio.h"
+ #include "string.h"
+ #include "errno.h"
++#include "signal.h"
+ 
+ #define C_BLACK   0
+ #define C_GREEN   10
+@@ -65,7 +66,7 @@ static void test_kill_sleeping(void) {
+     /* 让 sleeper 进入 sleep 状态（肯定在 blocked_list 里） */
+     sleep_ms(50);
+ 
+-    int r = kill(h, 42);
++    int r = kill(h, SIGTERM);
+     if (r == OK) ok("kill(h, 42)");
+     else         fail("kill", "returned error");
+ 
+@@ -96,7 +97,7 @@ static void test_kill_then_close(void) {
+ 
+     sleep_ms(50);
+ 
+-    if (kill(h, 99) == OK) ok("kill(h, 99)");
++    if (kill(h, SIGKILL) == OK) ok("kill(h, 99)");
+     else                    fail("kill", "returned error");
+ 
+     /* 不 wait，直接 close —— refcount 应该递减到 0，PCB 释放 */
+@@ -115,7 +116,7 @@ static void test_stress(void) {
+         if (h < 0) { failures++; continue; }
+ 
+         sleep_ms(10);
+-        if (kill(h, i) != OK) { failures++; process_close(h); continue; }
++        if (kill(h, SIGKILL) != OK) { failures++; process_close(h); continue; }
+ 
+         int status = -1;
+         if (wait(h, &status, 0) != OK || status != i) {
+@@ -156,11 +157,11 @@ static void test_wait_timeout_then_kill(void) {
+     }
+ 
+     /* 现在 kill 它 */
+-    if (kill(h, 7) == OK) ok("kill after timeout");
++    if (kill(h, SIGKILL) == OK) ok("kill after timeout");
+     else                   fail("kill", "returned error");
+ 
+     /* 再 wait 应该立即成功 */
+-    if (wait(h, &status, 100) == OK && status == 7) {
++    if (wait(h, &status, 100) == OK && status == 143) {
+         ok("wait after kill returns status=7");
+     } else {
+         fail("wait after kill", "wrong result");

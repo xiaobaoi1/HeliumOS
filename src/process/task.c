@@ -259,6 +259,16 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd,
     task->stderr_slot.type = IO_SLOT_DEFAULT;
     task->stderr_slot.fd   = -1;
 
+    /* 初始化信号 */
+    task->pending_signals = 0;
+    task->blocked_signals = 0;
+    for (int i = 0; i < 32; i++) {
+        task->sig_actions[i].handler  = SIG_DFL;
+        task->sig_actions[i].mask     = 0;
+        task->sig_actions[i].flags    = 0;
+        task->sig_actions[i].restorer = 0;
+    }
+
     task->kernel_stack_phys = kernel_stack;
     task->user_stack_virt = 0x7FFFE000;
 
@@ -441,6 +451,8 @@ void scheduler_start(void) {
 void task_terminate(struct task *t, int status) {
     if (!t) return;
     if (t->zombie) return;
+
+    kprintf("[TASK] Process %d is terminated with status %d\n", t->pid, status);
 
     t->exit_status = status;
     t->zombie = 1;

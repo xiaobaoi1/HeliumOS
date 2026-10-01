@@ -14,6 +14,7 @@
 #include <tty.h>
 #include <path.h>
 #include <proc.h>
+#include <signal.h>
 
 
 /* 用户态结构体镜像。字段顺序和 user/libc/include/syscall.h 保持一致。
@@ -168,6 +169,10 @@ static int wait_impl(struct task *cur, struct task *target,
     if (timeout_ms > 0) deadline = get_ticks() + timeout_ms;
 
     while (1) {
+        /* 被信号打断 */
+        if (cur->pending_signals & ~cur->blocked_signals) {
+            return EINTR;
+        }
         /* 1. 目标已退出 */
         if (target) {
             if (target->zombie) {
@@ -419,24 +424,43 @@ cleanup:
     return ret;
 }
 
-/* 注意：本函数的"允许 kill 非子进程"这一行为，
- * 当前依赖"句柄只能由 spawn 分配给子进程"来约束。
- * 将来引入句柄继承/传递后，需要额外的权限检查。 */
-static int sys_kill(proc_handle_t h, int status) {
+/* kill(handle, sig)
+ *   handle == 0 表示发给自己
+ *   sig == SIGKILL：立即终止（不允许自杀）
+ *   其他 sig：进入 pending，唤醒阻塞中的目标 */
+static int sys_kill(proc_handle_t h, int sig) {
     struct task *cur = get_current_task();
     if (!cur) return EINVAL;
 
-    struct task *target = proc_handle_deref(h, PROC_TERMINATE);
-    if (!target) return EINVAL;
+    if (sig < 1 || sig > 31) return EINVAL;
 
-    if (target == cur) return EPERM;
+    struct task *target;
+    if (h == -1) {
+        target = cur;    /* 发给自己 */
+    } else {
+        target = proc_handle_deref(h, PROC_TERMINATE);
+        if (!target) return EINVAL;
+    }
+
     if (target->zombie) return EINVAL;
 
-    task_terminate(target, status);
+    if (sig == SIGKILL) {
+        if (target == cur) return EPERM;   /* 自杀用 exit */
+        task_terminate(target, 128 + SIGKILL);
+        proc_unref(target);
+        return OK;
+    }
 
-    /* self 引用由 kill 释放（target 不会再走 task_exit） */
-    proc_unref(target);
+    /* 其他：进 pending */
+    target->pending_signals |= (1u << sig);
 
+    /* 唤醒阻塞中的目标——让它尽快返回 EINTR 或处理信号 */
+    if (target->state == TASK_STATE_SLEEPING ||
+        target->state == TASK_STATE_WAITING_CHILD) {
+        remove_task_from_queue(&blocked_list_head, &blocked_list_tail, target);
+        target->state = TASK_STATE_READY;
+        enqueue_task(&ready_queue_head, &ready_queue_tail, target);
+    }
     return OK;
 }
 
@@ -463,6 +487,11 @@ static int sys_sleep(uint32_t ms) {
     cur->sleep_ticks = ms;
     block_current(TASK_STATE_SLEEPING);
     schedule();
+
+    /* 被信号打断 */
+    if (cur->pending_signals & ~cur->blocked_signals) {
+        return EINTR;
+    }
     return 0;
 }
 
@@ -523,6 +552,16 @@ void syscall_handler(struct registers *regs) {
         case SYS_PROC_CLOSE:
             ret = sys_process_close((proc_handle_t)arg1);
             break;
+        
+        case SYS_SIGACTION:
+            ret = sys_sigaction((int)arg1, (void*)arg2, (void*)arg3);
+            break;
+        case SYS_SIGPROCMASK:
+            ret = sys_sigprocmask((int)arg1, (uint32_t*)arg2, (uint32_t*)arg3);
+            break;
+        case SYS_SIGRETURN:
+            sys_sigreturn(regs);
+            return;   /* 跳过 regs->eax = ret */
         
 
 
@@ -688,4 +727,12 @@ void syscall_handler(struct registers *regs) {
 
 
     regs->eax = ret;
+
+    /* 返回用户态前投递 pending signals。
+     * 可能改 regs->eip / user_esp（投递 handler）
+     * 或杀进程 + schedule（不返回）。 */
+    struct task *cur = get_current_task();
+    if (cur) {
+        signal_deliver_pending(regs, cur);
+    }
 }

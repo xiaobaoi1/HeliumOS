@@ -48,6 +48,11 @@
 #define SYS_GETCWD        61
 #define SYS_CHDIR         62
 
+/* ========== 信号 (71~79) ========== */
+#define SYS_SIGACTION     71
+#define SYS_SIGRETURN     72
+#define SYS_SIGPROCMASK   73
+
 /* 传给 spawn 的重定向描述。
  * size 字段必须填为 sizeof(struct spawn_redirect)。 */
 struct spawn_redirect {

@@ -6,6 +6,7 @@
 #include <stddef.h>
 #include <keyboard.h>
 #include <io.h>
+#include <signal.h>
 
 extern void sleep_tick(void);
 
@@ -19,22 +20,28 @@ void isr_handler(struct registers *regs) {
 
     if (from_user) {
         struct task *cur = get_current_task();
-        kprintf("[USER FAULT] pid=%d int=%d err=0x%x cr2=0x%x eip=0x%x\n",
+        int sig = signal_from_exception(regs->int_no);
+
+        kprintf("[USER FAULT] pid=%d int=%d sig=%d cr2=0x%x eip=0x%x\n",
                 cur ? (int)cur->pid : -1,
-                (int)regs->int_no, regs->err_code, cr2, regs->eip);
+                (int)regs->int_no, sig, cr2, regs->eip);
 
         if (cur) {
-            /* 标记 zombie，唤醒等待者，恢复前台 */
-            task_terminate(cur, 128 + (int)regs->int_no);
+            struct sig_action *a = &cur->sig_actions[sig];
 
-            /* 释放 self 引用。refcount 归零时进 graveyard */
-            proc_unref(cur);
+            if (a->handler == SIG_DFL || a->handler == SIG_IGN) {
+                /* 无 handler（或忽略）：直接终止 */
+                task_terminate(cur, 128 + sig);
+                proc_unref(cur);
+                schedule();
+                return;   /* 不返回 */
+            }
+
+            /* 有 handler：投递 */
+            cur->pending_signals |= (1u << sig);
+            signal_deliver_pending(regs, cur);
+            return;
         }
-
-        /* 让出 CPU。current 是 zombie，schedule 会跳过它 */
-        schedule();
-
-        /* schedule 不会返回（切到别的进程） */
     }
 
     /* 内核态异常：无法恢复 */
@@ -72,6 +79,10 @@ void irq_handler(struct registers *regs) {
         }
     } else if (regs->int_no == 33) {
         keyboard_handle_irq();
+    }
+    struct task *cur = get_current_task();
+    if (cur) {
+        signal_deliver_pending(regs, cur);
     }
 }
 

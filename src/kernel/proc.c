@@ -79,6 +79,7 @@ void proc_unref(struct task *t) {
 /* 真正释放：pgd + 内核栈 + PCB 本身 */
 void proc_free_pcb(struct task *t) {
     if (!t) return;
+    kprintf("[TASK] Process %d is cleaned.\n", t->pid);
 
     /* 先从所有队列里摘掉，再释放内存 */
     remove_task_from_queue(&blocked_list_head, &blocked_list_tail, t);

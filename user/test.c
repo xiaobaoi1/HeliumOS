@@ -10,6 +10,7 @@
 #include "string.h"
 #include "stdlib.h"
 #include "errno.h"
+#include "signal.h"
 
 /* VGA 颜色 */
 #define C_BLACK   0
@@ -418,12 +419,12 @@ static void test_blocking_syscall(void) {
     check_eq(r, EAGAIN, "wait timeout again -> EAGAIN");
 
     /* kill 后 wait 应该立即成功，且返回退出状态 */
-    r = kill(h, 99);
+    r = kill(h, SIGKILL);
     check_eq(r, OK, "kill -> OK");
 
     r = wait(h, &status, 100);
     check_eq(r, OK, "wait after kill -> OK");
-    check_eq(status, 99, "wait status = 99");
+    check_eq(status, 137, "wait status = 137");
 
     /* close 后 handle 应该失效 */
     r = process_close(h);
@@ -728,10 +729,10 @@ static void test_spawn_stress(void) {
 
         sleep_ms(5);
 
-        if (kill(h, i) != OK) { failures++; process_close(h); continue; }
+        if (kill(h, SIGKILL) != OK) { failures++; process_close(h); continue; }
 
         int status = -1;
-        if (wait(h, &status, 100) != OK || status != i) {
+        if (wait(h, &status, 100) != OK || status != 137) {
             failures++;
             process_close(h);
             continue;

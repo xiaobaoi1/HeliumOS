@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <device.h>
 #include <errno.h>
+#include <signal.h>
 
 #define KEYBOARD_DATA_PORT   0x60
 #define KB_BUF_SIZE          128
@@ -31,6 +32,13 @@ static char scancode_to_ascii(uint8_t scancode) {
 
     // for test ESC
     if (scancode == 0x01) return 27;
+
+    /* Ctrl+C */
+    if (ctrl_pressed && scancode == 0x2E) {
+        extern void signal_foreground(int sig);
+        signal_foreground(SIGINT);
+        return 0;
+    }
 
     // ===== 2. 忽略其他释放码 =====
     if (scancode & 0x80) return 0;

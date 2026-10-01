@@ -51,6 +51,11 @@
 #define SYS_GETCWD        61
 #define SYS_CHDIR         62
 
+/* ========== 信号 (71~79) ========== */
+#define SYS_SIGACTION     71
+#define SYS_SIGRETURN     72
+#define SYS_SIGPROCMASK   73
+
 /* 系统调用处理函数声明 */
 void syscall_handler(struct registers *regs);
 

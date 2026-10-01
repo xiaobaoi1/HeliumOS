@@ -7,6 +7,7 @@
 #include <fs.h>
 #include <device.h>
 #include <proc.h>
+#include <signal.h>
 
 /* ---------- I/O slot（进程的标准流端点） ---------- */
 
@@ -101,6 +102,11 @@ struct task {
     struct io_slot stdin_slot;
     struct io_slot stdout_slot;
     struct io_slot stderr_slot;
+
+    /* ---------- 信号 ---------- */
+    uint32_t pending_signals;            /* 位图：bit N = 信号 N pending */
+    uint32_t blocked_signals;            /* 信号掩码 */
+    struct sig_action sig_actions[32];   /* 每信号的 handler */
 };
 
 void enqueue_task(struct task **head, struct task **tail, struct task *task);
