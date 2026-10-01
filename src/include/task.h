@@ -120,4 +120,13 @@ void set_current_task(struct task *task);
 void scheduler_start(void) __attribute__((noreturn));
 void task_exit(struct task *task, int status);
 
+/* 强制终止进程（不释放 self 引用——由调用者决定）。
+ * 语义：
+ *   - 标记 zombie
+ *   - 从所有队列移除，挂到 blocked_list
+ *   - 唤醒等待者
+ *   - 如果它是键盘前台，恢复父进程为前台
+ * 被 kill 或用户异常时使用。 */
+void task_terminate(struct task *t, int status);
+
 #endif

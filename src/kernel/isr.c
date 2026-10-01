@@ -12,10 +12,34 @@ extern void sleep_tick(void);
 
 /* 异常处理 */
 void isr_handler(struct registers *regs) {
-    uint32_t cr2;
+    uint32_t cr2 = 0;
     __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
-    kprintf("[ISR] Exception %d (err 0x%x) at address 0x%x! EIP=0x%x, user_esp=0x%x\n",
-            regs->int_no, regs->err_code, cr2, regs->eip, regs->user_esp);
+
+    int from_user = (regs->cs & 3) == 3;
+
+    if (from_user) {
+        struct task *cur = get_current_task();
+        kprintf("[USER FAULT] pid=%d int=%d err=0x%x cr2=0x%x eip=0x%x\n",
+                cur ? (int)cur->pid : -1,
+                (int)regs->int_no, regs->err_code, cr2, regs->eip);
+
+        if (cur) {
+            /* 标记 zombie，唤醒等待者，恢复前台 */
+            task_terminate(cur, 128 + (int)regs->int_no);
+
+            /* 释放 self 引用。refcount 归零时进 graveyard */
+            proc_unref(cur);
+        }
+
+        /* 让出 CPU。current 是 zombie，schedule 会跳过它 */
+        schedule();
+
+        /* schedule 不会返回（切到别的进程） */
+    }
+
+    /* 内核态异常：无法恢复 */
+    kprintf("[KERNEL FAULT] int=%d err=0x%x cr2=0x%x eip=0x%x\n",
+            (int)regs->int_no, regs->err_code, cr2, regs->eip);
     while (1) __asm__ volatile("cli; hlt");
 }
 

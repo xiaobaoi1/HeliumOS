@@ -429,34 +429,12 @@ static int sys_kill(proc_handle_t h, int status) {
     struct task *target = proc_handle_deref(h, PROC_TERMINATE);
     if (!target) return EINVAL;
 
-    if (target == cur) return EPERM;    /* 不允许 kill 自己 */
-    if (target->zombie) return EINVAL;  /* 已经退出 */
+    if (target == cur) return EPERM;
+    if (target->zombie) return EINVAL;
 
-    /* 标记退出 */
-    target->exit_status = status;
-    target->zombie = 1;
-    target->state = TASK_STATE_ZOMBIE;
+    task_terminate(target, status);
 
-    /* 从任何队列移除 */
-    remove_task_from_queue(&ready_queue_head, &ready_queue_tail, target);
-    remove_task_from_queue(&blocked_list_head, &blocked_list_tail, target);
-
-    /* 加入 blocked_list */
-    enqueue_task(&blocked_list_head, &blocked_list_tail, target);
-
-    /* 唤醒所有等它的 */
-    wake_up_waiters(target);
-
-    /* 如果 target 是前台，恢复父进程 */
-    if (tty_get_foreground() == target) {
-        struct task *parent = NULL;
-        if (target->creator_pid != 0) {
-            parent = proc_find_by_pid(target->creator_pid);
-        }
-        tty_set_foreground(parent);
-    }
-
-    /* 释放 self 引用：被 kill 的进程不会再走 task_exit */
+    /* self 引用由 kill 释放（target 不会再走 task_exit） */
     proc_unref(target);
 
     return OK;

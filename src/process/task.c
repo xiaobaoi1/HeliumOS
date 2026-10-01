@@ -437,6 +437,35 @@ void scheduler_start(void) {
     while (1) __asm__("cli; hlt");
 }
 
+/* ---------- 强制终止 ---------- */
+void task_terminate(struct task *t, int status) {
+    if (!t) return;
+    if (t->zombie) return;
+
+    t->exit_status = status;
+    t->zombie = 1;
+    t->state = TASK_STATE_ZOMBIE;
+
+    /* 从任何队列移除 */
+    remove_task_from_queue(&ready_queue_head, &ready_queue_tail, t);
+    remove_task_from_queue(&blocked_list_head, &blocked_list_tail, t);
+
+    /* 加入 blocked_list 作为僵尸 */
+    enqueue_task(&blocked_list_head, &blocked_list_tail, t);
+
+    /* 唤醒所有等它的 */
+    wake_up_waiters(t);
+
+    /* 如果它是键盘前台，恢复父进程为前台 */
+    if (tty_get_foreground() == t) {
+        struct task *parent = NULL;
+        if (t->creator_pid != 0) {
+            parent = proc_find_by_pid(t->creator_pid);
+        }
+        tty_set_foreground(parent);
+    }
+}
+
 /* task_exit: 进程退出。
  *
  * 不释放 kernel_stack / pgd / PCB——这些由 proc_free_pcb 释放。
