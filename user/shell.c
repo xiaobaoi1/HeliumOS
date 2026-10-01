@@ -2,6 +2,7 @@
 #include "stdio.h"
 #include "string.h"
 #include "signal.h"
+#include "stdlib.h"
 
 /* VGA 颜色常量（用户态独立定义） */
 #define VGA_BLACK        0
@@ -13,6 +14,8 @@
 #define CMD_MAX          128
 #define ARGV_MAX         8
 #define CAT_BUF_SIZE     512
+
+extern char **environ;
 
 /* ---------- 基础输入：读一行，带退格支持 ---------- */
 
@@ -241,19 +244,21 @@ void main(int _argc, char **_argv) {
             cmd_touch(argc, argv);
         } else if (strcmp(c, "sink") == 0) {
             /* 运行一个程序，丢弃其 stdout */
-            struct spawn_redirect r = {
-                .in_fd = SPAWN_FD_INHERIT,
+            struct spawn_params p = {
+                .size   = sizeof(p),
+                .in_fd  = SPAWN_FD_INHERIT,
                 .out_fd = SPAWN_FD_NULL,
                 .err_fd = SPAWN_FD_INHERIT,
+                .flags  = 0,
+                .envp   = (unsigned int)environ,
             };
-            r.size = sizeof(r);
             if (argc < 2) { printf("usage: sink <prog>\n"); }
             else {
-                int h = spawn(argv[1], argv + 1, &r);
+                int h = spawn(argv[1], argv + 1, &p);
                 if (h >= 0) {
                     tty_set_foreground(h);
                     int st; wait(h, &st, 0); 
-                    tty_set_foreground(0);
+                    tty_set_foreground(-1);
                     process_close(h);
                 }else{
                     set_color(VGA_LIGHT_RED, VGA_BLACK);
@@ -263,7 +268,15 @@ void main(int _argc, char **_argv) {
             }
         } else {
             /* 其他都当作可执行文件名 */
-            int h = spawn(c, argv, NULL);       /* ← 现在返回 handle */
+            struct spawn_params p = {
+                .size   = sizeof(p),
+                .in_fd  = SPAWN_FD_INHERIT,
+                .out_fd = SPAWN_FD_INHERIT,
+                .err_fd = SPAWN_FD_INHERIT,
+                .flags  = 0,
+                .envp   = (unsigned int)environ,
+            };
+            int h = spawn(c, argv, &p);
             if (h < 0) {
                 set_color(VGA_LIGHT_RED, VGA_BLACK);
                 printf("spawn '%s' failed (error %d)\n", c, h);
@@ -272,7 +285,12 @@ void main(int _argc, char **_argv) {
                 tty_set_foreground(h);
                 int status;
                 wait(h, &status, 0);
-                tty_set_foreground(0);
+                tty_set_foreground(-1);
+                if (status != 0) {
+                    set_color(VGA_LIGHT_RED, VGA_BLACK);
+                    printf("[shell] child exited with status %d\n", status);
+                    set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+                }
                 process_close(h);
             }
         }

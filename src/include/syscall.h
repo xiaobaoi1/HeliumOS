@@ -56,6 +56,12 @@
 #define SYS_SIGRETURN     72
 #define SYS_SIGPROCMASK   73
 
+/* ========== IPC (81~89) ========== */
+#define SYS_PIPE         81
+#define SYS_PIPE_READ    82
+#define SYS_PIPE_WRITE   83
+#define SYS_IPC_CLOSE    84
+
 /* 系统调用处理函数声明 */
 void syscall_handler(struct registers *regs);
 

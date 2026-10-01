@@ -770,12 +770,13 @@ static void test_dev_vga(void) {
 static void test_slot_null(void) {
     section("slot null");
 
-    struct spawn_redirect r = {
-        .size = sizeof(r),
-        .in_fd = SPAWN_FD_INHERIT,
+    struct spawn_params r = {
+        .size   = sizeof(r),
+        .in_fd  = SPAWN_FD_INHERIT,
         .out_fd = SPAWN_FD_NULL,
         .err_fd = SPAWN_FD_INHERIT,
-        .flags = 0,
+        .flags  = 0,
+        .envp   = 0,
     };
 
     /* 用 TEST.ELF 自己，但 stdout 丢弃——屏幕上不应有输出 */

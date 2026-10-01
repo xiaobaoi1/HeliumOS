@@ -140,24 +140,38 @@ static void setup_slot(struct io_slot *child_slot,
                        const struct io_slot *parent_slot,
                        struct task *child,
                        struct task *parent,
-                       int redir_fd) {
-    /* 1. NULL：丢弃 */
+                       int redir_fd,
+                       int redir_pipe) {
+    /* 0. pipe 优先 */
+    if (redir_pipe >= 0 && parent) {
+        int new_h, new_type;
+        if (ipc_dup_handle(parent, redir_pipe, child,
+                           &new_h, &new_type) == 0) {
+            if (new_type == IPC_PIPE_READ) {
+                child_slot->type = IO_SLOT_PIPE_READ;
+            } else {
+                child_slot->type = IO_SLOT_PIPE_WRITE;
+            }
+            child_slot->fd = new_h;
+            return;
+        }
+        /* 复制失败 → fallback */
+    }
+
+    /* 1. NULL */
     if (redir_fd == SPAWN_FD_NULL) {
         child_slot->type = IO_SLOT_NULL;
-        child_slot->fd   = -1;
+        child_slot->fd = -1;
         return;
     }
     /* 2. TTY */
     if (redir_fd == SPAWN_FD_TTY) {
         child_slot->type = IO_SLOT_DEFAULT;
-        child_slot->fd   = -1;
+        child_slot->fd = -1;
         return;
     }
 
-    /* 无父进程（内核早期创建 idle/shell）：保持 DEFAULT */
-    if (!parent) {
-        return;
-    }
+    if (!parent) return;
 
     /* 3. 显式 fd */
     if (redir_fd >= 0) {
@@ -166,40 +180,39 @@ static void setup_slot(struct io_slot *child_slot,
         fd_t new_fd = fs_dup_handle(parent, redir_fd, child);
         if (new_fd >= 0) {
             child_slot->type = IO_SLOT_FILE;
-            child_slot->fd   = new_fd;
+            child_slot->fd = new_fd;
         }
         return;
     }
 
-    /* 3. INHERIT：继承父 slot */
+    /* 4. INHERIT */
     if (!parent_slot) return;
-
     child_slot->type = parent_slot->type;
-    child_slot->fd   = parent_slot->fd;
-
+    child_slot->fd = parent_slot->fd;
     if (parent_slot->type == IO_SLOT_FILE) {
-        /* 父 slot 指向 fs_handle，子在 fs_handles 里复制一份 */
         if (parent_slot->fd < 0 || parent_slot->fd >= FS_MAX_HANDLES) {
             child_slot->type = IO_SLOT_DEFAULT;
-            child_slot->fd   = -1;
+            child_slot->fd = -1;
             return;
         }
         fd_t new_fd = fs_dup_handle(parent, parent_slot->fd, child);
-        if (new_fd >= 0) {
-            child_slot->fd = new_fd;
-        } else {
-            /* 复制失败，fallback */
-            child_slot->type = IO_SLOT_DEFAULT;
-            child_slot->fd   = -1;
-        }
+        if (new_fd >= 0) child_slot->fd = new_fd;
+        else { child_slot->type = IO_SLOT_DEFAULT; child_slot->fd = -1; }
     }
-    /* DEFAULT / NULL：直接继承 type，fd 保持 -1（已经是） */
+    /* PIPE 类型暂不继承（in_pipe 显式传） */
+    if (parent_slot->type == IO_SLOT_PIPE_READ ||
+        parent_slot->type == IO_SLOT_PIPE_WRITE) {
+        child_slot->type = IO_SLOT_DEFAULT;
+        child_slot->fd = -1;
+    }
 }
 
 /* ---------- 进程创建 ---------- */
 struct task *task_create(uint32_t entry_point, uint32_t *pgd,
                          int argc, char *const argv[],
-                         int redir_in_fd, int redir_out_fd, int redir_err_fd) {
+                         int envc, char *const envp[],
+                         int redir_in_fd, int redir_out_fd, int redir_err_fd,
+                         int redir_in_pipe, int redir_out_pipe, int redir_err_pipe) {
     /* 1. 分配所有物理资源，任何一步失败都回滚 */
     struct task *task = (struct task*)pmm_alloc_page();
     if (!task) {
@@ -269,6 +282,14 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd,
         task->sig_actions[i].restorer = 0;
     }
 
+    /* 初始化 IPC */
+    for (int i = 0; i < IPC_MAX_HANDLES; i++) {
+        task->ipc_handles[i].used = 0;
+        task->ipc_handles[i].pipe = NULL;
+    }
+    task->wait_pipe = NULL;
+
+
     task->kernel_stack_phys = kernel_stack;
     task->user_stack_virt = 0x7FFFE000;
 
@@ -307,25 +328,41 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd,
         task->dev_handles[i].used = 0;
     }
 
-    /* 8. 在用户栈上构造 argc/argv
+        /* 8. 在用户栈上构造 argc/argv/envp
      *
      * 栈布局（从高地址到低地址）：
-     *   user_stack_virt (0x7FFFE000) ← 栈顶
-     *     "argv[0]\0"
-     *     "argv[1]\0"
-     *     ...
-     *     "argv[N-1]\0"
-     *     [4 字节对齐]
-     *     ptr(argv[0]), ptr(argv[1]), ..., NULL
-     *     argc
+     *   环境变量字符串
+     *   参数字符串
+     *   [4 字节对齐]
+     *   envp[0..envc-1], NULL
+     *   argv[0..argc-1], NULL
+     *   argc
      *   ← user_sp（新的 esp）
      */
     uint32_t user_sp = task->user_stack_virt;
     uint32_t arg_addrs[ARGV_MAX];
+    uint32_t env_addrs[ENVP_MAX];
     int valid_argc = 0;
+    int valid_envc = 0;
 
+    /* ----- 环境变量字符串（最高地址） ----- */
+    if (envc > ENVP_MAX) envc = ENVP_MAX;
+    if (envc > 0 && envp) {
+        for (int i = 0; i < envc; i++) {
+            if (!envp[i]) break;
+            uint32_t len = strlen(envp[i]) + 1;
+            if (len > ENV_MAX) len = ENV_MAX;
+            user_sp -= len;
+            if (write_to_child_stack(pgd, user_sp, envp[i], len) < 0) {
+                user_sp += len;
+                break;
+            }
+            env_addrs[valid_envc++] = user_sp;
+        }
+    }
+
+    /* ----- 参数字符串 ----- */
     if (argc > ARGV_MAX) argc = ARGV_MAX;
-
     if (argc > 0 && argv) {
         for (int i = 0; i < argc; i++) {
             if (!argv[i]) break;
@@ -344,7 +381,15 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd,
     /* 4 字节对齐 */
     user_sp &= ~3u;
 
-    /* argv 数组 + NULL */
+    /* ----- envp 数组 + NULL ----- */
+    user_sp -= (valid_envc + 1) * 4;
+    uint32_t envp_arr = user_sp;
+    for (int i = 0; i < valid_envc; i++) {
+        write_u32_to_child(pgd, envp_arr + i * 4, env_addrs[i]);
+    }
+    write_u32_to_child(pgd, envp_arr + valid_envc * 4, 0);
+
+    /* ----- argv 数组 + NULL ----- */
     user_sp -= (valid_argc + 1) * 4;
     uint32_t argv_arr = user_sp;
     for (int i = 0; i < valid_argc; i++) {
@@ -352,7 +397,7 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd,
     }
     write_u32_to_child(pgd, argv_arr + valid_argc * 4, 0);
 
-    /* argc */
+    /* ----- argc ----- */
     user_sp -= 4;
     write_u32_to_child(pgd, user_sp, (uint32_t)valid_argc);
 
@@ -365,15 +410,13 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd,
 
     setup_slot(&task->stdin_slot,
                parent ? &parent->stdin_slot : NULL,
-               task, parent, redir_in_fd);
-
+               task, parent, redir_in_fd, redir_in_pipe);
     setup_slot(&task->stdout_slot,
                parent ? &parent->stdout_slot : NULL,
-               task, parent, redir_out_fd);
-
+               task, parent, redir_out_fd, redir_out_pipe);
     setup_slot(&task->stderr_slot,
                parent ? &parent->stderr_slot : NULL,
-               task, parent, redir_err_fd);
+               task, parent, redir_err_fd, redir_err_pipe);
 
 
     /* 10. 构造内核栈（iret 帧的 user esp 指向 argc 位置） */
@@ -498,6 +541,7 @@ void task_exit(struct task *task, int status) {
     /* 释放自己持有的所有句柄（对子进程的引用） */
     fs_release_all(task);
     dev_release_all(task);
+    ipc_release_all(task);
     proc_release_all_handles(task);
 
     /* 从就绪队列移除 */

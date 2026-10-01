@@ -54,13 +54,14 @@
 #define SYS_SIGPROCMASK   73
 
 /* 传给 spawn 的重定向描述。
- * size 字段必须填为 sizeof(struct spawn_redirect)。 */
-struct spawn_redirect {
+ * size 字段必须填为 sizeof(struct spawn_params)。 */
+struct spawn_params {
     unsigned int size;
     int          in_fd;
     int          out_fd;
     int          err_fd;
     unsigned int flags;
+    unsigned int envp;      /* char *const *，0 = 空环境 */
 };
 
 #define SPAWN_FD_INHERIT   (-1)
@@ -93,7 +94,7 @@ static inline int getpid(void) {
 
 /* 进程控制 */
 static inline int spawn(const char *path, char *const argv[],
-                        struct spawn_redirect *redir) {
+                        struct spawn_params *redir) {
     return __syscall(SYS_SPAWN, (int)path, (int)argv, (int)redir);
 }
 

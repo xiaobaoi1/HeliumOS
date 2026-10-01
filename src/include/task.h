@@ -8,12 +8,15 @@
 #include <device.h>
 #include <proc.h>
 #include <signal.h>
+#include <ipc.h>
 
 /* ---------- I/O slot（进程的标准流端点） ---------- */
 
 #define IO_SLOT_DEFAULT   0   /* 用内核默认（tty） */
 #define IO_SLOT_FILE      1   /* 绑到一个 fs_handle */
 #define IO_SLOT_NULL      2   /* 丢弃 */
+#define IO_SLOT_PIPE_READ   3
+#define IO_SLOT_PIPE_WRITE  4
 
 struct io_slot {
     uint8_t  type;
@@ -32,12 +35,16 @@ struct io_slot {
 #define TASK_STATE_WAITING_CHILD 2   /* 等子进程退出（waitpid） */
 #define TASK_STATE_SLEEPING      3   /* 睡眠中（sleep） */
 #define TASK_STATE_ZOMBIE        4   /* 已退出，等父进程回收 */
+#define TASK_STATE_WAITING_PIPE  5
 
 #define TIME_SLICE_TICKS 10
 
 /* 传参 */
 #define ARGV_MAX  16
 #define ARG_MAX   256
+
+#define ENVP_MAX  16
+#define ENV_MAX   256
 
 /* 就绪队列（在 task.c 中定义） */
 extern struct task *ready_queue_head;
@@ -107,6 +114,12 @@ struct task {
     uint32_t pending_signals;            /* 位图：bit N = 信号 N pending */
     uint32_t blocked_signals;            /* 信号掩码 */
     struct sig_action sig_actions[32];   /* 每信号的 handler */
+
+    /* ---------- 状态字段扩展 ---------- */
+    struct pipe *wait_pipe;   /* WAITING_PIPE 时有效 */
+
+    /* ---------- IPC ---------- */
+    struct ipc_handle ipc_handles[IPC_MAX_HANDLES];
 };
 
 void enqueue_task(struct task **head, struct task **tail, struct task *task);
@@ -120,7 +133,9 @@ void wake_up_waiters(struct task *target);
 
 struct task *task_create(uint32_t entry_point, uint32_t *pgd,
                          int argc, char *const argv[],
-                         int redir_in_fd, int redir_out_fd, int redir_err_fd);
+                         int envc, char *const envp[],
+                         int redir_in_fd, int redir_out_fd, int redir_err_fd,
+                         int redir_in_pipe, int redir_out_pipe, int redir_err_pipe);
 struct task *get_current_task(void);
 void set_current_task(struct task *task);
 void scheduler_start(void) __attribute__((noreturn));

@@ -18,11 +18,21 @@
 #include <device.h>
 #include <keyboard.h>
 #include <tty.h>
+#include <ipc.h>
+
+
+static const char *shell_env[] = {
+    "PATH=SYS:/",
+    "HOME=SYS:/",
+    "TERM=helium",
+    NULL,
+};
 
 /* ---------- 内部辅助：从一个 ELF 路径创建进程 ---------- */
 
 static struct task *create_task_from_elf(struct fat32_volume *vol,
-                                          const char *path) {
+                                          const char *path,
+                                          int envc, char *const envp[]) {
     /* 1. 创建页目录 */
     uint32_t *pgd = vmm_create_process_page_directory();
     if (!pgd) {
@@ -39,10 +49,12 @@ static struct task *create_task_from_elf(struct fat32_volume *vol,
     }
 
     /* 3. 创建 PCB */
-    struct task *task = task_create(entry, pgd, 0, NULL, 
-                                SPAWN_FD_INHERIT,
-                                SPAWN_FD_INHERIT,
-                                SPAWN_FD_INHERIT);
+    struct task *task = task_create(entry, pgd, 0, NULL,
+                                    envc, envp,
+                                    SPAWN_FD_INHERIT,
+                                    SPAWN_FD_INHERIT,
+                                    SPAWN_FD_INHERIT);
+
     if (!task) {
         kprintf("[KERNEL] Failed to create task for %s\n", path);
         return NULL;
@@ -54,7 +66,7 @@ static struct task *create_task_from_elf(struct fat32_volume *vol,
 /* ---------- 创建 IDLE 进程 ---------- */
 
 void create_idle_task(struct fat32_volume *vol) {
-    struct task *task = create_task_from_elf(vol, "/IDLE.ELF");
+    struct task *task = create_task_from_elf(vol, "/IDLE.ELF", 0, NULL);
     if (!task) {
         kprintf("[KERNEL] FATAL: cannot create idle task\n");
         while (1) __asm__("hlt");
@@ -72,7 +84,7 @@ void create_idle_task(struct fat32_volume *vol) {
 /* ---------- 创建 SHELL 进程 ---------- */
 
 void create_shell_task(struct fat32_volume *vol) {
-    struct task *task = create_task_from_elf(vol, "/SHELL.ELF");
+    struct task *task = create_task_from_elf(vol, "/SHELL.ELF", 3, (char *const*)shell_env);
     if (!task) {
         kprintf("[KERNEL] FATAL: cannot create shell task\n");
         while (1) __asm__("hlt");
@@ -94,6 +106,7 @@ void kmain(uint32_t magic, uint32_t addr) {
     serial_init();
     screen_init();
     tty_init();
+    ipc_init();
 
     kprintf("========================================\n");
     kprintf(" HeliumOS Kernel Started (1GB/3GB)\n");
