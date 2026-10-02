@@ -9,6 +9,11 @@ void *calloc(size_t n, size_t size);
 void *realloc(void *ptr, size_t new_size);
 
 void  exit(int status);
+void  abort(void);
+
+/* 排序 */
+void  qsort(void *base, size_t n, size_t size,
+            int (*cmp)(const void *, const void *));
 
 /* 环境变量 */
 char *getenv(const char *name);

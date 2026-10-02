@@ -37,24 +37,26 @@ struct spawn_params {
 #define SPAWN_FD_NULL      (-2)   /* 丢弃 */
 
 static int sys_write(int fd, const char *buf, uint32_t count) {
-    if (fd != 1) return EINVAL;
+    if (fd != 1 && fd != 2) return EINVAL;
     if (!buf || count == 0) return EINVAL;
     if (check_user_range((uint32_t)buf, count) < 0) return EFAULT;
 
     struct task *cur = get_current_task();
     if (!cur) return EINVAL;
-    
-        switch (cur->stdout_slot.type) {
+
+    struct io_slot *slot = (fd == 1) ? &cur->stdout_slot : &cur->stderr_slot;
+
+    switch (slot->type) {
         case IO_SLOT_DEFAULT:
             return tty_write(buf, count);
         case IO_SLOT_FILE: {
-            int h = cur->stdout_slot.fd;
+            int h = slot->fd;
             if (h < 0 || h >= FS_MAX_HANDLES) return EINVAL;
             if (!cur->fs_handles[h].used) return EINVAL;
             return fs_write(h, buf, count);
         }
         case IO_SLOT_PIPE_WRITE: {
-            int h = cur->stdout_slot.fd;
+            int h = slot->fd;
             if (h < 0 || h >= IPC_MAX_HANDLES) return EINVAL;
             if (!cur->ipc_handles[h].used) return EINVAL;
             return pipe_write(cur->ipc_handles[h].pipe,
@@ -605,6 +607,39 @@ void syscall_handler(struct registers *regs) {
         case SYS_FS_CLOSEDIR:
             ret = fs_closedir(arg1);
             break;
+        case SYS_FS_UNLINK: {
+            char path_buf[PATH_MAX_LEN];
+            if (strncpy_from_user(path_buf, (const char*)arg1, sizeof(path_buf)) < 0)
+                ret = EFAULT;
+            else
+                ret = fs_unlink(path_buf);
+            break;
+        }
+        case SYS_FS_MKDIR: {
+            char path_buf[PATH_MAX_LEN];
+            if (strncpy_from_user(path_buf, (const char*)arg1, sizeof(path_buf)) < 0)
+                ret = EFAULT;
+            else
+                ret = fs_mkdir(path_buf);
+            break;
+        }
+        case SYS_FS_RMDIR: {
+            char path_buf[PATH_MAX_LEN];
+            if (strncpy_from_user(path_buf, (const char*)arg1, sizeof(path_buf)) < 0)
+                ret = EFAULT;
+            else
+                ret = fs_rmdir(path_buf);
+            break;
+        }
+        case SYS_FS_RENAME: {
+            char old_buf[PATH_MAX_LEN], new_buf[PATH_MAX_LEN];
+            if (strncpy_from_user(old_buf, (const char*)arg1, sizeof(old_buf)) < 0 ||
+                strncpy_from_user(new_buf, (const char*)arg2, sizeof(new_buf)) < 0)
+                ret = EFAULT;
+            else
+                ret = fs_rename(old_buf, new_buf);
+            break;
+        }
         case SYS_GETCWD:
             if (check_user_range(arg1, arg2) < 0) {
                 ret = EFAULT;

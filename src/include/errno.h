@@ -24,5 +24,6 @@
 #define ECHILD     -18    /* 没有子进程 */
 #define ENOEXEC    -19    /* 可执行格式错误 */
 #define ENAMETOOLONG -20    /* 文件名过长 */
+#define EXDEV      -21    /* 跨设备 */
 
 #endif

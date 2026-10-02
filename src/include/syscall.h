@@ -30,7 +30,7 @@
 /* ========== 内存管理 (21~29) ========== */
 #define SYS_BRK        21
 
-/* ========== 文件系统 (31~39) ========== */
+/* ========== 文件系统 (31~49) ========== */
 #define SYS_FS_OPEN       31
 #define SYS_FS_READ       32
 #define SYS_FS_WRITE      33
@@ -39,13 +39,17 @@
 #define SYS_FS_OPENDIR    36
 #define SYS_FS_READDIR    37
 #define SYS_FS_CLOSEDIR   38
+#define SYS_FS_UNLINK     39
+#define SYS_FS_MKDIR      40
+#define SYS_FS_RMDIR      41
+#define SYS_FS_RENAME     42
 
-/* ========== 设备 (41~49) ========== */
-#define SYS_DEV_OPEN      41
-#define SYS_DEV_READ      42
-#define SYS_DEV_WRITE     43
-#define SYS_DEV_IOCTL     44
-#define SYS_DEV_CLOSE     45
+/* ========== 设备 (51~59) ========== */
+#define SYS_DEV_OPEN      51
+#define SYS_DEV_READ      52
+#define SYS_DEV_WRITE     53
+#define SYS_DEV_IOCTL     54
+#define SYS_DEV_CLOSE     55
 
 /* ========== 进程环境 (61~69) ========== */
 #define SYS_GETCWD        61

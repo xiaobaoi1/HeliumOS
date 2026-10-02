@@ -23,5 +23,6 @@
 #define ECHILD     -18
 #define ENOEXEC    -19
 #define ENAMETOOLONG -20
+#define EXDEV      -21
 
 #endif

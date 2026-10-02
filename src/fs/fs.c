@@ -58,6 +58,12 @@ fd_t fs_open(const char *path, int flags) {
                 r = fat32_open_file(fvol, rp.path, &h->u.fat32_file);
             }
             if (r != OK) { h->used = 0; return r; }
+
+            /* 截断：只在 open 成功后执行。CREAT 和 TRUNC 可组合。 */
+            if (flags & FS_O_TRUNC) {
+                int tr = fat32_truncate(fvol, &h->u.fat32_file);
+                if (tr != OK) { h->used = 0; return tr; }
+            }
             return fd;
         }
         default:
@@ -218,6 +224,64 @@ int fs_getcwd(char *buf, int size) {
         buf[len++] = cur->cwd_path[i];
     buf[len] = '\0';
     return len;
+}
+
+/* ---------- unlink / mkdir / rmdir / rename ---------- */
+
+int fs_unlink(const char *path) {
+    struct resolved_path rp;
+    if (resolve_path(path, &rp) != OK) return ENOENT;
+    switch (rp.vol->fs_type) {
+        case VOL_FS_FAT32: {
+            struct fat32_volume *fvol = (struct fat32_volume*)rp.vol->fs_private;
+            if (!fvol) return EINVAL;
+            return fat32_unlink(fvol, rp.path);
+        }
+        default: return ENOSYS;
+    }
+}
+
+int fs_mkdir(const char *path) {
+    struct resolved_path rp;
+    if (resolve_path(path, &rp) != OK) return ENOENT;
+    switch (rp.vol->fs_type) {
+        case VOL_FS_FAT32: {
+            struct fat32_volume *fvol = (struct fat32_volume*)rp.vol->fs_private;
+            if (!fvol) return EINVAL;
+            return fat32_mkdir(fvol, rp.path);
+        }
+        default: return ENOSYS;
+    }
+}
+
+int fs_rmdir(const char *path) {
+    struct resolved_path rp;
+    if (resolve_path(path, &rp) != OK) return ENOENT;
+    switch (rp.vol->fs_type) {
+        case VOL_FS_FAT32: {
+            struct fat32_volume *fvol = (struct fat32_volume*)rp.vol->fs_private;
+            if (!fvol) return EINVAL;
+            return fat32_rmdir(fvol, rp.path);
+        }
+        default: return ENOSYS;
+    }
+}
+
+int fs_rename(const char *old_path, const char *new_path) {
+    struct resolved_path old_rp, new_rp;
+    if (resolve_path(old_path, &old_rp) != OK) return ENOENT;
+    if (resolve_path(new_path, &new_rp) != OK) return ENOENT;
+    if (old_rp.vol != new_rp.vol) return EXDEV;   /* 跨卷不支持 */
+
+    switch (old_rp.vol->fs_type) {
+        case VOL_FS_FAT32: {
+            struct fat32_volume *fvol =
+                (struct fat32_volume*)old_rp.vol->fs_private;
+            if (!fvol) return EINVAL;
+            return fat32_rename(fvol, old_rp.path, new_rp.path);
+        }
+        default: return ENOSYS;
+    }
 }
 
 /* ---------- 释放所有句柄 ---------- */

@@ -108,6 +108,9 @@ int fat32_create_file(struct fat32_volume *vol, const char *path,
 int fat32_write_file(struct fat32_volume *vol, struct fat32_file *file,
                      const uint8_t *buffer, uint32_t offset, uint32_t size);
 
+/* 截断文件为 0：释放簇链，清 first_cluster / file_size，更新目录项。 */
+int fat32_truncate(struct fat32_volume *vol, struct fat32_file *file);
+                     
 /* 目录操作 */
 int  fat32_opendir(struct fat32_volume *vol, const char *path,
                    struct fat32_dir *dir);
@@ -117,5 +120,18 @@ void fat32_closedir(struct fat32_volume *vol, struct fat32_dir *dir);
 
 /* 判断某路径是否是目录 */
 int  fat32_is_dir(struct fat32_volume *vol, const char *path);
+
+/* 删除文件（不处理目录）。失败：ENOENT / EISDIR / EIO */
+int fat32_unlink(struct fat32_volume *vol, const char *path);
+
+/* 创建目录。失败：EEXIST / ENOSPC / ENAMETOOLONG / ENOENT（父目录不存在） */
+int fat32_mkdir(struct fat32_volume *vol, const char *path);
+
+/* 删除空目录。失败：ENOENT / ENOTDIR / ENOTEMPTY / EINVAL（根） */
+int fat32_rmdir(struct fat32_volume *vol, const char *path);
+
+/* 改名/移动。目标已存在返回 EEXIST。*/
+int fat32_rename(struct fat32_volume *vol, const char *old_path,
+                 const char *new_path);
 
 #endif

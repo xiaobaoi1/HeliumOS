@@ -24,6 +24,8 @@
 static int g_pass = 0;
 static int g_fail = 0;
 
+static char failures[32][32];
+
 /* ---------- 报告辅助 ---------- */
 
 static void ok(const char *name) {
@@ -37,6 +39,7 @@ static void fail(const char *name, const char *why) {
     tty_set_color(C_RED, C_BLACK);
     printf("  [FAIL] %s: %s\n", name, why);
     tty_set_color(C_GRAY, C_BLACK);
+    strcpy(failures[g_fail], name);
     g_fail++;
 }
 
@@ -838,6 +841,10 @@ void main(int argc, char **argv) {
     tty_set_color(C_YELLOW, C_BLACK);
     printf("========================================\n");
     tty_set_color(C_GRAY, C_BLACK);
+
+    for(int i=0;i<g_fail;i++){
+        printf("  [FAIL] %s\n", failures[i]);
+    }
 
     return g_fail;
 }

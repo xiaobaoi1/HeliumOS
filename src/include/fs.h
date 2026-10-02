@@ -13,7 +13,8 @@
 #define FS_O_RDONLY      0x01
 #define FS_O_WRONLY      0x02
 #define FS_O_RDWR        0x03
-#define FS_O_CREAT       0x04    /* 预留 */
+#define FS_O_CREAT       0x04
+#define FS_O_TRUNC       0x08
 
 /* 对象类型 */
 #define FS_OBJ_FILE      1
@@ -62,6 +63,10 @@ int  fs_close(fd_t fd);
 fd_t fs_opendir(const char *path);
 int  fs_readdir(fd_t fd, struct dirent *out);
 int  fs_closedir(fd_t fd);
+int fs_unlink(const char *path);
+int fs_mkdir(const char *path);
+int fs_rmdir(const char *path);
+int fs_rename(const char *old_path, const char *new_path);
 
 /* ---------- cwd ---------- */
 int  fs_chdir(const char *path);

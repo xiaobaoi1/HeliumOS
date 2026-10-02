@@ -27,7 +27,7 @@
 /* ========== 内存管理 (21~29) ========== */
 #define SYS_BRK        21
 
-/* ========== 文件系统 (31~39) ========== */
+/* ========== 文件系统 (31~49) ========== */
 #define SYS_FS_OPEN       31
 #define SYS_FS_READ       32
 #define SYS_FS_WRITE      33
@@ -36,13 +36,17 @@
 #define SYS_FS_OPENDIR    36
 #define SYS_FS_READDIR    37
 #define SYS_FS_CLOSEDIR   38
+#define SYS_FS_UNLINK     39
+#define SYS_FS_MKDIR      40
+#define SYS_FS_RMDIR      41
+#define SYS_FS_RENAME     42
 
-/* ========== 设备 (41~49) ========== */
-#define SYS_DEV_OPEN      41
-#define SYS_DEV_READ      42
-#define SYS_DEV_WRITE     43
-#define SYS_DEV_IOCTL     44
-#define SYS_DEV_CLOSE     45
+/* ========== 设备 (51~59) ========== */
+#define SYS_DEV_OPEN      51
+#define SYS_DEV_READ      52
+#define SYS_DEV_WRITE     53
+#define SYS_DEV_IOCTL     54
+#define SYS_DEV_CLOSE     55
 
 /* ========== 进程环境 (61~69) ========== */
 #define SYS_GETCWD        61
@@ -221,6 +225,22 @@ static inline int fs_closedir(int fd) {
     return __syscall(SYS_FS_CLOSEDIR, fd, 0, 0);
 }
 
+static inline int fs_unlink(const char *path) {
+    return __syscall(SYS_FS_UNLINK, (int)path, 0, 0);
+}
+
+static inline int fs_mkdir(const char *path) {
+    return __syscall(SYS_FS_MKDIR, (int)path, 0, 0);
+}
+
+static inline int fs_rmdir(const char *path) {
+    return __syscall(SYS_FS_RMDIR, (int)path, 0, 0);
+}
+
+static inline int fs_rename(const char *old_path, const char *new_path) {
+    return __syscall(SYS_FS_RENAME, (int)old_path, (int)new_path, 0);
+}
+
 static inline int getcwd(char *buf, int size) {
     return __syscall(SYS_GETCWD, (int)buf, size, 0);
 }
@@ -251,6 +271,7 @@ static inline int dev_close(int dev) {
 #define FS_O_WRONLY   0x02
 #define FS_O_RDWR     0x03
 #define FS_O_CREAT    0x04
+#define FS_O_TRUNC    0x08
 
 /* ---------- dirent（和内核一致） ---------- */
 #define DIRENT_NAME_MAX  256
