@@ -112,7 +112,7 @@ static void test_stress(void) {
         int h = spawn_sleeper();
         if (h < 0) { failures++; continue; }
 
-        sleep_ms(10);
+        sleep_ms(50);
         if (kill(h, SIGKILL) != OK) { failures++; process_close(h); continue; }
 
         int status = -1;

@@ -24,7 +24,7 @@
 static int g_pass = 0;
 static int g_fail = 0;
 
-static char failures[32][32];
+static char failures[32][200];
 
 /* ---------- 报告辅助 ---------- */
 
