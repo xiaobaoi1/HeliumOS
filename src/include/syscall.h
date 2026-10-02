@@ -66,6 +66,10 @@
 #define SYS_PIPE_WRITE   83
 #define SYS_IPC_CLOSE    84
 
+/* ========== 系统控制 (91~99) ========== */
+#define SYS_RTC_GET_TIME  91
+#define SYS_REBOOT        92
+
 /* 系统调用处理函数声明 */
 void syscall_handler(struct registers *regs);
 

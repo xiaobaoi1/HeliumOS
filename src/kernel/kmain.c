@@ -19,6 +19,8 @@
 #include <keyboard.h>
 #include <tty.h>
 #include <ipc.h>
+#include <rtc.h>
+#include <acpi.h>
 
 
 static const char *shell_env[] = {
@@ -119,6 +121,8 @@ void kmain(uint32_t magic, uint32_t addr) {
     tss_init();
     vmm_init();
     idt_init();
+    rtc_init();
+    acpi_init(addr);
 
     volume_init();
     fs_init();

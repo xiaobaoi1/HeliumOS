@@ -17,6 +17,8 @@
 #include <signal.h>
 #include <ipc.h>
 #include <uaccess.h>
+#include <rtc.h>
+#include <acpi.h>
 
 
 /* 用户态结构体镜像。字段顺序和 user/libc/include/syscall.h 保持一致。
@@ -741,7 +743,35 @@ void syscall_handler(struct registers *regs) {
             ret = sys_tty_set_foreground((proc_handle_t)arg1);
             break;
 
+        
 
+        /* ---------- 系统控制 ---------- */
+        case SYS_RTC_GET_TIME: {
+            if (check_user_range(arg1, sizeof(struct rtc_time)) < 0) {
+                ret = EFAULT;
+            } else {
+                struct rtc_time t;
+                int r = rtc_read(&t);
+                if (r < 0) {
+                    ret = r;
+                } else if (copy_to_user(arg1, &t, sizeof(t)) < 0) {
+                    ret = EFAULT;
+                } else {
+                    ret = OK;
+                }
+            }
+            break;
+        }
+        case SYS_REBOOT:
+            if (arg1 == ACPI_CMD_HALT) {
+                ret = acpi_poweroff();
+            } else if (arg1 == ACPI_CMD_REBOOT) {
+                ret = acpi_reboot();
+            } else {
+                ret = EINVAL;
+            }
+            /* 成功的话系统已经关了/重启了；到这里说明失败 */
+            break;
 
         default:
             kprintf("[SYSCALL] Unknown syscall %d\n", syscall_no);

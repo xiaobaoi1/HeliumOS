@@ -63,6 +63,11 @@
 #define SYS_PIPE_WRITE   83
 #define SYS_IPC_CLOSE    84
 
+/* ========== 系统控制 (91~99) ========== */
+#define SYS_RTC_GET_TIME  91
+#define SYS_REBOOT        92
+
+
 /* 传给 spawn 的重定向描述。
  * size 字段必须填为 sizeof(struct spawn_params)。 */
 struct spawn_params {
@@ -141,6 +146,19 @@ static inline int pipe_write(int h, const void *buf, unsigned int n) {
 }
 static inline int ipc_close(int h) {
     return __syscall(SYS_IPC_CLOSE, h, 0, 0);
+}
+
+/* 系统控制 */
+static inline int rtc_get_time(struct rtc_time *out) {
+    return __syscall(SYS_RTC_GET_TIME, (int)out, 0, 0);
+}
+
+static inline int sys_halt(void) {
+    return __syscall(SYS_REBOOT, 0, 0, 0);
+}
+
+static inline int sys_reboot(void) {
+    return __syscall(SYS_REBOOT, 1, 0, 0);
 }
 
 /* 控制台 I/O */
@@ -280,6 +298,18 @@ struct dirent {
     unsigned char attributes;
     unsigned char reserved[3];
     unsigned int  size;
+};
+
+/* 与内核 src/include/rtc.h 一致 */
+struct rtc_time {
+    unsigned short year;
+    unsigned char  month;
+    unsigned char  day;
+    unsigned char  hour;
+    unsigned char  minute;
+    unsigned char  second;
+    unsigned char  weekday;
+    unsigned char  reserved;
 };
 
 /* ---------- 标准 fd ---------- */

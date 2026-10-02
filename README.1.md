@@ -375,3 +375,187 @@ HeliumOS 不是"重新发明 UNIX"，而是**从第一原理重新审视操作�
 **当前阶段**：稳定性与交互性并进。用户异常处理优先，随后接前台 + 信号。
 
 **项目愿景**：一个架构清晰、边界明确、可读可控的小型宏内核。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## BUGs
+先归纳，不急着给方案。
+
+## 现状的真实代价
+
+`read_line` 忙等的开销不只是"不优雅"：
+
+- shell 每 tick（1ms）被抢占一次，其余时间在 `pause` 里空转
+- IDLE 也在 `pause` 空转
+- **整个系统在等键盘时 100% CPU**——但这不是 shell 造成的，是 IDLE 造成的
+
+所以 shell 忙等和 IDLE 忙等叠加，看不出差别。**真正的问题不是 shell，是 IDLE 用 `pause` 而非 `hlt`**。shell 忙等只是让这个问题更显眼。
+
+## "真阻塞 read"在内核里意味着什么
+
+不是把 `tty_read` 改成"没数据就睡"那么简单。它需要三条链同时存在：
+
+| 链 | 现状 | 要做 |
+|---|---|---|
+| **等待状态** | `TASK_STATE_*` 里没有 WAITING_TTY | 加状态，或复用 |
+| **唤醒源** | `keyboard_handle_irq` 只往 `kb_buffer` 塞字符，不知道有没有进程在等 | 键盘 IRQ 里加"唤醒 tty 等待者" |
+| **信号打断** | `pipe_read` 有完整的 EINTR 循环（`block_current` + `schedule` + 醒来查 pending） | tty_read 要抄这套 |
+
+三条链里，**第二条是真正的耦合点**：键盘 IRQ 是硬件中断上下文，在里面调 `unblock_task`（动 ready queue）时序敏感。`pipe_wakeup_all` 是进程上下文里调的，键盘 IRQ 不是。
+
+## 三条路对比
+
+| 方案 | 内核改动 | 键盘延迟 | shell 复杂度 | 何时合适 |
+|---|---|---|---|---|
+| 现状（忙等） | 无 | 极低 | 无 | 现在 |
+| shell 里 `sleep_ms(1)` | 无 | ≤1ms | 一行 | 现在就能做 |
+| 真阻塞 read | 中（三条链） | 极低 | 无 | 有多个读键盘的进程时 |
+
+## 我的判断
+
+**现在都不做。** 理由：
+
+1. **`sleep_ms(1)` 只是把忙等挪到内核**——shell 睡了，IDLE 还在 `pause`。CPU 占用不变，只是"看起来优雅"。
+2. **真阻塞 read 是一个子系统级改动**，不是顺手。它值得单独立项，前提是：
+   - 有非 shell 的进程读键盘（比如全屏编辑器）
+   - 或者 IDLE 改成 `hlt` 后，忙等的功耗变得真实可见
+3. **当前 shell 是唯一读键盘的进程**，前台切换已经是显式的（`tty_set_foreground`），阻塞 read 换不来任何可观察的收益。
+
+**如果一定要现在动**，我倾向 `sleep_ms(1)`——一行，不改内核，等真需求出现时再升级到阻塞 read。但这不是"更好"，只是"看起来不那么忙"。
+
+## 顺带发现：唤醒路径不一致
+
+看 `sys_kill` 和 `signal_foreground`：
+
+```c
+if (target->state == TASK_STATE_SLEEPING ||
+    target->state == TASK_STATE_WAITING_CHILD) {
+    remove_task_from_queue(...);
+    target->state = TASK_STATE_READY;
+    enqueue_task(...);
+}
+```
+
+**只唤醒 SLEEPING 和 WAITING_CHILD，不唤醒 WAITING_PIPE**。
+
+`WAITING_PIPE` 靠 `pipe_wakeup_all` 唤醒——但那是数据/EOF 事件触发的，不是信号触发的。所以：
+
+- A 阻塞在 `pipe_read` 上等数据
+- B `kill(A, SIGINT)`
+- `sys_kill` 把 pending 设了，但**不唤醒 A**
+- A 继续睡，直到 pipe 有数据或写端关闭才醒
+- 醒来才看到 pending → 返回 EINTR
+
+**信号打断 pipe 阻塞是延迟的**。`pipe_read` 里确实有 `if (cur->pending_signals & ~cur->blocked_signals) return EINTR;`——但那个检查在**阻塞之前**，醒来后要靠 `pipe_wakeup_all` 才能重新走到检查点。
+
+这是**已经存在的 bug**，和 tty 无关。如果将来加 WAITING_TTY，这个模式会再复制一份。
+
+要不要现在处理？我的建议：**记下，不做**。因为：
+- 当前没有"阻塞在 pipe 上被信号杀"的实际场景（pipe 都是短命命令）
+- 修它要动 `sys_kill` / `signal_foreground` 的唤醒逻辑，触及信号投递路径
+- 等 WAITING_TTY 或前台进程组出现时，一起统一
+
+---
+
+**结论**：read 的问题**先不动**。等你哪天觉得 shell 响应或 IDLE 功耗真的烦了，再来立"阻塞 IO"这个项。那时候 tty 阻塞 + pipe 唤醒一致性 + IDLE `hlt` 一起做，才是一个完整的设计。
+
+要不要把这条记进项目文档的"已知的坑"里？还是口头记住就行？
+
+
+信号打断 pipe 阻塞有延迟：sys_kill / signal_foreground 只唤醒 SLEEPING 和 WAITING_CHILD，不唤醒 WAITING_PIPE。阻塞在 pipe_read 的进程收到信号后，要等 pipe 数据/EOF 事件才醒。pipe_read 里的 pending 检查只在阻塞前生效，醒来后才重新走到。和 tty 阻塞一起处理。
+
+
+记下。
+
+## BUG 记录
+
+**现象**：修改过磁盘后 `test.elf` 出现 2 个 unpass
+- `test_dev_vga` 的 `dev_open VGA`
+- 另一个未见（用户已改 test.c 加汇总）
+
+**触发路径**：
+```
+添加 SHELL cp + FS_O_TRUNC 截断
+  → cp / ls / mkdir / cd 若干次
+  → 跑 test.elf
+  → 2 个 unpass
+```
+
+**可复现性**：
+
+| 操作 | 结果 |
+|---|---|
+| 重启 QEMU（同一 disk.img） | 复现 |
+| 重建 disk.img | 不复现 |
+
+**结论**：disk.img 上的持久状态是触发因素，代码本身不是充分条件。
+
+## 排除 & 怀疑
+
+**排除**：
+
+- 代码分支问题（重建后代码没变，行为变好）→ 只在特定磁盘状态下才走到
+- `pmm` 位图错误（每次启动都重建，和 disk.img 无关）
+- 单纯 ELF 损坏（test.elf 大部分 PASS，说明加载正常）
+
+**怀疑**（按可能性排序）：
+
+1. **FAT32 写路径在特定条件下写坏了元数据**——比如簇链被错误释放后又被重分配，覆盖了某文件的数据，`test.elf` 读到后走异常分支
+2. **`free_cluster_chain` / `fat32_truncate` 里对"末簇"处理有边界问题**——`cp` 覆盖 `SHELL.ELF` 大小时会走到截断 + 扩展的完整路径，值得单独测
+3. **PCB 页被用户态映射覆盖**（可能性低，因为和 disk.img 关联不上）
+
+## 下次遇到时的抓取清单
+
+1. **完整 FAIL 输出**（test.c 已改，应该能看到了）
+2. `ls /` 和 `ls /TMP` 输出
+3. 触发这个 bug 的**完整命令序列**
+4. 保留 disk.img（不要重建）—— 需要时可以拿 gdb 或十六进制看 `/TMP` 目录项
+
+## 短期 workaround
+
+重建 disk.img。已知有效。
+
+---
+
+这条记在这里，不占主线。继续主线 2 剩余项：**libc 完善（`assert` / `ctype` / `qsort`）**。
+
+先问一句：`assert` 失败时的行为——直接 `_exit(1)`，还是打印信息后 `_exit(1)`？后者需要 `fprintf` 到 stderr，但当前 `dprintf` 只支持 `fd 1`（`sys_write` 里 `if (fd != 1) return EINVAL`）。要不要顺手让 `stderr`（fd 2）也能写？这个改动很小，但属于"给不存在的将来预留"还是"顺手做对"，取决于你想不想让 `assert` / 错误信息走 stderr。
+
+
+
+
+等等。上述修改我未应用。
+我在之前的基础上又发现了一个bug
+这是我的test（使用了一个很大的数组[32][200]）
+在运行完test后，运行testkill时sleeper的输出不正确（输出的字符被中途截断）
+
+
+
+
+
+
+
+
+
+
+
+
+## poweroff有序关闭 (UNDO)

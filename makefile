@@ -58,7 +58,9 @@ OBJS = $(BUILD_DIR)/start.o \
 	   $(BUILD_DIR)/keyboard.o \
 	   $(BUILD_DIR)/device.o \
 	   $(BUILD_DIR)/ipc.o \
-	   $(BUILD_DIR)/uaccess.o 
+	   $(BUILD_DIR)/uaccess.o \
+	   $(BUILD_DIR)/rtc.o \
+	   $(BUILD_DIR)/acpi.o 
 
 	   
 
@@ -189,7 +191,11 @@ LIBC_OBJS = $(BUILD_DIR)/libc_string.o \
 			$(BUILD_DIR)/libc_malloc.o \
 			$(BUILD_DIR)/libc_signal.o \
             $(BUILD_DIR)/libc_sigreturn.o \
-			$(BUILD_DIR)/libc_env.o
+			$(BUILD_DIR)/libc_env.o \
+			$(BUILD_DIR)/libc_assert.o \
+			$(BUILD_DIR)/libc_ctype.o \
+			$(BUILD_DIR)/libc_qsort.o \
+			$(BUILD_DIR)/libc_abort.o
 
 $(BUILD_DIR)/libc_string.o: user/libc/string.c
 	$(CC) $(USER_CFLAGS) -c $< -o $@
@@ -212,6 +218,18 @@ $(BUILD_DIR)/libc_sigreturn.o: user/libc/sigreturn.asm
 	$(ASM) $(ASMFLAGS) $< -o $@
 
 $(BUILD_DIR)/libc_env.o: user/libc/env.c
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/libc_assert.o: user/libc/assert.c
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/libc_ctype.o: user/libc/ctype.c
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/libc_qsort.o: user/libc/qsort.c
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/libc_abort.o: user/libc/abort.c
 	$(CC) $(USER_CFLAGS) -c $< -o $@
 
 

@@ -48,18 +48,23 @@ int main(int argc, char **argv){
     }
 }
 ==================== ./user/argtest.c ====================
-/* user/argtest.c
- * 打印自己的 argc/argv，用于验证 spawn 传参。
- */
 #include "syscall.h"
 #include "stdio.h"
+#include "assert.h"
+
+int cmp_int(const void *a, const void *b) {
+    return *(const int*)a - *(const int*)b;
+}
 
 int main(int argc, char **argv) {
-    printf("argtest: argc=%d\n", argc);
-    for (int i = 0; i < argc; i++) {
-        printf("  argv[%d] = \"%s\"\n", i, argv[i]);
-    }
-    return argc;
+    (void)argv;
+    int arr[] = {5, 2, 8, 1, 9, 3, 7, 4, 6, 0};
+    qsort(arr, 10, sizeof(int), cmp_int);
+    /* arr 应为 0..9 */
+
+    assert(isdigit('5'));
+    assert(!isdigit('a'));
+    assert(toupper('a') == 'A');
 }
 ==================== ./user/count.c ====================
 // user/count.c
@@ -385,6 +390,11 @@ void *calloc(size_t n, size_t size);
 void *realloc(void *ptr, size_t new_size);
 
 void  exit(int status);
+void  abort(void);
+
+/* 排序 */
+void  qsort(void *base, size_t n, size_t size,
+            int (*cmp)(const void *, const void *));
 
 /* 环境变量 */
 char *getenv(const char *name);
@@ -437,6 +447,26 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap);
 int dprintf(int fd, const char *fmt, ...);
 
 #endif
+==================== ./user/libc/include/ctype.h ====================
+#ifndef USER_CTYPE_H
+#define USER_CTYPE_H
+
+int isalpha(int c);
+int isdigit(int c);
+int isalnum(int c);
+int isspace(int c);
+int isupper(int c);
+int islower(int c);
+int isprint(int c);
+int ispunct(int c);
+int iscntrl(int c);
+int isxdigit(int c);
+int isblank(int c);
+
+int toupper(int c);
+int tolower(int c);
+
+#endif
 ==================== ./user/libc/include/signal.h ====================
 #ifndef USER_SIGNAL_H
 #define USER_SIGNAL_H
@@ -487,6 +517,21 @@ static inline int raise(int sig) {
 }
 
 #endif
+==================== ./user/libc/include/assert.h ====================
+#ifndef USER_ASSERT_H
+#define USER_ASSERT_H
+
+#ifdef NDEBUG
+#define assert(expr) ((void)0)
+#else
+void __assert_fail(const char *expr, const char *file,
+                   int line, const char *func);
+
+#define assert(expr) \
+    ((expr) ? (void)0 : __assert_fail(#expr, __FILE__, __LINE__, __func__))
+#endif
+
+#endif
 ==================== ./user/libc/include/errno.h ====================
 #ifndef USER_ERRNO_H
 #define USER_ERRNO_H
@@ -513,6 +558,7 @@ static inline int raise(int sig) {
 #define ECHILD     -18
 #define ENOEXEC    -19
 #define ENAMETOOLONG -20
+#define EXDEV      -21
 
 #endif
 ==================== ./user/libc/include/syscall.h ====================
@@ -545,7 +591,7 @@ static inline int raise(int sig) {
 /* ========== 内存管理 (21~29) ========== */
 #define SYS_BRK        21
 
-/* ========== 文件系统 (31~39) ========== */
+/* ========== 文件系统 (31~49) ========== */
 #define SYS_FS_OPEN       31
 #define SYS_FS_READ       32
 #define SYS_FS_WRITE      33
@@ -554,13 +600,17 @@ static inline int raise(int sig) {
 #define SYS_FS_OPENDIR    36
 #define SYS_FS_READDIR    37
 #define SYS_FS_CLOSEDIR   38
+#define SYS_FS_UNLINK     39
+#define SYS_FS_MKDIR      40
+#define SYS_FS_RMDIR      41
+#define SYS_FS_RENAME     42
 
-/* ========== 设备 (41~49) ========== */
-#define SYS_DEV_OPEN      41
-#define SYS_DEV_READ      42
-#define SYS_DEV_WRITE     43
-#define SYS_DEV_IOCTL     44
-#define SYS_DEV_CLOSE     45
+/* ========== 设备 (51~59) ========== */
+#define SYS_DEV_OPEN      51
+#define SYS_DEV_READ      52
+#define SYS_DEV_WRITE     53
+#define SYS_DEV_IOCTL     54
+#define SYS_DEV_CLOSE     55
 
 /* ========== 进程环境 (61~69) ========== */
 #define SYS_GETCWD        61
@@ -739,6 +789,22 @@ static inline int fs_closedir(int fd) {
     return __syscall(SYS_FS_CLOSEDIR, fd, 0, 0);
 }
 
+static inline int fs_unlink(const char *path) {
+    return __syscall(SYS_FS_UNLINK, (int)path, 0, 0);
+}
+
+static inline int fs_mkdir(const char *path) {
+    return __syscall(SYS_FS_MKDIR, (int)path, 0, 0);
+}
+
+static inline int fs_rmdir(const char *path) {
+    return __syscall(SYS_FS_RMDIR, (int)path, 0, 0);
+}
+
+static inline int fs_rename(const char *old_path, const char *new_path) {
+    return __syscall(SYS_FS_RENAME, (int)old_path, (int)new_path, 0);
+}
+
 static inline int getcwd(char *buf, int size) {
     return __syscall(SYS_GETCWD, (int)buf, size, 0);
 }
@@ -769,6 +835,7 @@ static inline int dev_close(int dev) {
 #define FS_O_WRONLY   0x02
 #define FS_O_RDWR     0x03
 #define FS_O_CREAT    0x04
+#define FS_O_TRUNC    0x08
 
 /* ---------- dirent（和内核一致） ---------- */
 #define DIRENT_NAME_MAX  256
@@ -791,6 +858,75 @@ struct dirent {
 #define DEV_TYPE_ATA       4
 
 #endif
+==================== ./user/libc/abort.c ====================
+#include "stdlib.h"
+#include "signal.h"
+#include "syscall.h"
+
+void abort(void) {
+    raise(SIGABRT);
+    /* 信号被忽略或阻塞时的兜底 */
+    _exit(128 + SIGABRT);
+}
+==================== ./user/libc/ctype.c ====================
+#include "ctype.h"
+
+int isalpha(int c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
+
+int isdigit(int c) {
+    return c >= '0' && c <= '9';
+}
+
+int isalnum(int c) {
+    return isalpha(c) || isdigit(c);
+}
+
+int isspace(int c) {
+    return c == ' ' || c == '\t' || c == '\n' ||
+           c == '\r' || c == '\f' || c == '\v';
+}
+
+int isupper(int c) {
+    return c >= 'A' && c <= 'Z';
+}
+
+int islower(int c) {
+    return c >= 'a' && c <= 'z';
+}
+
+int isprint(int c) {
+    return c >= 0x20 && c <= 0x7E;
+}
+
+int ispunct(int c) {
+    return isprint(c) && c != ' ' && !isalnum(c);
+}
+
+int iscntrl(int c) {
+    return (c >= 0 && c < 0x20) || c == 0x7F;
+}
+
+int isxdigit(int c) {
+    return isdigit(c) ||
+           (c >= 'a' && c <= 'f') ||
+           (c >= 'A' && c <= 'F');
+}
+
+int isblank(int c) {
+    return c == ' ' || c == '\t';
+}
+
+int toupper(int c) {
+    if (c >= 'a' && c <= 'z') return c - 32;
+    return c;
+}
+
+int tolower(int c) {
+    if (c >= 'A' && c <= 'Z') return c + 32;
+    return c;
+}
 ==================== ./user/libc/sigreturn.asm ====================
 section .text
 global __sigreturn_trampoline
@@ -1169,6 +1305,44 @@ void *realloc(void *ptr, size_t new_size) {
 void exit(int status) {
     _exit(status);
 }
+==================== ./user/libc/qsort.c ====================
+#include <stddef.h>
+
+static void swap_bytes(char *a, char *b, size_t size) {
+    while (size--) {
+        char t = *a;
+        *a++ = *b;
+        *b++ = t;
+    }
+}
+
+static void qsort_rec(char *base, int lo, int hi, size_t size,
+                      int (*cmp)(const void *, const void *)) {
+    if (lo >= hi) return;
+
+    /* pivot = base[hi] */
+    char *pivot = base + (size_t)hi * size;
+    int i = lo - 1;
+    for (int j = lo; j < hi; j++) {
+        if (cmp(base + (size_t)j * size, pivot) <= 0) {
+            i++;
+            if (i != j) swap_bytes(base + (size_t)i * size,
+                                   base + (size_t)j * size, size);
+        }
+    }
+    i++;
+    if (i != hi) swap_bytes(base + (size_t)i * size,
+                            base + (size_t)hi * size, size);
+
+    qsort_rec(base, lo, i - 1, size, cmp);
+    qsort_rec(base, i + 1, hi, size, cmp);
+}
+
+void qsort(void *base, size_t n, size_t size,
+           int (*cmp)(const void *, const void *)) {
+    if (n < 2 || size == 0) return;
+    qsort_rec((char*)base, 0, (int)n - 1, size, cmp);
+}
 ==================== ./user/libc/signal.c ====================
 #include "signal.h"
 #include "syscall.h"
@@ -1194,6 +1368,17 @@ int sigaction(int sig, const struct sigaction *act, struct sigaction *oldact) {
 
 int sigprocmask(int how, const uint32_t *set, uint32_t *oldset) {
     return __syscall(SYS_SIGPROCMASK, how, (int)set, (int)oldset);
+}
+==================== ./user/libc/assert.c ====================
+#include "assert.h"
+#include "stdio.h"
+#include "stdlib.h"
+
+void __assert_fail(const char *expr, const char *file,
+                   int line, const char *func) {
+    dprintf(2, "%s:%d: %s: assertion '%s' failed\n",
+            file, line, func, expr);
+    abort();
 }
 ==================== ./user/crt0.asm ====================
 section .text
@@ -1363,6 +1548,8 @@ int main(int argc, char **argv) {
 static int g_pass = 0;
 static int g_fail = 0;
 
+static char failures[32][32];
+
 /* ---------- 报告辅助 ---------- */
 
 static void ok(const char *name) {
@@ -1376,6 +1563,7 @@ static void fail(const char *name, const char *why) {
     tty_set_color(C_RED, C_BLACK);
     printf("  [FAIL] %s: %s\n", name, why);
     tty_set_color(C_GRAY, C_BLACK);
+    strcpy(failures[g_fail], name);
     g_fail++;
 }
 
@@ -2178,6 +2366,10 @@ void main(int argc, char **argv) {
     printf("========================================\n");
     tty_set_color(C_GRAY, C_BLACK);
 
+    for(int i=0;i<g_fail;i++){
+        printf("  [FAIL] %s\n", failures[i]);
+    }
+
     return g_fail;
 }
 ==================== ./user/shell.c ====================
@@ -2196,7 +2388,6 @@ void main(int argc, char **argv) {
 
 #define CMD_MAX          128
 #define ARGV_MAX         8
-#define CAT_BUF_SIZE     512
 
 extern char **environ;
 
@@ -2249,11 +2440,6 @@ static void set_color(int fg, int bg) {
     tty_set_color(fg, bg);
 }
 
-static void print_error(const char *fmt, ...) {
-    /* 简化：只接受一个字符串，格式留给调用者 */
-    (void)fmt;
-}
-
 /* ---------- 内置命令 ---------- */
 
 static void cmd_help(void) {
@@ -2261,12 +2447,16 @@ static void cmd_help(void) {
     printf("  ls [path]    list directory\n");
     printf("  cd [path]    change directory (no arg: show cwd)\n");
     printf("  pwd          print working directory\n");
-    printf("  cat <file>   print file contents\n");
     printf("  clear        clear screen\n");
     printf("  help         show this help\n");
     printf("  exit         exit shell\n");
     printf("  touch <file> create empty file\n");
-    printf("  sink <prog>  run program -> null\n");
+    printf("  mkdir <dir>  create directory\n");
+    printf("  rmdir <dir>  remove empty directory\n");
+    printf("  rm <file>    remove file\n");
+    printf("  mv <a> <b>   rename / move\n");
+    printf("  cp <a> <b>   copy file\n");
+    printf("  sink <prog>  run program with stdout discarded\n");
     printf("  <prog>       run program\n");
 }
 
@@ -2309,7 +2499,6 @@ static void cmd_ls(int argc, char **argv) {
 
 static void cmd_cd(int argc, char **argv) {
     if (argc < 2) {
-        /* 无参数：显示 cwd */
         char buf[128];
         int n = getcwd(buf, sizeof(buf));
         if (n > 0) printf("%s\n", buf);
@@ -2335,34 +2524,6 @@ static void cmd_pwd(void) {
     }
 }
 
-static void cmd_cat(int argc, char **argv) {
-    if (argc < 2) {
-        printf("usage: cat <file>\n");
-        return;
-    }
-
-    int fd = fs_open(argv[1], FS_O_RDONLY);
-    if (fd < 0) {
-        set_color(VGA_LIGHT_RED, VGA_BLACK);
-        printf("cat: %s: error %d\n", argv[1], fd);
-        set_color(VGA_LIGHT_GRAY, VGA_BLACK);
-        return;
-    }
-
-    char buf[CAT_BUF_SIZE];
-    int n;
-    while ((n = fs_read(fd, buf, sizeof(buf))) > 0) {
-        write(1, buf, n);
-    }
-    fs_close(fd);
-
-    if (n < 0) {
-        set_color(VGA_LIGHT_RED, VGA_BLACK);
-        printf("\ncat: read error %d\n", n);
-        set_color(VGA_LIGHT_GRAY, VGA_BLACK);
-    }
-}
-
 static void cmd_clear(void) {
     tty_clear();
 }
@@ -2379,66 +2540,95 @@ static void cmd_touch(int argc, char **argv) {
     fs_close(fd);
 }
 
-static int run_one(char *cmd) {
-    char *argv[ARGV_MAX];
-    int argc = tokenize(cmd, argv, ARGV_MAX);
-    if (argc == 0) return 0;
-    argv[argc] = NULL;
-
-    struct spawn_params p = {
-        .size = sizeof(p),
-        .in_fd = SPAWN_FD_INHERIT,
-        .out_fd = SPAWN_FD_INHERIT,
-        .err_fd = SPAWN_FD_INHERIT,
-        .in_pipe = -1,
-        .out_pipe = -1,
-        .err_pipe = -1,
-        .flags = 0,
-        .envp = (uint32_t)environ,
-    };
-
-    int h = spawn(argv[0], argv, &p);
-    if (h < 0) return h;
-
-    tty_set_foreground(h);
-    int status = 0;
-    wait(h, &status, 0);
-    tty_set_foreground(-1);
-    process_close(h);
-    return status;
+static void cmd_mkdir(int argc, char **argv) {
+    if (argc < 2) { printf("usage: mkdir <dir>\n"); return; }
+    int r = fs_mkdir(argv[1]);
+    if (r < 0) {
+        set_color(VGA_LIGHT_RED, VGA_BLACK);
+        printf("mkdir: %s: error %d\n", argv[1], r);
+        set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+    }
 }
 
-/* 带 pipe 的单条命令 */
-static int run_one_with_pipes(char *cmd, int in_pipe, int out_pipe) {
-    char *argv[ARGV_MAX];
-    int argc = tokenize(cmd, argv, ARGV_MAX);
-    if (argc == 0) return 0;
-    argv[argc] = NULL;
+static void cmd_rmdir(int argc, char **argv) {
+    if (argc < 2) { printf("usage: rmdir <dir>\n"); return; }
+    int r = fs_rmdir(argv[1]);
+    if (r < 0) {
+        set_color(VGA_LIGHT_RED, VGA_BLACK);
+        printf("rmdir: %s: error %d\n", argv[1], r);
+        set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+    }
+}
 
-    struct spawn_params p = {
-        .size = sizeof(p),
-        .in_fd = SPAWN_FD_INHERIT,
-        .out_fd = SPAWN_FD_INHERIT,
-        .err_fd = SPAWN_FD_INHERIT,
-        .in_pipe = in_pipe,
-        .out_pipe = out_pipe,
-        .err_pipe = -1,
-        .flags = 0,
-        .envp = (uint32_t)environ,
-    };
+static void cmd_rm(int argc, char **argv) {
+    if (argc < 2) { printf("usage: rm <file>\n"); return; }
+    int r = fs_unlink(argv[1]);
+    if (r < 0) {
+        set_color(VGA_LIGHT_RED, VGA_BLACK);
+        printf("rm: %s: error %d\n", argv[1], r);
+        set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+    }
+}
 
-    int h = spawn(argv[0], argv, &p);
-    return h;   /* 返回 handle，调用者负责 wait/close */
+static void cmd_mv(int argc, char **argv) {
+    if (argc < 3) { printf("usage: mv <src> <dst>\n"); return; }
+    int r = fs_rename(argv[1], argv[2]);
+    if (r < 0) {
+        set_color(VGA_LIGHT_RED, VGA_BLACK);
+        printf("mv: %s -> %s: error %d\n", argv[1], argv[2], r);
+        set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+    }
+}
+
+static void cmd_cp(int argc, char **argv) {
+    if (argc < 3) { printf("usage: cp <src> <dst>\n"); return; }
+
+    int in = fs_open(argv[1], FS_O_RDONLY);
+    if (in < 0) {
+        set_color(VGA_LIGHT_RED, VGA_BLACK);
+        printf("cp: %s: error %d\n", argv[1], in);
+        set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+        return;
+    }
+
+    int out = fs_open(argv[2], FS_O_WRONLY | FS_O_CREAT | FS_O_TRUNC);
+    if (out < 0) {
+        set_color(VGA_LIGHT_RED, VGA_BLACK);
+        printf("cp: %s: error %d\n", argv[2], out);
+        set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+        fs_close(in);
+        return;
+    }
+
+    char buf[512];
+    int n;
+    int err = 0;
+    while ((n = fs_read(in, buf, sizeof(buf))) > 0) {
+        int w = fs_write(out, buf, n);
+        if (w != n) { err = (w < 0) ? w : -1; break; }
+    }
+    if (n < 0) err = n;
+
+    fs_close(in);
+    fs_close(out);
+
+    if (err) {
+        set_color(VGA_LIGHT_RED, VGA_BLACK);
+        printf("cp: error %d\n", err);
+        set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+    }
 }
 
 /* ---------- 主循环 ---------- */
 
 void main(int _argc, char **_argv) {
     (void)_argc; (void)_argv;
+
     /* shell 忽略 SIGINT —— 按 Ctrl+C 不杀 shell */
     struct sigaction sa = {0};
     sa.sa_handler = SIG_IGN;
     sigaction(SIGINT, &sa, 0);
+
     printf("Welcome to HeliumOS Shell!\n");
     printf("Type 'help' for commands.\n\n");
 
@@ -2446,7 +2636,6 @@ void main(int _argc, char **_argv) {
     char *argv[ARGV_MAX];
 
     while (1) {
-        /* 提示符：亮绿 */
         set_color(VGA_LIGHT_GREEN, VGA_BLACK);
         printf("$ ");
         set_color(VGA_LIGHT_GRAY, VGA_BLACK);
@@ -2471,38 +2660,49 @@ void main(int _argc, char **_argv) {
             cmd_cd(argc, argv);
         } else if (strcmp(c, "pwd") == 0) {
             cmd_pwd();
-        // } else if (strcmp(c, "cat") == 0) {
-        //     cmd_cat(argc, argv);
         } else if (strcmp(c, "clear") == 0) {
             cmd_clear();
         } else if (strcmp(c, "touch") == 0) {
             cmd_touch(argc, argv);
+        } else if (strcmp(c, "mkdir") == 0) {
+            cmd_mkdir(argc, argv);
+        } else if (strcmp(c, "rmdir") == 0) {
+            cmd_rmdir(argc, argv);
+        } else if (strcmp(c, "rm") == 0) {
+            cmd_rm(argc, argv);
+        } else if (strcmp(c, "mv") == 0) {
+            cmd_mv(argc, argv);
+        } else if (strcmp(c, "cp") == 0) {
+            cmd_cp(argc, argv);
         } else if (strcmp(c, "sink") == 0) {
-            /* 运行一个程序，丢弃其 stdout */
             struct spawn_params p = {
                 .size   = sizeof(p),
                 .in_fd  = SPAWN_FD_INHERIT,
                 .out_fd = SPAWN_FD_NULL,
                 .err_fd = SPAWN_FD_INHERIT,
+                .in_pipe  = -1,
+                .out_pipe = -1,
+                .err_pipe = -1,
                 .flags  = 0,
                 .envp   = (unsigned int)environ,
             };
-            if (argc < 2) { printf("usage: sink <prog>\n"); }
-            else {
+            if (argc < 2) {
+                printf("usage: sink <prog>\n");
+            } else {
                 int h = spawn(argv[1], argv + 1, &p);
                 if (h >= 0) {
                     tty_set_foreground(h);
-                    int st; wait(h, &st, 0); 
+                    int st; wait(h, &st, 0);
                     tty_set_foreground(-1);
                     process_close(h);
-                }else{
+                } else {
                     set_color(VGA_LIGHT_RED, VGA_BLACK);
                     printf("spawn '%s' failed (error %d)\n", argv[1], h);
                     set_color(VGA_LIGHT_GRAY, VGA_BLACK);
                 }
             }
-                } else {
-            /* 在 argv 里找 | */
+        } else {
+            /* 找 | */
             int pipe_idx = -1;
             for (int i = 0; i < argc; i++) {
                 if (strcmp(argv[i], "|") == 0) {
@@ -2512,21 +2712,20 @@ void main(int _argc, char **_argv) {
             }
 
             if (pipe_idx > 0 && pipe_idx < argc - 1) {
-                /* 有管道 */
                 int fds[2];
                 if (pipe(fds) < 0) {
                     set_color(VGA_LIGHT_RED, VGA_BLACK);
                     printf("pipe failed\n");
                     set_color(VGA_LIGHT_GRAY, VGA_BLACK);
                 } else {
-                    /* 左段 */
-                    argv[pipe_idx] = NULL;   /* 左段以 NULL 结尾 */
+                    argv[pipe_idx] = NULL;
+
                     struct spawn_params p1 = {
                         .size = sizeof(p1),
-                        .in_fd = SPAWN_FD_INHERIT,
+                        .in_fd  = SPAWN_FD_INHERIT,
                         .out_fd = SPAWN_FD_INHERIT,
                         .err_fd = SPAWN_FD_INHERIT,
-                        .in_pipe = -1,
+                        .in_pipe  = -1,
                         .out_pipe = fds[1],
                         .err_pipe = -1,
                         .flags = 0,
@@ -2534,13 +2733,12 @@ void main(int _argc, char **_argv) {
                     };
                     int h1 = spawn(argv[0], &argv[0], &p1);
 
-                    /* 右段 */
                     struct spawn_params p2 = {
                         .size = sizeof(p2),
-                        .in_fd = SPAWN_FD_INHERIT,
+                        .in_fd  = SPAWN_FD_INHERIT,
                         .out_fd = SPAWN_FD_INHERIT,
                         .err_fd = SPAWN_FD_INHERIT,
-                        .in_pipe = fds[0],
+                        .in_pipe  = fds[0],
                         .out_pipe = -1,
                         .err_pipe = -1,
                         .flags = 0,
@@ -2548,7 +2746,6 @@ void main(int _argc, char **_argv) {
                     };
                     int h2 = spawn(argv[pipe_idx + 1], &argv[pipe_idx + 1], &p2);
 
-                    /* 关闭 shell 自己的两端 */
                     ipc_close(fds[0]);
                     ipc_close(fds[1]);
 
@@ -2564,7 +2761,6 @@ void main(int _argc, char **_argv) {
                 printf("syntax error: empty pipe\n");
                 set_color(VGA_LIGHT_GRAY, VGA_BLACK);
             } else {
-                /* 普通 spawn */
                 int h = spawn(c, argv, NULL);
                 if (h < 0) {
                     set_color(VGA_LIGHT_RED, VGA_BLACK);
@@ -2586,7 +2782,7 @@ void main(int _argc, char **_argv) {
         }
     }
 
-    _exit(0);
+    return 0;
 }
 ==================== ./user/linker.ld ====================
 ENTRY(_start_crt0)
@@ -3635,24 +3831,26 @@ struct spawn_params {
 #define SPAWN_FD_NULL      (-2)   /* 丢弃 */
 
 static int sys_write(int fd, const char *buf, uint32_t count) {
-    if (fd != 1) return EINVAL;
+    if (fd != 1 && fd != 2) return EINVAL;
     if (!buf || count == 0) return EINVAL;
     if (check_user_range((uint32_t)buf, count) < 0) return EFAULT;
 
     struct task *cur = get_current_task();
     if (!cur) return EINVAL;
-    
-        switch (cur->stdout_slot.type) {
+
+    struct io_slot *slot = (fd == 1) ? &cur->stdout_slot : &cur->stderr_slot;
+
+    switch (slot->type) {
         case IO_SLOT_DEFAULT:
             return tty_write(buf, count);
         case IO_SLOT_FILE: {
-            int h = cur->stdout_slot.fd;
+            int h = slot->fd;
             if (h < 0 || h >= FS_MAX_HANDLES) return EINVAL;
             if (!cur->fs_handles[h].used) return EINVAL;
             return fs_write(h, buf, count);
         }
         case IO_SLOT_PIPE_WRITE: {
-            int h = cur->stdout_slot.fd;
+            int h = slot->fd;
             if (h < 0 || h >= IPC_MAX_HANDLES) return EINVAL;
             if (!cur->ipc_handles[h].used) return EINVAL;
             return pipe_write(cur->ipc_handles[h].pipe,
@@ -3813,59 +4011,53 @@ static int sys_brk(uint32_t new_brk) {
     struct task *cur = get_current_task();
     if (!cur) return EINVAL;
 
-    // 如果 new_brk == 0，仅返回当前 brk（查询用途）
     if (new_brk == 0) return cur->heap_brk;
-
-    // 边界检查
-    if (new_brk < cur->heap_base || new_brk > cur->heap_limit) {
-        return EINVAL;
-    }
+    if (new_brk < cur->heap_base || new_brk > cur->heap_limit) return EINVAL;
 
     uint32_t old_brk = cur->heap_brk;
-    uint32_t start = (old_brk < new_brk) ? old_brk : new_brk;
-    uint32_t end   = (old_brk < new_brk) ? new_brk : old_brk;
 
-    // 按页对齐操作（4KB 对齐）
-    uint32_t start_page = start & ~0xFFF;
-    uint32_t end_page = (end + 0xFFF) & ~0xFFF;
+    if (new_brk > old_brk) {
+        /* 扩展：从 old_brk 所在页向上扫到 new_brk。
+         * 已映射的页跳过——否则会重映射同一虚拟页，丢掉旧物理页。 */
+        uint32_t first_new = 0;
+        for (uint32_t page = old_brk & ~0xFFF; page < new_brk; page += 0x1000) {
+            if (vmm_get_phys(cur->pgd, page)) continue;
 
-    for (uint32_t addr = start_page; addr < end_page; addr += 4096) {
-            if (new_brk > old_brk) {
-            /* 扩展：逐页分配映射；失败时回滚已映射的部分 */
-            uint32_t next_unmapped = start_page;
-            for (uint32_t addr = start_page; addr < end_page; addr += 4096) {
-                uint32_t phys = pmm_alloc_page();
-                if (!phys) {
-                    /* 回滚：释放本次已映射的页 */
-                    for (uint32_t a = start_page; a < next_unmapped; a += 4096) {
+            uint32_t phys = pmm_alloc_page();
+            if (!phys) {
+                /* 回滚本次新映射的页 */
+                if (first_new) {
+                    for (uint32_t a = first_new; a < page; a += 0x1000) {
                         uint32_t p = vmm_get_phys(cur->pgd, a);
                         if (p) {
                             vmm_unmap_user_page(cur->pgd, a);
                             pmm_free_page(p);
                         }
                     }
-                    return ENOMEM;
                 }
-                vmm_map_user_page(cur->pgd, addr, phys, PTE_WRITE | PTE_USER);
-                next_unmapped = addr + 4096;
+                return ENOMEM;
             }
-        } else {
-            /* 收缩：逐页解映射并释放 */
-            for (uint32_t addr = start_page; addr < end_page; addr += 4096) {
-                uint32_t phys = vmm_get_phys(cur->pgd, addr);
-                if (phys) {
-                    vmm_unmap_user_page(cur->pgd, addr);
-                    pmm_free_page(phys);
-                }
+            vmm_map_user_page(cur->pgd, page, phys, PTE_WRITE | PTE_USER);
+            if (!first_new) first_new = page;
+        }
+    } else if (new_brk < old_brk) {
+        /* 收缩：只释放完整落在 [new_brk, old_brk) 内的页。
+         * 非对齐的 new_brk 不会 unmap 含它的活跃页——那页里有 [< new_brk] 的部分还在用。
+         * 非对齐的 old_brk 不会被越过——只释放到 old_brk 所在页之前。 */
+        for (uint32_t page = (new_brk + 0xFFF) & ~0xFFF;
+             page + 0x1000 <= old_brk;
+             page += 0x1000) {
+            uint32_t phys = vmm_get_phys(cur->pgd, page);
+            if (phys) {
+                vmm_unmap_user_page(cur->pgd, page);
+                pmm_free_page(phys);
             }
         }
-
-        cur->heap_brk = new_brk;
-        return 0;
     }
+    /* new_brk == old_brk：无操作 */
 
     cur->heap_brk = new_brk;
-    return 0; // 成功
+    return 0;
 }
 
 static int sys_spawn(const char *path, char *const argv[], void *params_user) {
@@ -4209,6 +4401,39 @@ void syscall_handler(struct registers *regs) {
         case SYS_FS_CLOSEDIR:
             ret = fs_closedir(arg1);
             break;
+        case SYS_FS_UNLINK: {
+            char path_buf[PATH_MAX_LEN];
+            if (strncpy_from_user(path_buf, (const char*)arg1, sizeof(path_buf)) < 0)
+                ret = EFAULT;
+            else
+                ret = fs_unlink(path_buf);
+            break;
+        }
+        case SYS_FS_MKDIR: {
+            char path_buf[PATH_MAX_LEN];
+            if (strncpy_from_user(path_buf, (const char*)arg1, sizeof(path_buf)) < 0)
+                ret = EFAULT;
+            else
+                ret = fs_mkdir(path_buf);
+            break;
+        }
+        case SYS_FS_RMDIR: {
+            char path_buf[PATH_MAX_LEN];
+            if (strncpy_from_user(path_buf, (const char*)arg1, sizeof(path_buf)) < 0)
+                ret = EFAULT;
+            else
+                ret = fs_rmdir(path_buf);
+            break;
+        }
+        case SYS_FS_RENAME: {
+            char old_buf[PATH_MAX_LEN], new_buf[PATH_MAX_LEN];
+            if (strncpy_from_user(old_buf, (const char*)arg1, sizeof(old_buf)) < 0 ||
+                strncpy_from_user(new_buf, (const char*)arg2, sizeof(new_buf)) < 0)
+                ret = EFAULT;
+            else
+                ret = fs_rename(old_buf, new_buf);
+            break;
+        }
         case SYS_GETCWD:
             if (check_user_range(arg1, arg2) < 0) {
                 ret = EFAULT;
@@ -5561,6 +5786,12 @@ fd_t fs_open(const char *path, int flags) {
                 r = fat32_open_file(fvol, rp.path, &h->u.fat32_file);
             }
             if (r != OK) { h->used = 0; return r; }
+
+            /* 截断：只在 open 成功后执行。CREAT 和 TRUNC 可组合。 */
+            if (flags & FS_O_TRUNC) {
+                int tr = fat32_truncate(fvol, &h->u.fat32_file);
+                if (tr != OK) { h->used = 0; return tr; }
+            }
             return fd;
         }
         default:
@@ -5721,6 +5952,64 @@ int fs_getcwd(char *buf, int size) {
         buf[len++] = cur->cwd_path[i];
     buf[len] = '\0';
     return len;
+}
+
+/* ---------- unlink / mkdir / rmdir / rename ---------- */
+
+int fs_unlink(const char *path) {
+    struct resolved_path rp;
+    if (resolve_path(path, &rp) != OK) return ENOENT;
+    switch (rp.vol->fs_type) {
+        case VOL_FS_FAT32: {
+            struct fat32_volume *fvol = (struct fat32_volume*)rp.vol->fs_private;
+            if (!fvol) return EINVAL;
+            return fat32_unlink(fvol, rp.path);
+        }
+        default: return ENOSYS;
+    }
+}
+
+int fs_mkdir(const char *path) {
+    struct resolved_path rp;
+    if (resolve_path(path, &rp) != OK) return ENOENT;
+    switch (rp.vol->fs_type) {
+        case VOL_FS_FAT32: {
+            struct fat32_volume *fvol = (struct fat32_volume*)rp.vol->fs_private;
+            if (!fvol) return EINVAL;
+            return fat32_mkdir(fvol, rp.path);
+        }
+        default: return ENOSYS;
+    }
+}
+
+int fs_rmdir(const char *path) {
+    struct resolved_path rp;
+    if (resolve_path(path, &rp) != OK) return ENOENT;
+    switch (rp.vol->fs_type) {
+        case VOL_FS_FAT32: {
+            struct fat32_volume *fvol = (struct fat32_volume*)rp.vol->fs_private;
+            if (!fvol) return EINVAL;
+            return fat32_rmdir(fvol, rp.path);
+        }
+        default: return ENOSYS;
+    }
+}
+
+int fs_rename(const char *old_path, const char *new_path) {
+    struct resolved_path old_rp, new_rp;
+    if (resolve_path(old_path, &old_rp) != OK) return ENOENT;
+    if (resolve_path(new_path, &new_rp) != OK) return ENOENT;
+    if (old_rp.vol != new_rp.vol) return EXDEV;   /* 跨卷不支持 */
+
+    switch (old_rp.vol->fs_type) {
+        case VOL_FS_FAT32: {
+            struct fat32_volume *fvol =
+                (struct fat32_volume*)old_rp.vol->fs_private;
+            if (!fvol) return EINVAL;
+            return fat32_rename(fvol, old_rp.path, new_rp.path);
+        }
+        default: return ENOSYS;
+    }
 }
 
 /* ---------- 释放所有句柄 ---------- */
@@ -6634,6 +6923,9 @@ int fat32_create_file(struct fat32_volume *vol, const char *path,
 int fat32_write_file(struct fat32_volume *vol, struct fat32_file *file,
                      const uint8_t *buffer, uint32_t offset, uint32_t size);
 
+/* 截断文件为 0：释放簇链，清 first_cluster / file_size，更新目录项。 */
+int fat32_truncate(struct fat32_volume *vol, struct fat32_file *file);
+                     
 /* 目录操作 */
 int  fat32_opendir(struct fat32_volume *vol, const char *path,
                    struct fat32_dir *dir);
@@ -6643,6 +6935,19 @@ void fat32_closedir(struct fat32_volume *vol, struct fat32_dir *dir);
 
 /* 判断某路径是否是目录 */
 int  fat32_is_dir(struct fat32_volume *vol, const char *path);
+
+/* 删除文件（不处理目录）。失败：ENOENT / EISDIR / EIO */
+int fat32_unlink(struct fat32_volume *vol, const char *path);
+
+/* 创建目录。失败：EEXIST / ENOSPC / ENAMETOOLONG / ENOENT（父目录不存在） */
+int fat32_mkdir(struct fat32_volume *vol, const char *path);
+
+/* 删除空目录。失败：ENOENT / ENOTDIR / ENOTEMPTY / EINVAL（根） */
+int fat32_rmdir(struct fat32_volume *vol, const char *path);
+
+/* 改名/移动。目标已存在返回 EEXIST。*/
+int fat32_rename(struct fat32_volume *vol, const char *old_path,
+                 const char *new_path);
 
 #endif
 ==================== ./src/include/keyboard.h ====================
@@ -7076,7 +7381,8 @@ struct task *tty_get_foreground(void);
 #define FS_O_RDONLY      0x01
 #define FS_O_WRONLY      0x02
 #define FS_O_RDWR        0x03
-#define FS_O_CREAT       0x04    /* 预留 */
+#define FS_O_CREAT       0x04
+#define FS_O_TRUNC       0x08
 
 /* 对象类型 */
 #define FS_OBJ_FILE      1
@@ -7125,6 +7431,10 @@ int  fs_close(fd_t fd);
 fd_t fs_opendir(const char *path);
 int  fs_readdir(fd_t fd, struct dirent *out);
 int  fs_closedir(fd_t fd);
+int fs_unlink(const char *path);
+int fs_mkdir(const char *path);
+int fs_rmdir(const char *path);
+int fs_rename(const char *old_path, const char *new_path);
 
 /* ---------- cwd ---------- */
 int  fs_chdir(const char *path);
@@ -7162,6 +7472,7 @@ fd_t fs_dup_handle(struct task *src_task, fd_t src_fd, struct task *dst_task);
 #define ECHILD     -18    /* 没有子进程 */
 #define ENOEXEC    -19    /* 可执行格式错误 */
 #define ENAMETOOLONG -20    /* 文件名过长 */
+#define EXDEV      -21    /* 跨设备 */
 
 #endif
 ==================== ./src/include/multiboot2.h ====================
@@ -7256,7 +7567,7 @@ uint32_t pmm_get_free_count(void);
 /* ========== 内存管理 (21~29) ========== */
 #define SYS_BRK        21
 
-/* ========== 文件系统 (31~39) ========== */
+/* ========== 文件系统 (31~49) ========== */
 #define SYS_FS_OPEN       31
 #define SYS_FS_READ       32
 #define SYS_FS_WRITE      33
@@ -7265,13 +7576,17 @@ uint32_t pmm_get_free_count(void);
 #define SYS_FS_OPENDIR    36
 #define SYS_FS_READDIR    37
 #define SYS_FS_CLOSEDIR   38
+#define SYS_FS_UNLINK     39
+#define SYS_FS_MKDIR      40
+#define SYS_FS_RMDIR      41
+#define SYS_FS_RENAME     42
 
-/* ========== 设备 (41~49) ========== */
-#define SYS_DEV_OPEN      41
-#define SYS_DEV_READ      42
-#define SYS_DEV_WRITE     43
-#define SYS_DEV_IOCTL     44
-#define SYS_DEV_CLOSE     45
+/* ========== 设备 (51~59) ========== */
+#define SYS_DEV_OPEN      51
+#define SYS_DEV_READ      52
+#define SYS_DEV_WRITE     53
+#define SYS_DEV_IOCTL     54
+#define SYS_DEV_CLOSE     55
 
 /* ========== 进程环境 (61~69) ========== */
 #define SYS_GETCWD        61
@@ -7862,7 +8177,8 @@ static int find_entry_in_dir(struct fat32_volume *vol, uint32_t start_cluster,
                              const char *name, int want_dir,
                              struct fat32_dir_entry *out_e,
                              uint32_t *out_sector_lba,
-                             uint32_t *out_entry_idx) {
+                             uint32_t *out_entry_idx,
+                             int *out_lfn_count) {
     uint32_t cluster = start_cluster;
     uint32_t guard = 1024;
     char lfn_buf[260];
@@ -7914,6 +8230,7 @@ static int find_entry_in_dir(struct fat32_volume *vol, uint32_t start_cluster,
                 if (want_dir == 1 && !is_dir) continue;
                 if (want_dir == 0 && is_dir)  continue;
 
+                if (out_lfn_count) *out_lfn_count = lfn_max_seq;
                 if (out_e) *out_e = *e;
                 if (out_sector_lba) *out_sector_lba = lba;
                 if (out_entry_idx) *out_entry_idx = j;
@@ -7948,7 +8265,7 @@ int fat32_open_file(struct fat32_volume *vol, const char *path,
         struct fat32_dir_entry e;
         uint32_t lba, idx;
         if (!find_entry_in_dir(vol, current_cluster, token, -1,
-                               &e, &lba, &idx)) {
+                               &e, &lba, &idx, NULL)) {
             return ENOENT;
         }
 
@@ -8049,7 +8366,7 @@ int fat32_is_dir(struct fat32_volume *vol, const char *path) {
 
         struct fat32_dir_entry e;
         if (!find_entry_in_dir(vol, current_cluster, token, -1,
-                               &e, NULL, NULL)) {
+                               &e, NULL, NULL, NULL)) {
             return 0;
         }
 
@@ -8087,7 +8404,7 @@ int fat32_opendir(struct fat32_volume *vol, const char *path,
             else path += i;
 
             struct fat32_dir_entry e;
-            if (!find_entry_in_dir(vol, cur, token, 1, &e, NULL, NULL)) {
+            if (!find_entry_in_dir(vol, cur, token, 1, &e, NULL, NULL, NULL)) {
                 return ENOENT;
             }
             cur = (e.cluster_high << 16) | e.cluster_low;
@@ -8222,6 +8539,38 @@ static void dir_entry_to_name(const struct fat32_dir_entry *e, char *out) {
     out[k] = '\0';
 }
 
+/* path → dir_path + name。dir_path 至少 PATH_MAX_LEN 字节，
+ * name 至少 64 字节。成功返回 0，失败返回 -1。 */
+static int split_parent_name(const char *path, char *dir_path, char *name) {
+    const char *p = path;
+    if (p[0] == '/') p++;
+
+    const char *last_slash = NULL;
+    for (const char *q = p; *q; q++) {
+        if (*q == '/') last_slash = q;
+    }
+
+    if (last_slash == NULL) {
+        dir_path[0] = '/';
+        dir_path[1] = '\0';
+        int k = 0;
+        while (p[k] && k < 63) { name[k] = p[k]; k++; }
+        name[k] = '\0';
+    } else {
+        int dlen = last_slash - p;
+        if (dlen >= PATH_MAX_LEN - 1) return -1;
+        dir_path[0] = '/';
+        memcpy(dir_path + 1, p, dlen);
+        dir_path[dlen + 1] = '\0';
+
+        int k = 0;
+        const char *np = last_slash + 1;
+        while (np[k] && k < 63) { name[k] = np[k]; k++; }
+        name[k] = '\0';
+    }
+    return (name[0] == '\0') ? -1 : 0;
+}
+
 /* 找空闲目录项（0x00 或 0xE5）。*/
 static int find_free_dirent(struct fat32_volume *vol, uint32_t dir_cluster,
                             uint32_t *out_sector_lba, uint32_t *out_entry_idx,
@@ -8329,7 +8678,7 @@ static int make_short_name(struct fat32_volume *vol, uint32_t dir_cluster,
         test[k] = '\0';
 
         if (!find_entry_in_dir(vol, dir_cluster, test, -1,
-                               NULL, NULL, NULL)) {
+                               NULL, NULL, NULL, NULL)) {
             memset(out8, ' ', 8);
             memset(out3, ' ', 3);
             for (int i = 0; i < cm; i++) out8[i] = clean_main[i];
@@ -8370,7 +8719,7 @@ static int make_short_name(struct fat32_volume *vol, uint32_t dir_cluster,
         test[k] = '\0';
 
         if (!find_entry_in_dir(vol, dir_cluster, test, -1,
-                               NULL, NULL, NULL)) {
+                               NULL, NULL, NULL, NULL)) {
             return 0;
         }
     }
@@ -8578,7 +8927,7 @@ int fat32_create_file(struct fat32_volume *vol, const char *path,
     /* 再检查一次（防止 open_file 因 LFN 未识别但确实存在） */
     uint32_t sect_lba, idx;
     struct fat32_dir_entry found;
-    if (find_entry_in_dir(vol, dir.cur_cluster, name, -1, &found, &sect_lba, &idx)) {
+    if (find_entry_in_dir(vol, dir.cur_cluster, name, -1, &found, &sect_lba, &idx, NULL)) {
         /* 已有同名的目录项。若是文件则直接打开，若是目录返回错误。 */
         if (found.attributes & 0x10) return EISDIR;
         memset(file, 0, sizeof(*file));
@@ -8797,6 +9146,345 @@ int fat32_write_file(struct fat32_volume *vol, struct fat32_file *file,
     ata_flush();
 
     return (int)size;
+}
+
+/* ---------- 截断 ---------- */
+
+int fat32_truncate(struct fat32_volume *vol, struct fat32_file *file) {
+    if (!vol || !vol->valid || !file) return EINVAL;
+
+    /* 释放簇链（空文件 first_cluster < 2，跳过） */
+    if (file->first_cluster >= 2) {
+        free_cluster_chain(vol, file->first_cluster);
+    }
+
+    file->first_cluster = 0;
+    file->current_cluster = 0;
+    file->current_offset = 0;
+    file->file_size = 0;
+
+    if (file->dirent_valid) {
+        update_dirent(vol, file->dirent_sector_lba, file->dirent_entry_idx,
+                      0, 0);
+    }
+    ata_flush();
+    return OK;
+}
+
+/* ---------- unlink ---------- */
+
+int fat32_unlink(struct fat32_volume *vol, const char *path) {
+    if (!vol || !vol->valid || !path) return EINVAL;
+
+    char dir_path[PATH_MAX_LEN];
+    char name[64];
+    if (split_parent_name(path, dir_path, name) < 0) return EINVAL;
+
+    struct fat32_dir parent;
+    if (fat32_opendir(vol, dir_path, &parent) != OK) return ENOENT;
+
+    struct fat32_dir_entry e;
+    uint32_t sect_lba, idx;
+    int lfn_count = 0;
+    if (!find_entry_in_dir(vol, parent.start_cluster, name, -1,
+                           &e, &sect_lba, &idx, &lfn_count)) {
+        return ENOENT;
+    }
+    if (e.attributes & 0x10) return EISDIR;
+
+    /* 释放簇链 */
+    uint32_t fc = (e.cluster_high << 16) | e.cluster_low;
+    if (fc >= 2) free_cluster_chain(vol, fc);
+
+    /* 标记短名项 + 前面的 LFN 项为 0xE5 */
+    uint8_t sector[SECTOR_SIZE];
+    ata_read_sector(sect_lba, sector);
+    struct fat32_dir_entry *entries = (struct fat32_dir_entry*)sector;
+    int eps = vol->bpb.bytes_per_sector / sizeof(struct fat32_dir_entry);
+
+    for (int i = 0; i < lfn_count; i++) {
+        int j = (int)idx - lfn_count + i;
+        if (j >= 0 && j < eps) entries[j].name[0] = 0xE5;
+    }
+    entries[idx].name[0] = 0xE5;
+    ata_write_sector(sect_lba, sector);
+    ata_flush();
+    return OK;
+}
+
+/* ---------- mkdir ---------- */
+
+int fat32_mkdir(struct fat32_volume *vol, const char *path) {
+    if (!vol || !vol->valid || !path) return EINVAL;
+
+    char dir_path[PATH_MAX_LEN];
+    char name[64];
+    if (split_parent_name(path, dir_path, name) < 0) return EINVAL;
+
+    struct fat32_dir parent;
+    if (fat32_opendir(vol, dir_path, &parent) != OK) return ENOENT;
+
+    if (find_entry_in_dir(vol, parent.start_cluster, name, -1,
+                          NULL, NULL, NULL, NULL)) {
+        return EEXIST;
+    }
+
+    uint32_t new_cluster = alloc_cluster(vol);
+    if (new_cluster == 0) return ENOSPC;
+
+    /* 新簇第一扇区写 . 和 .. */
+    uint8_t sector[SECTOR_SIZE];
+    memset(sector, 0, SECTOR_SIZE);
+    struct fat32_dir_entry *entries = (struct fat32_dir_entry*)sector;
+
+    /* "." → 自己 */
+    memset(entries[0].name, ' ', 8);
+    memset(entries[0].ext, ' ', 3);
+    entries[0].name[0] = '.';
+    entries[0].attributes = 0x10;
+    entries[0].cluster_high = (new_cluster >> 16) & 0xFFFF;
+    entries[0].cluster_low  = new_cluster & 0xFFFF;
+
+    /* ".." → 父目录 */
+    memset(entries[1].name, ' ', 8);
+    memset(entries[1].ext, ' ', 3);
+    entries[1].name[0] = '.';
+    entries[1].name[1] = '.';
+    entries[1].attributes = 0x10;
+    uint32_t pc = parent.start_cluster;
+    entries[1].cluster_high = (pc >> 16) & 0xFFFF;
+    entries[1].cluster_low  = pc & 0xFFFF;
+
+    write_sector_from_cluster(vol, new_cluster, 0, sector);
+
+    uint8_t zero[SECTOR_SIZE];
+    memset(zero, 0, SECTOR_SIZE);
+    for (int s = 1; s < vol->bpb.sectors_per_cluster; s++) {
+        write_sector_from_cluster(vol, new_cluster, s, zero);
+    }
+
+    /* 在父目录写目录项 */
+    uint32_t last_cluster = 0;
+    uint32_t sect_lba, idx;
+    if (!find_free_dirent(vol, parent.start_cluster, &sect_lba, &idx, &last_cluster)) {
+        uint32_t nc = alloc_cluster(vol);
+        if (nc == 0) { free_cluster_chain(vol, new_cluster); return ENOSPC; }
+        set_fat_entry(vol, last_cluster, nc);
+        for (int s = 0; s < vol->bpb.sectors_per_cluster; s++) {
+            write_sector_from_cluster(vol, nc, s, zero);
+        }
+        sect_lba = vol->data_start_lba +
+                   (nc - 2) * vol->bpb.sectors_per_cluster;
+        idx = 0;
+    }
+
+    int name_len = strlen(name);
+    if (name_len > 195) {
+        free_cluster_chain(vol, new_cluster);
+        return ENAMETOOLONG;
+    }
+
+    if (is_83_compatible(name)) {
+        write_dirent(vol, sect_lba, idx, name, 0x10, new_cluster, 0);
+        ata_flush();
+        return OK;
+    }
+
+    uint8_t name8[8], ext3[3];
+    if (make_short_name(vol, parent.start_cluster, name, name8, ext3) < 0) {
+        free_cluster_chain(vol, new_cluster);
+        return ENAMETOOLONG;
+    }
+
+    int n_lfn = (name_len + 12) / 13;
+    int total = n_lfn + 1;
+    uint32_t lba2, idx2, last2 = 0;
+    if (!find_n_free_dirents(vol, parent.start_cluster, total,
+                             &lba2, &idx2, &last2)) {
+        uint32_t nc = alloc_cluster(vol);
+        if (nc == 0) { free_cluster_chain(vol, new_cluster); return ENOSPC; }
+        set_fat_entry(vol, last2, nc);
+        for (int s = 0; s < vol->bpb.sectors_per_cluster; s++) {
+            write_sector_from_cluster(vol, nc, s, zero);
+        }
+        lba2 = vol->data_start_lba + (nc - 2) * vol->bpb.sectors_per_cluster;
+        idx2 = 0;
+    }
+
+    write_lfn_sequence(vol, lba2, idx2, name, name_len,
+                       name8, ext3, 0x10, new_cluster, 0);
+    ata_flush();
+    return OK;
+}
+
+/* ---------- rmdir ---------- */
+
+int fat32_rmdir(struct fat32_volume *vol, const char *path) {
+    if (!vol || !vol->valid || !path) return EINVAL;
+
+    char dir_path[PATH_MAX_LEN];
+    char name[64];
+    if (split_parent_name(path, dir_path, name) < 0) return EINVAL;
+
+    struct fat32_dir parent;
+    if (fat32_opendir(vol, dir_path, &parent) != OK) return ENOENT;
+
+    struct fat32_dir_entry e;
+    uint32_t sect_lba, idx;
+    int lfn_count = 0;
+    if (!find_entry_in_dir(vol, parent.start_cluster, name, -1,
+                           &e, &sect_lba, &idx, &lfn_count)) {
+        return ENOENT;
+    }
+    if (!(e.attributes & 0x10)) return ENOTDIR;
+
+    uint32_t target_cluster = (e.cluster_high << 16) | e.cluster_low;
+    if (target_cluster == vol->root_cluster) return EINVAL;
+
+    /* 检查空：除 . / .. 外不能有项 */
+    int eps = vol->bpb.bytes_per_sector / sizeof(struct fat32_dir_entry);
+    int sectors = vol->bpb.sectors_per_cluster;
+    uint32_t c = target_cluster;
+    uint32_t guard = 1024;
+    int empty = 1;
+
+    while (c >= 2 && c < 0x0FFFFFF8 && guard-- > 0) {
+        for (int s = 0; s < sectors && empty; s++) {
+            uint8_t sector[SECTOR_SIZE];
+            read_sector_from_cluster(vol, c, s, sector);
+            struct fat32_dir_entry *entries = (struct fat32_dir_entry*)sector;
+            for (int j = 0; j < eps; j++) {
+                struct fat32_dir_entry *p = &entries[j];
+                if (p->name[0] == 0x00) { c = 0x0FFFFFF8; break; }  /* 到末尾 */
+                if (p->name[0] == 0xE5) continue;
+                if (is_lfn_entry(p)) continue;
+                if (p->name[0] == '.' &&
+                    (p->name[1] == ' ' ||
+                     (p->name[1] == '.' && p->name[2] == ' '))) {
+                    continue;
+                }
+                empty = 0;
+                break;
+            }
+        }
+        if (!empty) break;
+        c = get_next_cluster(vol, c);
+    }
+    if (!empty) return ENOTEMPTY;
+
+    free_cluster_chain(vol, target_cluster);
+
+    uint8_t sector[SECTOR_SIZE];
+    ata_read_sector(sect_lba, sector);
+    struct fat32_dir_entry *entries = (struct fat32_dir_entry*)sector;
+    for (int i = 0; i < lfn_count; i++) {
+        int j = (int)idx - lfn_count + i;
+        if (j >= 0 && j < eps) entries[j].name[0] = 0xE5;
+    }
+    entries[idx].name[0] = 0xE5;
+    ata_write_sector(sect_lba, sector);
+    ata_flush();
+    return OK;
+}
+
+/* ---------- rename ---------- */
+
+int fat32_rename(struct fat32_volume *vol, const char *old_path,
+                 const char *new_path) {
+    if (!vol || !vol->valid || !old_path || !new_path) return EINVAL;
+
+    char old_dir[PATH_MAX_LEN], old_name[64];
+    if (split_parent_name(old_path, old_dir, old_name) < 0) return EINVAL;
+
+    char new_dir[PATH_MAX_LEN], new_name[64];
+    if (split_parent_name(new_path, new_dir, new_name) < 0) return EINVAL;
+
+    struct fat32_dir old_parent;
+    if (fat32_opendir(vol, old_dir, &old_parent) != OK) return ENOENT;
+
+    struct fat32_dir_entry e;
+    uint32_t old_lba, old_idx;
+    int old_lfn = 0;
+    if (!find_entry_in_dir(vol, old_parent.start_cluster, old_name, -1,
+                           &e, &old_lba, &old_idx, &old_lfn)) {
+        return ENOENT;
+    }
+
+    uint32_t first_cluster = (e.cluster_high << 16) | e.cluster_low;
+    uint32_t file_size = e.file_size;
+    uint8_t attr = e.attributes;
+
+    struct fat32_dir new_parent;
+    if (fat32_opendir(vol, new_dir, &new_parent) != OK) return ENOENT;
+
+    if (find_entry_in_dir(vol, new_parent.start_cluster, new_name, -1,
+                          NULL, NULL, NULL, NULL)) {
+        return EEXIST;
+    }
+
+    int name_len = strlen(new_name);
+    if (name_len > 195) return ENAMETOOLONG;
+
+    uint32_t last_cluster = 0;
+    uint32_t sect_lba, idx;
+    if (!find_free_dirent(vol, new_parent.start_cluster,
+                          &sect_lba, &idx, &last_cluster)) {
+        uint32_t nc = alloc_cluster(vol);
+        if (nc == 0) return ENOSPC;
+        set_fat_entry(vol, last_cluster, nc);
+        uint8_t zero[SECTOR_SIZE];
+        memset(zero, 0, SECTOR_SIZE);
+        for (int s = 0; s < vol->bpb.sectors_per_cluster; s++) {
+            write_sector_from_cluster(vol, nc, s, zero);
+        }
+        sect_lba = vol->data_start_lba +
+                   (nc - 2) * vol->bpb.sectors_per_cluster;
+        idx = 0;
+    }
+
+    if (is_83_compatible(new_name)) {
+        write_dirent(vol, sect_lba, idx, new_name,
+                     attr, first_cluster, file_size);
+    } else {
+        uint8_t name8[8], ext3[3];
+        if (make_short_name(vol, new_parent.start_cluster,
+                            new_name, name8, ext3) < 0) {
+            return ENAMETOOLONG;
+        }
+        int n_lfn = (name_len + 12) / 13;
+        int total = n_lfn + 1;
+        uint32_t lba2, idx2, last2 = 0;
+        if (!find_n_free_dirents(vol, new_parent.start_cluster, total,
+                                 &lba2, &idx2, &last2)) {
+            uint32_t nc = alloc_cluster(vol);
+            if (nc == 0) return ENOSPC;
+            set_fat_entry(vol, last2, nc);
+            uint8_t zero[SECTOR_SIZE];
+            memset(zero, 0, SECTOR_SIZE);
+            for (int s = 0; s < vol->bpb.sectors_per_cluster; s++) {
+                write_sector_from_cluster(vol, nc, s, zero);
+            }
+            lba2 = vol->data_start_lba +
+                   (nc - 2) * vol->bpb.sectors_per_cluster;
+            idx2 = 0;
+        }
+        write_lfn_sequence(vol, lba2, idx2, new_name, name_len,
+                           name8, ext3, attr, first_cluster, file_size);
+    }
+
+    /* 删源目录项 */
+    uint8_t sector[SECTOR_SIZE];
+    ata_read_sector(old_lba, sector);
+    struct fat32_dir_entry *entries = (struct fat32_dir_entry*)sector;
+    int eps = vol->bpb.bytes_per_sector / sizeof(struct fat32_dir_entry);
+    for (int i = 0; i < old_lfn; i++) {
+        int j = (int)old_idx - old_lfn + i;
+        if (j >= 0 && j < eps) entries[j].name[0] = 0xE5;
+    }
+    entries[old_idx].name[0] = 0xE5;
+    ata_write_sector(old_lba, sector);
+    ata_flush();
+    return OK;
 }
 ==================== ./src/drivers/ata.c ====================
 #include <ata.h>
@@ -9893,6 +10581,13 @@ void task_terminate(struct task *t, int status) {
     t->exit_status = status;
     t->zombie = 1;
     t->state = TASK_STATE_ZOMBIE;
+
+    /* 释放持有的所有句柄——和 task_exit 一致。
+     * 不放这里会泄漏：pipe 计数不减、proc_handles 里的子进程 refcount 不减。 */
+    fs_release_all(t);
+    dev_release_all(t);
+    ipc_release_all(t);
+    proc_release_all_handles(t);
 
     /* 从任何队列移除 */
     remove_task_from_queue(&ready_queue_head, &ready_queue_tail, t);

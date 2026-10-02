@@ -35,5 +35,7 @@ struct multiboot2_mmap_entry {
 // 标签类型常量
 #define MULTIBOOT2_TAG_TYPE_END     0
 #define MULTIBOOT2_TAG_TYPE_MMAP    6
+#define MULTIBOOT2_TAG_TYPE_ACPI_OLD  14
+#define MULTIBOOT2_TAG_TYPE_ACPI_NEW  15
 
 #endif

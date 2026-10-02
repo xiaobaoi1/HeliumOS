@@ -81,6 +81,9 @@ static void cmd_help(void) {
     printf("  rm <file>    remove file\n");
     printf("  mv <a> <b>   rename / move\n");
     printf("  cp <a> <b>   copy file\n");
+    printf("  date         show current date/time\n");
+    printf("  halt         power off\n");
+    printf("  reboot       restart\n");
     printf("  sink <prog>  run program with stdout discarded\n");
     printf("  <prog>       run program\n");
 }
@@ -244,6 +247,46 @@ static void cmd_cp(int argc, char **argv) {
     }
 }
 
+static void cmd_date(void) {
+    struct rtc_time t;
+    int r = rtc_get_time(&t);
+    if (r < 0) {
+        set_color(VGA_LIGHT_RED, VGA_BLACK);
+        printf("date: error %d\n", r);
+        set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+        return;
+    }
+    /* 2026-05-15 14:30:00 Sun */
+    static const char *wd[7] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
+    const char *w = (t.weekday < 7) ? wd[t.weekday] : "???";
+    printf("%d-%d-%d %d:%d:%d %s\n",
+           t.year, t.month, t.day, t.hour, t.minute, t.second, w);
+}
+
+static void cmd_halt(void) {
+    set_color(VGA_LIGHT_RED, VGA_BLACK);
+    printf("System halting...\n");
+    set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+    int r = sys_halt();
+    if (r < 0) {
+        set_color(VGA_LIGHT_RED, VGA_BLACK);
+        printf("halt: error %d\n", r);
+        set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+    }
+}
+
+static void cmd_reboot(void) {
+    set_color(VGA_LIGHT_RED, VGA_BLACK);
+    printf("System rebooting...\n");
+    set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+    int r = sys_reboot();
+    if (r < 0) {
+        set_color(VGA_LIGHT_RED, VGA_BLACK);
+        printf("reboot: error %d\n", r);
+        set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+    }
+}
+
 /* ---------- 主循环 ---------- */
 
 void main(int _argc, char **_argv) {
@@ -299,7 +342,12 @@ void main(int _argc, char **_argv) {
             cmd_mv(argc, argv);
         } else if (strcmp(c, "cp") == 0) {
             cmd_cp(argc, argv);
-        } else if (strcmp(c, "sink") == 0) {
+        } else if (strcmp(c, "date") == 0) {
+            cmd_date();
+        } else if (strcmp(c, "halt") == 0) {
+            cmd_halt();
+        } else if (strcmp(c, "reboot") == 0) {
+            cmd_reboot();} else if (strcmp(c, "sink") == 0) {
             struct spawn_params p = {
                 .size   = sizeof(p),
                 .in_fd  = SPAWN_FD_INHERIT,
