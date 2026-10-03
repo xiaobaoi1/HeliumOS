@@ -3,6 +3,7 @@
 #include <printf.h>
 #include <stdint.h>
 #include <stddef.h>
+#include <string.h>
 
 static struct ata_device g_devices[ATA_MAX_DEVICES];
 static int g_count = 0;
@@ -18,15 +19,43 @@ static int ata_probe(uint16_t io_base, uint16_t ctrl_base, uint8_t drive) {
     uint8_t status = inb(io_base + ATA_REG_STATUS);
     if (status == 0xFF || status == 0x00) return 0;
 
-    /* 清寄存器再确认，排除 floating bus */
+    /* 用 IDENTIFY DEVICE 确认设备真的存在。
+     * 空端口的 status 可能偶然非零，IDENTIFY 能过滤掉。 */
     outb(io_base + ATA_REG_SECTOR_COUNT, 0);
     outb(io_base + ATA_REG_LBA_LOW, 0);
     outb(io_base + ATA_REG_LBA_MID, 0);
     outb(io_base + ATA_REG_LBA_HIGH, 0);
+    outb(io_base + ATA_REG_COMMAND, 0xEC);   /* IDENTIFY DEVICE */
 
-    ata_delay_400ns(ctrl_base);
     status = inb(io_base + ATA_REG_STATUS);
-    return (status != 0xFF && status != 0x00);
+    if (status == 0 || status == 0xFF) return 0;
+
+    /* 等 BSY 清零 */
+    int i;
+    for (i = 0; i < 100000; i++) {
+        status = inb(io_base + ATA_REG_STATUS);
+        if (!(status & ATA_SR_BSY)) break;
+    }
+    if (i == 100000) return 0;
+
+    /* LBA_MID / LBA_HIGH 非 0 = ATAPI 或 SATA，不是纯 ATA */
+    if (inb(io_base + ATA_REG_LBA_MID) != 0 ||
+        inb(io_base + ATA_REG_LBA_HIGH) != 0) {
+        return 0;
+    }
+
+    /* 等 DRQ 或 ERR */
+    for (i = 0; i < 100000; i++) {
+        status = inb(io_base + ATA_REG_STATUS);
+        if (status & ATA_SR_ERR) return 0;
+        if (status & ATA_SR_DF)  return 0;
+        if (!(status & ATA_SR_BSY) && (status & ATA_SR_DRQ)) {
+            /* 读走 256 word 的 identify 数据 */
+            for (int k = 0; k < 256; k++) inw(io_base + ATA_REG_DATA);
+            return 1;
+        }
+    }
+    return 0;
 }
 
 void ata_init(void) {
@@ -98,8 +127,11 @@ static int ata_wait_drq(uint16_t io_base) {
     return 0;
 }
 
-void ata_read_sector(const struct ata_device *dev, uint32_t lba, uint8_t *buffer) {
-    if (!dev || !dev->present || !buffer) return;
+int ata_read_sector(const struct ata_device *dev, uint32_t lba, uint8_t *buffer) {
+    if (!dev || !dev->present || !buffer) {
+        if (buffer) memset(buffer, 0, 512);
+        return -1;
+    }
     uint16_t io = dev->io_base;
     uint8_t drive_sel = 0xE0 | (dev->drive << 4) | ((lba >> 24) & 0x0F);
 
@@ -111,44 +143,33 @@ void ata_read_sector(const struct ata_device *dev, uint32_t lba, uint8_t *buffer
         outb(io + ATA_REG_LBA_HIGH, (lba >> 16) & 0xFF);
         outb(io + ATA_REG_COMMAND, ATA_CMD_READ_PIO);
 
-        if (!ata_wait_bsy(io)) {
-            kprintf("[ATA] BSY timeout, retry %d\n", retry);
-            continue;
-        }
-        if (!ata_wait_drq(io)) {
-            kprintf("[ATA] DRQ timeout, retry %d\n", retry);
-            continue;
-        }
+        if (!ata_wait_bsy(io)) continue;
+        if (!ata_wait_drq(io)) continue;
 
         for (int i = 0; i < 256; i++) {
             ((uint16_t*)buffer)[i] = inw(io + ATA_REG_DATA);
         }
 
-        if (!ata_wait_bsy(io)) {
-            kprintf("[ATA] read BSY timeout, retry %d\n", retry);
-            continue;
-        }
+        if (!ata_wait_bsy(io)) continue;
 
         uint8_t status = inb(io + ATA_REG_STATUS);
-        if (status & ATA_SR_ERR) {
-            kprintf("[ATA] Error during read, retry %d\n", retry);
-            continue;
-        }
-        return;
+        if (status & ATA_SR_ERR) continue;
+
+        return 0;   /* 成功 */
     }
+
     kprintf("[ATA] Failed to read sector %d after retries.\n", lba);
+    memset(buffer, 0, 512);
+    return -1;
 }
 
-void ata_write_sector(const struct ata_device *dev, uint32_t lba, const uint8_t *buffer) {
-    if (!dev || !dev->present || !buffer) return;
+int ata_write_sector(const struct ata_device *dev, uint32_t lba, const uint8_t *buffer) {
+    if (!dev || !dev->present || !buffer) return -1;
     uint16_t io = dev->io_base;
     uint8_t drive_sel = 0xE0 | (dev->drive << 4) | ((lba >> 24) & 0x0F);
 
     for (int retry = 0; retry < 3; retry++) {
-        if (!ata_wait_bsy(io)) {
-            kprintf("[ATA] write pre-BSY timeout, retry %d\n", retry);
-            continue;
-        }
+        if (!ata_wait_bsy(io)) continue;
 
         outb(io + ATA_REG_DRIVE, drive_sel);
         outb(io + ATA_REG_SECTOR_COUNT, 1);
@@ -157,33 +178,24 @@ void ata_write_sector(const struct ata_device *dev, uint32_t lba, const uint8_t 
         outb(io + ATA_REG_LBA_HIGH, (lba >> 16) & 0xFF);
         outb(io + ATA_REG_COMMAND, ATA_CMD_WRITE_PIO);
 
-        if (!ata_wait_bsy(io)) {
-            kprintf("[ATA] write BSY timeout, retry %d\n", retry);
-            continue;
-        }
-        if (!ata_wait_drq(io)) {
-            kprintf("[ATA] write DRQ timeout, retry %d\n", retry);
-            continue;
-        }
+        if (!ata_wait_bsy(io)) continue;
+        if (!ata_wait_drq(io)) continue;
 
         const uint16_t *p = (const uint16_t*)buffer;
         for (int i = 0; i < 256; i++) {
             outw(io + ATA_REG_DATA, p[i]);
         }
 
-        if (!ata_wait_bsy(io)) {
-            kprintf("[ATA] write post-BSY timeout, retry %d\n", retry);
-            continue;
-        }
+        if (!ata_wait_bsy(io)) continue;
 
         uint8_t status = inb(io + ATA_REG_STATUS);
-        if (status & ATA_SR_ERR) {
-            kprintf("[ATA] write ERR, retry %d\n", retry);
-            continue;
-        }
-        return;
+        if (status & ATA_SR_ERR) continue;
+
+        return 0;
     }
+
     kprintf("[ATA] Failed to write sector %d after retries.\n", lba);
+    return -1;
 }
 
 void ata_flush(const struct ata_device *dev) {

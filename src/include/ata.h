@@ -49,8 +49,8 @@ int                     ata_device_count(void);
 const struct ata_device *ata_get_device(int idx);
 
 /* LBA28 读写，每次一扇区 */
-void ata_read_sector(const struct ata_device *dev, uint32_t lba, uint8_t *buffer);
-void ata_write_sector(const struct ata_device *dev, uint32_t lba, const uint8_t *buffer);
+int ata_read_sector(const struct ata_device *dev, uint32_t lba, uint8_t *buffer);
+int ata_write_sector(const struct ata_device *dev, uint32_t lba, const uint8_t *buffer);
 void ata_flush(const struct ata_device *dev);
 
 #endif

@@ -153,6 +153,12 @@ void kmain(uint32_t magic, uint32_t addr) {
         }
 
         for (int i = 0; i < np; i++) {
+            /* 只尝试 FAT32 类型（0x0B / 0x0C）。
+             * 其他类型不是 FAT32，跳过，不打日志。 */
+            if (parts[i].type != 0x0B && parts[i].type != 0x0C) {
+                continue;
+            }
+            
             struct fat32_volume *vol = fat32_mount(dev, parts[i].start_lba);
             if (!vol) continue;
 
