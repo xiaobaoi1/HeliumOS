@@ -3,166 +3,198 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
-#include <screen.h>
 
-// ---------- 内部字符输出（绑定到串口） ----------
+/* ---------- 输出后端 ---------- */
+/* 当前绑定到串口。将来接多后端时，把 putc 改成函数指针。 */
 static void putc(char c) {
     serial_write_char(c);
 }
 
-// ---------- 数字打印核心 ----------
-static void print_number(uint32_t num, int base, bool is_signed, bool uppercase) {
-    // 处理有符号负数
-    if (is_signed && (int32_t)num < 0) {
-        putc('-');
-        num = -(int32_t)num; // 转为正数
-    }
+/* ---------- 无符号整数格式化 ---------- */
 
-    // 特殊情况：数字为 0
-    if (num == 0) {
-        putc('0');
-        return;
-    }
+static void print_uint(uint32_t v, int base, int uppercase,
+                       int width, int zero_pad, int left_align) {
+    char buf[32];
+    int len = 0;
+    const char *digits = uppercase ? "0123456789ABCDEF"
+                                   : "0123456789abcdef";
 
-    // 缓冲区（最大 32 位二进制 32 位 + 终止符）
-    char buf[33];
-    int i = 0;
-
-    while (num > 0) {
-        uint32_t remainder = num % base;
-        if (remainder < 10) {
-            buf[i++] = '0' + remainder;
-        } else {
-            // 10->A, 11->B ...
-            if (uppercase) {
-                buf[i++] = 'A' + (remainder - 10);
-            } else {
-                buf[i++] = 'a' + (remainder - 10);
-            }
+    if (v == 0) {
+        buf[len++] = '0';
+    } else {
+        while (v > 0) {
+            buf[len++] = digits[v % base];
+            v /= base;
         }
-        num /= base;
     }
 
-    // 逆序输出
-    while (i > 0) {
-        putc(buf[--i]);
+    int pad = (width > len) ? width - len : 0;
+
+    if (left_align) {
+        for (int i = len - 1; i >= 0; i--) putc(buf[i]);
+        for (int i = 0; i < pad; i++) putc(' ');
+    } else {
+        char pc = zero_pad ? '0' : ' ';
+        for (int i = 0; i < pad; i++) putc(pc);
+        for (int i = len - 1; i >= 0; i--) putc(buf[i]);
     }
 }
 
-// ---------- kprintf 核心实现 ----------
+/* ---------- 有符号整数格式化 ---------- */
+
+static void print_int(int64_t v, int width, int zero_pad, int left_align) {
+    char buf[24];
+    int len = 0;
+    int neg = 0;
+    uint32_t u;
+
+    if (v < 0) {
+        neg = 1;
+        /* int64_t 上取负，安全处理 INT32_MIN */
+        u = (uint32_t)(-v);
+    } else {
+        u = (uint32_t)v;
+    }
+
+    if (u == 0) {
+        buf[len++] = '0';
+    } else {
+        while (u > 0) {
+            buf[len++] = '0' + (u % 10);
+            u /= 10;
+        }
+    }
+
+    int total = len + (neg ? 1 : 0);
+    int pad = (width > total) ? width - total : 0;
+
+    if (left_align) {
+        if (neg) putc('-');
+        for (int i = len - 1; i >= 0; i--) putc(buf[i]);
+        for (int i = 0; i < pad; i++) putc(' ');
+    } else {
+        if (zero_pad) {
+            /* 零填充时符号位在前：-0123 */
+            if (neg) putc('-');
+            for (int i = 0; i < pad; i++) putc('0');
+        } else {
+            for (int i = 0; i < pad; i++) putc(' ');
+            if (neg) putc('-');
+        }
+        for (int i = len - 1; i >= 0; i--) putc(buf[i]);
+    }
+}
+
+/* ---------- 指针：0x + 8 位十六进制 ---------- */
+
+static void print_ptr(uint32_t v) {
+    putc('0');
+    putc('x');
+    for (int i = 7; i >= 0; i--) {
+        uint32_t d = (v >> (i * 4)) & 0xF;
+        putc((d < 10) ? ('0' + d) : ('a' + d - 10));
+    }
+}
+
+/* ---------- 核心 ---------- */
+
 void vkprintf(const char *fmt, va_list args) {
     if (!fmt) return;
 
     while (*fmt) {
+        if (*fmt != '%') {
+            putc(*fmt++);
+            continue;
+        }
+        fmt++;  /* 跳过 '%' */
+
         if (*fmt == '%') {
-            fmt++; // 跳过 '%'
+            putc('%');
+            fmt++;
+            continue;
+        }
 
-            // 处理转义：'%%' 输出 '%'
-            if (*fmt == '%') {
-                putc('%');
-                fmt++;
-                continue;
-            }
+        /* 解析 flags：0 / - */
+        int zero_pad = 0;
+        int left_align = 0;
+        for (;;) {
+            if (*fmt == '0')      { zero_pad = 1; fmt++; }
+            else if (*fmt == '-') { left_align = 1; fmt++; }
+            else break;
+        }
 
-            // 默认是 32 位无符号，用于 %x
-            uint32_t num = 0;
-            bool is_signed = false;
-            bool uppercase = false;
-            int base = 10;
-            bool is_ptr = false;
-
-            // 解析长度/类型
-            switch (*fmt) {
-                case 'c': {
-                    // 字符
-                    char c = (char)va_arg(args, int);
-                    putc(c);
-                    fmt++;
-                    continue;
-                }
-                case 's': {
-                    // 字符串
-                    const char *str = va_arg(args, const char*);
-                    if (str == NULL) str = "(null)";
-                    while (*str) {
-                        putc(*str++);
-                    }
-                    fmt++;
-                    continue;
-                }
-                case 'd':
-                case 'i': {
-                    // 有符号十进制
-                    is_signed = true;
-                    base = 10;
-                    num = va_arg(args, uint32_t);
-                    fmt++;
-                    break;
-                }
-                case 'u': {
-                    // 无符号十进制
-                    is_signed = false;
-                    base = 10;
-                    num = va_arg(args, uint32_t);
-                    fmt++;
-                    break;
-                }
-                case 'x': {
-                    // 小写十六进制
-                    uppercase = false;
-                    base = 16;
-                    num = va_arg(args, uint32_t);
-                    fmt++;
-                    break;
-                }
-                case 'X': {
-                    // 大写十六进制
-                    uppercase = true;
-                    base = 16;
-                    num = va_arg(args, uint32_t);
-                    fmt++;
-                    break;
-                }
-                case 'p': {
-                    // 指针（按 32 位 16 进制输出，带 0x 前缀）
-                    is_ptr = true;
-                    uppercase = false;
-                    base = 16;
-                    num = va_arg(args, uint32_t);
-                    fmt++;
-                    putc('0');
-                    putc('x');
-                    // 补满 8 位：手动补前导零
-                    int digits = 8; // 32 位 / 4
-                    for (int i = 7; i >= 0; i--) {
-                        uint8_t nibble = (num >> (i * 4)) & 0xF;
-                        putc((nibble < 10) ? ('0' + nibble) : ('a' + nibble - 10));
-                    }
-                    continue; // 直接跳过 print_number，因为已处理
-                }
-                default: {
-                    // 无法识别的格式，直接原样输出
-                    putc('%');
-                    putc(*fmt);
-                    fmt++;
-                    continue;
-                }
-            }
-
-            // 常规数字输出（非指针）
-            if (!is_ptr) {
-                print_number(num, base, is_signed, uppercase);
-            }
-
-        } else {
-            // 普通字符
-            putc(*fmt);
+        /* 解析宽度 */
+        int width = 0;
+        while (*fmt >= '0' && *fmt <= '9') {
+            width = width * 10 + (*fmt - '0');
             fmt++;
         }
+
+        /* 解析长度：l */
+        int is_long = 0;
+        if (*fmt == 'l') { is_long = 1; fmt++; }
+
+        /* 解析类型 */
+        switch (*fmt) {
+            case 'd':
+            case 'i': {
+                int64_t v = is_long ? (int64_t)va_arg(args, long)
+                                    : (int64_t)va_arg(args, int);
+                print_int(v, width, zero_pad, left_align);
+                break;
+            }
+            case 'u': {
+                uint32_t v = is_long
+                    ? (uint32_t)va_arg(args, unsigned long)
+                    : va_arg(args, unsigned int);
+                print_uint(v, 10, 0, width, zero_pad, left_align);
+                break;
+            }
+            case 'x': {
+                uint32_t v = is_long
+                    ? (uint32_t)va_arg(args, unsigned long)
+                    : va_arg(args, unsigned int);
+                print_uint(v, 16, 0, width, zero_pad, left_align);
+                break;
+            }
+            case 'X': {
+                uint32_t v = is_long
+                    ? (uint32_t)va_arg(args, unsigned long)
+                    : va_arg(args, unsigned int);
+                print_uint(v, 16, 1, width, zero_pad, left_align);
+                break;
+            }
+            case 'p': {
+                uint32_t v = (uint32_t)(uintptr_t)va_arg(args, void*);
+                print_ptr(v);
+                break;
+            }
+            case 'c':
+                putc((char)va_arg(args, int));
+                break;
+            case 's': {
+                const char *s = va_arg(args, const char*);
+                if (!s) s = "(null)";
+                int len = 0;
+                for (const char *p = s; *p; p++) len++;
+                int pad = (width > len) ? width - len : 0;
+                if (!left_align) for (int i = 0; i < pad; i++) putc(' ');
+                while (*s) putc(*s++);
+                if (left_align)  for (int i = 0; i < pad; i++) putc(' ');
+                break;
+            }
+            default:
+                /* 未知修饰符：原样输出，保持可见 */
+                putc('%');
+                if (*fmt) putc(*fmt);
+                break;
+        }
+        if (*fmt) fmt++;
     }
 }
 
-// ---------- 对外接口 ----------
+/* ---------- 对外接口 ---------- */
+
 void kprintf(const char *fmt, ...) {
     va_list args;
     va_start(args, fmt);

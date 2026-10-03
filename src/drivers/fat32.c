@@ -15,23 +15,26 @@ static int fat32_volume_count = 0;
 static uint32_t fat_cache_lba = 0xFFFFFFFF;
 static uint8_t  fat_cache[SECTOR_SIZE];
 static int      fat_cache_valid = 0;
+static const struct ata_device *fat_cache_dev = NULL;
 
-static void fat_read_cached(uint32_t lba, uint8_t *out) {
-    if (fat_cache_valid && fat_cache_lba == lba) {
+static void fat_read_cached(const struct ata_device *dev, uint32_t lba, uint8_t *out) {
+    if (fat_cache_valid && fat_cache_lba == lba && fat_cache_dev == dev) {
         memcpy(out, fat_cache, SECTOR_SIZE);
         return;
     }
-    ata_read_sector(lba, fat_cache);
+    ata_read_sector(dev, lba, fat_cache);
     fat_cache_lba = lba;
+    fat_cache_dev = dev;
     fat_cache_valid = 1;
     memcpy(out, fat_cache, SECTOR_SIZE);
 }
 
-static void fat_write_cached(uint32_t lba, const uint8_t *in) {
+static void fat_write_cached(const struct ata_device *dev, uint32_t lba, const uint8_t *in) {
     memcpy(fat_cache, in, SECTOR_SIZE);
     fat_cache_lba = lba;
+    fat_cache_dev = dev;
     fat_cache_valid = 1;
-    ata_write_sector(lba, in);
+    ata_write_sector(dev, lba, in);
 }
 
 /* 判断是否 LFN 项 */
@@ -117,13 +120,13 @@ static uint32_t get_next_cluster(struct fat32_volume *vol, uint32_t cluster) {
 
     uint8_t sector1[SECTOR_SIZE];
     uint8_t sector2[SECTOR_SIZE];
-    fat_read_cached(fat_sector, sector1);
+    fat_read_cached(vol->dev, fat_sector, sector1);
 
     uint32_t next = 0;
     if (offset_in_sector + 4 <= SECTOR_SIZE) {
         next = *(uint32_t*)(sector1 + offset_in_sector);
     } else {
-        fat_read_cached(fat_sector + 1, sector2);
+        fat_read_cached(vol->dev, fat_sector + 1, sector2);
         uint32_t part1_len = SECTOR_SIZE - offset_in_sector;
         memcpy((uint8_t*)&next, sector1 + offset_in_sector, part1_len);
         memcpy((uint8_t*)&next + part1_len, sector2, 4 - part1_len);
@@ -142,13 +145,13 @@ static int set_fat_entry(struct fat32_volume *vol, uint32_t cluster, uint32_t va
                               copy * vol->bpb.fat_size_32 +
                               sector_offset;
         uint8_t sector[SECTOR_SIZE];
-        fat_read_cached(fat_sector, sector);
+        fat_read_cached(vol->dev, fat_sector, sector);
 
         uint32_t old = *(uint32_t*)(sector + offset_in_sector);
         uint32_t new_val = (old & 0xF0000000) | (value & 0x0FFFFFFF);
         *(uint32_t*)(sector + offset_in_sector) = new_val;
 
-        fat_write_cached(fat_sector, sector);
+        fat_write_cached(vol->dev, fat_sector, sector);
     }
     return OK;
 }
@@ -203,7 +206,7 @@ static void read_sector_from_cluster(struct fat32_volume *vol, uint32_t cluster,
     uint32_t lba = vol->data_start_lba +
                    (cluster - 2) * vol->bpb.sectors_per_cluster +
                    sector_in_cluster;
-    ata_read_sector(lba, buffer);
+    ata_read_sector(vol->dev, lba, buffer);
 }
 
 static void write_sector_from_cluster(struct fat32_volume *vol, uint32_t cluster,
@@ -212,12 +215,14 @@ static void write_sector_from_cluster(struct fat32_volume *vol, uint32_t cluster
     uint32_t lba = vol->data_start_lba +
                    (cluster - 2) * vol->bpb.sectors_per_cluster +
                    sector_in_cluster;
-    ata_write_sector(lba, buffer);
+    ata_write_sector(vol->dev, lba, buffer);
 }
 
 /* ---------- 挂载 ---------- */
 
-struct fat32_volume *fat32_mount(uint32_t partition_lba) {
+struct fat32_volume *fat32_mount(const struct ata_device *dev,
+                                 uint32_t partition_lba) {
+    if (!dev || !dev->present) return NULL;
     if (fat32_volume_count >= FAT32_MAX_VOLUMES) {
         kprintf("[FAT32] ERROR: too many volumes\n");
         return NULL;
@@ -227,7 +232,7 @@ struct fat32_volume *fat32_mount(uint32_t partition_lba) {
     memset(vol, 0, sizeof(*vol));
 
     uint8_t sector[SECTOR_SIZE];
-    ata_read_sector(partition_lba, sector);
+    ata_read_sector(dev, partition_lba, sector);
 
     struct fat32_bpb *bpb = (struct fat32_bpb*)sector;
     if (bpb->signature != FAT32_SIGNATURE) {
@@ -242,6 +247,7 @@ struct fat32_volume *fat32_mount(uint32_t partition_lba) {
     vol->root_cluster = bpb->root_cluster;
     vol->valid = 1;
     vol->last_alloc_hint = 2;
+    vol->dev = dev;
 
     fat32_volume_count++;
 
@@ -280,7 +286,7 @@ static int find_entry_in_dir(struct fat32_volume *vol, uint32_t start_cluster,
             uint8_t sector[SECTOR_SIZE];
             uint32_t lba = vol->data_start_lba +
                            (cluster - 2) * vol->bpb.sectors_per_cluster + s;
-            ata_read_sector(lba, sector);
+            ata_read_sector(vol->dev, lba, sector);
             struct fat32_dir_entry *entries = (struct fat32_dir_entry*)sector;
 
             for (int j = 0; j < eps; j++) {
@@ -408,7 +414,7 @@ int fat32_read_file(struct fat32_volume *vol, struct fat32_file *file,
 
         while (to_read > 0) {
             uint8_t sector[SECTOR_SIZE];
-            ata_read_sector(first_sector + sector_in_cluster, sector);
+            ata_read_sector(vol->dev, first_sector + sector_in_cluster, sector);
             uint32_t copy_len = (to_read < (SECTOR_SIZE - sector_offset))
                               ? to_read : (SECTOR_SIZE - sector_offset);
             memcpy(buffer + read_pos, sector + sector_offset, copy_len);
@@ -675,7 +681,7 @@ static int find_free_dirent(struct fat32_volume *vol, uint32_t dir_cluster,
             uint8_t sector[SECTOR_SIZE];
             uint32_t lba = vol->data_start_lba +
                            (cluster - 2) * vol->bpb.sectors_per_cluster + s;
-            ata_read_sector(lba, sector);
+            ata_read_sector(vol->dev, lba, sector);
             struct fat32_dir_entry *entries = (struct fat32_dir_entry*)sector;
 
             for (int j = 0; j < eps; j++) {
@@ -834,7 +840,7 @@ static int find_n_free_dirents(struct fat32_volume *vol, uint32_t dir_cluster,
             uint8_t sector[SECTOR_SIZE];
             uint32_t lba = vol->data_start_lba +
                            (cluster - 2) * vol->bpb.sectors_per_cluster + s;
-            ata_read_sector(lba, sector);
+            ata_read_sector(vol->dev, lba, sector);
             struct fat32_dir_entry *entries = (struct fat32_dir_entry*)sector;
 
             int run = 0, run_start = 0;
@@ -889,7 +895,7 @@ static void write_lfn_sequence(struct fat32_volume *vol,
                                uint8_t attr, uint32_t first_cluster,
                                uint32_t size) {
     uint8_t sector[SECTOR_SIZE];
-    ata_read_sector(sect_lba, sector);
+    ata_read_sector(vol->dev, sect_lba, sector);
     struct fat32_dir_entry *entries = (struct fat32_dir_entry*)sector;
 
     int n_lfn = (name_len + 12) / 13;
@@ -924,7 +930,7 @@ static void write_lfn_sequence(struct fat32_volume *vol,
     se->cluster_low  = first_cluster & 0xFFFF;
     se->file_size = size;
 
-    ata_write_sector(sect_lba, sector);
+    ata_write_sector(vol->dev, sect_lba, sector);
 }
 
 /* 写目录项 */
@@ -932,7 +938,7 @@ static void write_dirent(struct fat32_volume *vol, uint32_t sector_lba,
                          uint32_t entry_idx, const char *name,
                          uint8_t attr, uint32_t first_cluster, uint32_t size) {
     uint8_t sector[SECTOR_SIZE];
-    ata_read_sector(sector_lba, sector);
+    ata_read_sector(vol->dev, sector_lba, sector);
     struct fat32_dir_entry *entries = (struct fat32_dir_entry*)sector;
     struct fat32_dir_entry *e = &entries[entry_idx];
     memset(e, 0, sizeof(*e));
@@ -946,7 +952,7 @@ static void write_dirent(struct fat32_volume *vol, uint32_t sector_lba,
     e->cluster_low  = first_cluster & 0xFFFF;
     e->file_size    = size;
 
-    ata_write_sector(sector_lba, sector);
+    ata_write_sector(vol->dev, sector_lba, sector);
 }
 
 /* 更新目录项的 first_cluster / file_size */
@@ -954,7 +960,7 @@ static void update_dirent(struct fat32_volume *vol, uint32_t sector_lba,
                           uint32_t entry_idx, uint32_t first_cluster,
                           uint32_t size) {
     uint8_t sector[SECTOR_SIZE];
-    ata_read_sector(sector_lba, sector);
+    ata_read_sector(vol->dev, sector_lba, sector);
     struct fat32_dir_entry *entries = (struct fat32_dir_entry*)sector;
     struct fat32_dir_entry *e = &entries[entry_idx];
 
@@ -962,7 +968,7 @@ static void update_dirent(struct fat32_volume *vol, uint32_t sector_lba,
     e->cluster_low  = first_cluster & 0xFFFF;
     e->file_size    = size;
 
-    ata_write_sector(sector_lba, sector);
+    ata_write_sector(vol->dev, sector_lba, sector);
 }
 
 /* ---------- 创建文件（存在则打开） ---------- */
@@ -1069,7 +1075,7 @@ int fat32_create_file(struct fat32_volume *vol, const char *path,
         file->dirent_valid = 1;
 
         write_dirent(vol, sect_lba, idx, name, 0x20, 0, 0);
-        ata_flush();
+        ata_flush(vol->dev);
         return OK;
     }
 
@@ -1119,7 +1125,7 @@ int fat32_create_file(struct fat32_volume *vol, const char *path,
 
     write_lfn_sequence(vol, lba2, idx2, name, name_len,
                        name8, ext3, 0x20, 0, 0);
-    ata_flush();
+    ata_flush(vol->dev);
     return OK;
 }
 
@@ -1195,7 +1201,7 @@ int fat32_write_file(struct fat32_volume *vol, struct fat32_file *file,
 
             if (sector_offset != 0 || to_write < SECTOR_SIZE) {
                 /* 部分写：先读出该扇区 */
-                ata_read_sector(lba, sector);
+                ata_read_sector(vol->dev, lba, sector);
             } else {
                 memset(sector, 0, SECTOR_SIZE);
             }
@@ -1204,7 +1210,7 @@ int fat32_write_file(struct fat32_volume *vol, struct fat32_file *file,
                               ? to_write : (SECTOR_SIZE - sector_offset);
             memcpy(sector + sector_offset, buffer + written, copy_len);
 
-            ata_write_sector(lba, sector);
+            ata_write_sector(vol->dev, lba, sector);
 
             written += copy_len;
             to_write -= copy_len;
@@ -1231,7 +1237,7 @@ int fat32_write_file(struct fat32_volume *vol, struct fat32_file *file,
     }
 
     /* 一次 flush，覆盖本次写入的所有扇区 */
-    ata_flush();
+    ata_flush(vol->dev);
 
     return (int)size;
 }
@@ -1255,7 +1261,7 @@ int fat32_truncate(struct fat32_volume *vol, struct fat32_file *file) {
         update_dirent(vol, file->dirent_sector_lba, file->dirent_entry_idx,
                       0, 0);
     }
-    ata_flush();
+    ata_flush(vol->dev);
     return OK;
 }
 
@@ -1286,7 +1292,7 @@ int fat32_unlink(struct fat32_volume *vol, const char *path) {
 
     /* 标记短名项 + 前面的 LFN 项为 0xE5 */
     uint8_t sector[SECTOR_SIZE];
-    ata_read_sector(sect_lba, sector);
+    ata_read_sector(vol->dev, sect_lba, sector);
     struct fat32_dir_entry *entries = (struct fat32_dir_entry*)sector;
     int eps = vol->bpb.bytes_per_sector / sizeof(struct fat32_dir_entry);
 
@@ -1295,8 +1301,8 @@ int fat32_unlink(struct fat32_volume *vol, const char *path) {
         if (j >= 0 && j < eps) entries[j].name[0] = 0xE5;
     }
     entries[idx].name[0] = 0xE5;
-    ata_write_sector(sect_lba, sector);
-    ata_flush();
+    ata_write_sector(vol->dev, sect_lba, sector);
+    ata_flush(vol->dev);
     return OK;
 }
 
@@ -1374,7 +1380,7 @@ int fat32_mkdir(struct fat32_volume *vol, const char *path) {
 
     if (is_83_compatible(name)) {
         write_dirent(vol, sect_lba, idx, name, 0x10, new_cluster, 0);
-        ata_flush();
+        ata_flush(vol->dev);
         return OK;
     }
 
@@ -1401,7 +1407,7 @@ int fat32_mkdir(struct fat32_volume *vol, const char *path) {
 
     write_lfn_sequence(vol, lba2, idx2, name, name_len,
                        name8, ext3, 0x10, new_cluster, 0);
-    ata_flush();
+    ata_flush(vol->dev);
     return OK;
 }
 
@@ -1463,15 +1469,15 @@ int fat32_rmdir(struct fat32_volume *vol, const char *path) {
     free_cluster_chain(vol, target_cluster);
 
     uint8_t sector[SECTOR_SIZE];
-    ata_read_sector(sect_lba, sector);
+    ata_read_sector(vol->dev, sect_lba, sector);
     struct fat32_dir_entry *entries = (struct fat32_dir_entry*)sector;
     for (int i = 0; i < lfn_count; i++) {
         int j = (int)idx - lfn_count + i;
         if (j >= 0 && j < eps) entries[j].name[0] = 0xE5;
     }
     entries[idx].name[0] = 0xE5;
-    ata_write_sector(sect_lba, sector);
-    ata_flush();
+    ata_write_sector(vol->dev, sect_lba, sector);
+    ata_flush(vol->dev);
     return OK;
 }
 
@@ -1562,7 +1568,7 @@ int fat32_rename(struct fat32_volume *vol, const char *old_path,
 
     /* 删源目录项 */
     uint8_t sector[SECTOR_SIZE];
-    ata_read_sector(old_lba, sector);
+    ata_read_sector(vol->dev, old_lba, sector);
     struct fat32_dir_entry *entries = (struct fat32_dir_entry*)sector;
     int eps = vol->bpb.bytes_per_sector / sizeof(struct fat32_dir_entry);
     for (int i = 0; i < old_lfn; i++) {
@@ -1570,7 +1576,7 @@ int fat32_rename(struct fat32_volume *vol, const char *old_path,
         if (j >= 0 && j < eps) entries[j].name[0] = 0xE5;
     }
     entries[old_idx].name[0] = 0xE5;
-    ata_write_sector(old_lba, sector);
-    ata_flush();
+    ata_write_sector(vol->dev, old_lba, sector);
+    ata_flush(vol->dev);
     return OK;
 }

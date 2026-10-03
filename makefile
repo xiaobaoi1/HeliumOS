@@ -58,6 +58,8 @@ OBJS = $(BUILD_DIR)/start.o \
 	   $(BUILD_DIR)/keyboard.o \
 	   $(BUILD_DIR)/device.o \
 	   $(BUILD_DIR)/ipc.o \
+	   $(BUILD_DIR)/pci.o \
+	   $(BUILD_DIR)/partition.o \
 	   $(BUILD_DIR)/uaccess.o \
 	   $(BUILD_DIR)/rtc.o \
 	   $(BUILD_DIR)/acpi.o 
@@ -115,12 +117,13 @@ $(ISO): $(KERNEL_ELF)
 
 # ==================== 硬盘镜像（用于测试文件系统写入） ====================
 $(DISK_IMG): $(KERNEL_ELF) $(BUILD_DIR)/SHELL.ELF $(BUILD_DIR)/IDLE.ELF $(BUILD_DIR)/TEST.ELF $(BUILD_DIR)/TESTKILL.ELF $(BUILD_DIR)/SLEEPER.ELF $(BUILD_DIR)/ARGTEST.ELF $(BUILD_DIR)/TESTWRITE.ELF $(BUILD_DIR)/TESTFAULT.ELF $(BUILD_DIR)/TESTENV.ELF $(BUILD_DIR)/COUNT.ELF $(BUILD_DIR)/CAT.ELF
-	@echo "🛠️  正在创建 FAT32 硬盘镜像 (需要 sudo 权限)..."
+	@echo "正在创建 FAT32 硬盘镜像 (需要 sudo 权限)..."
 	dd if=/dev/zero of=$(DISK_IMG) bs=1M count=64 status=none
 	(echo o; echo n; echo p; echo 1; echo 2048; echo; echo t; echo c; echo a; echo 1; echo w) | fdisk $(DISK_IMG) > /dev/null 2>&1
 	@OFFSET=$$((2048*512)); \
 	sudo losetup /dev/loop22 $(DISK_IMG); \
 	sudo losetup /dev/loop23 $(DISK_IMG) -o $$OFFSET; \
+
 	sudo mkfs.vfat -F 32 /dev/loop23 > /dev/null; \
 	sudo mount /dev/loop23 /mnt/build; \
 	sudo mkdir -p /mnt/build/boot/grub; \
@@ -153,6 +156,18 @@ $(DISK_IMG): $(KERNEL_ELF) $(BUILD_DIR)/SHELL.ELF $(BUILD_DIR)/IDLE.ELF $(BUILD_
 	sudo losetup -d /dev/loop22
 	@echo "硬盘镜像生成成功: $(DISK_IMG)"
 
+# 	test
+	dd if=/dev/zero of=$(BUILD_DIR)/TESTIMG.img bs=1M count=64 status=none
+	(echo o; echo n; echo p; echo 1; echo 2048; echo; echo t; echo c; echo w) | fdisk $(BUILD_DIR)/TESTIMG.img > /dev/null 2>&1
+	@OFFSET=$$((2048*512)); \
+	sudo losetup /dev/loop22 $(BUILD_DIR)/TESTIMG.img; \
+	sudo losetup /dev/loop23 $(BUILD_DIR)/TESTIMG.img -o $$OFFSET; \
+
+	sudo mkfs.vfat -F 32 /dev/loop23 > /dev/null; \
+	sudo losetup -d /dev/loop23; \
+	sudo losetup -d /dev/loop22
+	
+
 # ==================== 运行目标 ====================
 # 默认运行 ISO（省事）
 run: $(ISO)
@@ -160,7 +175,7 @@ run: $(ISO)
 
 # 运行硬盘镜像（测试文件系统时使用）
 run-disk: $(DISK_IMG)
-	$(QEMU) -drive file=$(DISK_IMG),format=raw -serial stdio -m 1024
+	$(QEMU) -drive file=$(DISK_IMG),format=raw -serial stdio -m 1024 -drive file=$(BUILD_DIR)/TESTIMG.img,format=raw
 
 # 调试（与 run 相同，只是名称更明确）
 debug: $(ISO)

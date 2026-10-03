@@ -162,3 +162,45 @@
 ---
 
 要不要现在把这份 TODO 落成实际文件？还是先看别的？
+
+
+
+
+
+
+
+
+
+
+## 当前更新的 Backlog
+
+### 待办
+
+| 编号 | 问题 | 位置 | 优先级 | 备注 |
+|---|---|---|---|---|
+| H1.B | 异常表（用户访问识别） | `isr_handler` + stub | 低 | 按需分页 / mmap / SMP 前 |
+| H5 | `vmm_map_user_page` 不检查重复映射 | `vmm.c` | 低 | **本次处理** |
+| H6 | `sys_spawn` 失败路径与 `task_create` 一致性 | `syscall.c` | 低 | 核对过两条失败路径，均干净；需具体场景才能确认 |
+| H7 | 两层卷表示（volume vs fat32_volume）命名区分 | `volume.c` / `fat32.c` | 低 | 无实际影响 |
+| H10 | `wake_up_waiters` 里 `wait_target==NULL` 模糊 | `task.c` | 低 | 保留 + 补注释 |
+| H14 | `acpi_poweroff` 遍历 SLP_TYPa 候选值 | `acpi.c` | 低 | 已知简化，等 AML 解析器 |
+| H15 | ACPI 表校验和（RSDT/XSDT 内部表） | `acpi.c` | 低 | 表损坏时可能崩 |
+| H16 | XSDT 表地址 > 4GB 跳过 | `acpi.c` | 低 | UEFI 64 位系统找不到 FADT |
+| F8 | 内核堆 > 2048 | `heap.c` | 中 | 需要时再做 |
+| F10 | FAT32 数据扇区缓存 | `fat32.c` | 低 | FAT 表已有单槽缓存，数据扇区没有 |
+
+### 已修 / 已实现（从 backlog 移除）
+
+- ~~H8~~ `user_stack_phys` 字段不存在
+- ~~H11~~ `filesz > memsz` 检查已在
+- ~~H12~~ `vaddr + memsz` 溢出检查已在
+- ~~H13~~ `fs_open` 目录返回 `EISDIR` 已在
+- ~~F5~~ RTC 已做
+- ~~F6~~ 关机 / 重启已做
+- ~~F9~~ FAT32 LFN 已实现
+
+### 字段说明
+
+- H 前缀：加固项（防御 / 正确性 / 边界）
+- F 前缀：功能项（新能力）
+- 优先级：低 = 不主动做，遇到再做；中 = 到某规模前必做

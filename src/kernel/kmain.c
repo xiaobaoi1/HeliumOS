@@ -21,6 +21,8 @@
 #include <ipc.h>
 #include <rtc.h>
 #include <acpi.h>
+#include <pci.h>
+#include <partition.h>
 
 
 static const char *shell_env[] = {
@@ -130,16 +132,52 @@ void kmain(uint32_t magic, uint32_t addr) {
     keyboard_init();
     serial_register_dev();
 
+    pci_init();
     ata_init();
     // fat32_init(2048);
 
-    /* 挂载 FAT32 并注册为 SYS 卷 */
-    struct fat32_volume *sys_vol = fat32_mount(2048);
+    /* 遍历所有 ATA 设备的所有 MBR 主分区，尝试挂载 FAT32。
+     * 第一个成功的是 SYS，其余按 A/B/C... 编号。 */
+    struct fat32_volume *sys_vol = NULL;
+    int mounted = 0;
+
+    for (int d = 0; d < ata_device_count(); d++) {
+        const struct ata_device *dev = ata_get_device(d);
+        if (!dev) continue;
+
+        struct mbr_partition parts[MBR_MAX_PRIMARY];
+        int np = mbr_parse(dev, parts, MBR_MAX_PRIMARY);
+        if (np == 0) {
+            kprintf("[KERNEL] Device %d: no MBR partition\n", d);
+            continue;
+        }
+
+        for (int i = 0; i < np; i++) {
+            struct fat32_volume *vol = fat32_mount(dev, parts[i].start_lba);
+            if (!vol) continue;
+
+            char name[VOL_NAME_LEN];
+            if (mounted == 0) {
+                name[0] = 'S'; name[1] = 'Y'; name[2] = 'S'; name[3] = '\0';
+                sys_vol = vol;
+            } else if (mounted - 1 < 26) {
+                name[0] = 'A' + (char)(mounted - 1);
+                name[1] = '\0';
+            } else {
+                /* 超过 26 个卷——VOL_MAX 是 8，不会到这里 */
+                continue;
+            }
+
+            volume_register(name, VOL_FS_FAT32, parts[i].start_lba,
+                            parts[i].sector_count, vol);
+            mounted++;
+        }
+    }
+
     if (!sys_vol) {
-        kprintf("[KERNEL] Failed to mount FAT32\n");
+        kprintf("[KERNEL] No FAT32 volume found\n");
         while (1) __asm__("hlt");
     }
-    volume_register("SYS", VOL_FS_FAT32, 2048, 128 * 1024, sys_vol);
 
     create_idle_task(sys_vol);
     create_shell_task(sys_vol);

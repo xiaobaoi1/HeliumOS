@@ -83,6 +83,17 @@ void vmm_map_user_page(uint32_t *pgd, uint32_t virt, uint32_t phys, uint32_t fla
         ptable = ptable_virt;
     }
 
+    /* H5: 检查重复映射。已映射时保持旧映射并警告——
+     * 覆盖会丢失旧 phys 引用，造成永久泄漏。 */
+    if (ptable[pte_idx] & PTE_PRESENT) {
+        kprintf("[VMM] WARNING: remap virt 0x%x "
+                "(old phys 0x%x, requested 0x%x) — kept old\n",
+                virt,
+                ptable[pte_idx] & 0xFFFFF000,
+                phys & 0xFFFFF000);
+        return;
+    }
+
     /* 设置页表项 */
     ptable[pte_idx] = (phys & 0xFFFFF000) | (flags & 0xFFF) | PTE_PRESENT;
     #ifdef DEBUG_VMM

@@ -117,6 +117,8 @@ void wake_up_waiters(struct task *target) {
     if (!target) return;
     for (struct task *t = blocked_list_head; t; ) {
         struct task *next = t->next;
+        /* wait_target == NULL 是通配（等任意子进程），
+         * 非 NULL 是精确匹配——两者共用同一字段。 */
         if (t->state == TASK_STATE_WAITING_CHILD &&
             (t->wait_target == NULL || t->wait_target == target)) {
             t->wait_target = NULL;

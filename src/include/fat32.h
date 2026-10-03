@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <volume.h>
+#include <ata.h>
 
 #define SECTOR_SIZE 512
 #define FAT32_SIGNATURE 0xAA55
@@ -78,6 +79,7 @@ struct fat32_volume {
     uint32_t root_cluster;            /* 根目录簇号 */
     uint8_t  valid;                   /* 挂载成功标志 */
     uint32_t last_alloc_hint;    /* 上次分配的簇号 + 1，避免每次从头扫 */
+    const struct ata_device *dev;   /* 新增：所属 ATA 设备 */
 };
 
 /* 目录迭代句柄 */
@@ -90,7 +92,8 @@ struct fat32_dir {
 };
 
 /* ★ 挂载一个 FAT32 分区 */
-struct fat32_volume *fat32_mount(uint32_t partition_lba);
+struct fat32_volume *fat32_mount(const struct ata_device *dev,
+                                 uint32_t partition_lba);
 
 /* ★ 所有操作都带 vol 参数 */
 int fat32_open_file(struct fat32_volume *vol, const char *path,
