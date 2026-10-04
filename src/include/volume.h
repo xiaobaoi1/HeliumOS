@@ -25,9 +25,12 @@ struct volume {
 #define DIRENT_NAME_MAX  256
 struct dirent {
     char     name[DIRENT_NAME_MAX];
-    uint8_t  attributes;         /* bit4 = 目录 */
+    uint8_t  attributes;
     uint8_t  reserved[3];
     uint32_t size;
+    uint16_t mod_date;   /* FAT32 原始格式 */
+    uint16_t mod_time;
+    uint32_t pad;        /* 保持 4 字节对齐 */
 };
 
 /* 初始化卷子系统 */

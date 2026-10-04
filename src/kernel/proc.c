@@ -50,6 +50,7 @@ struct task *proc_find_by_pid(uint32_t pid) {
 int proc_list(uint32_t *pids, int max) {
     int n = 0;
     for (struct task *t = proc_list_head; t && n < max; t = t->proc_next) {
+        if (t->zombie) continue;
         pids[n++] = t->pid;
     }
     return n;

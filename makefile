@@ -216,7 +216,8 @@ LIBC_OBJS = $(BUILD_DIR)/libc_string.o \
 			$(BUILD_DIR)/libc_assert.o \
 			$(BUILD_DIR)/libc_ctype.o \
 			$(BUILD_DIR)/libc_qsort.o \
-			$(BUILD_DIR)/libc_abort.o
+			$(BUILD_DIR)/libc_abort.o \
+			$(BUILD_DIR)/libc_stdlib.o 
 
 $(BUILD_DIR)/libc_string.o: user/libc/string.c
 	$(CC) $(USER_CFLAGS) -c $< -o $@
@@ -251,6 +252,9 @@ $(BUILD_DIR)/libc_qsort.o: user/libc/qsort.c
 	$(CC) $(USER_CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/libc_abort.o: user/libc/abort.c
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/libc_stdlib.o: user/libc/stdlib.c
 	$(CC) $(USER_CFLAGS) -c $< -o $@
 
 

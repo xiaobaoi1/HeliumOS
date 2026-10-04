@@ -6,12 +6,13 @@
 /* ========== 进程控制 (1~9) ========== */
 #define SYS_EXIT          1
 #define SYS_GETPID        2
-#define SYS_SPAWN         3      /* 返回 proc_handle_t（不再是 pid） */
-
+#define SYS_SPAWN         3
+#define SYS_GETPPID       4
 #define SYS_SLEEP         5
-#define SYS_WAIT          6      /* 新增：wait(handle, *status, timeout) */
-#define SYS_KILL          7      /* 新增：kill(handle, status) */
-#define SYS_PROC_CLOSE    8      /* 新增：process_close(handle) */
+#define SYS_WAIT          6
+#define SYS_KILL          7
+#define SYS_PROC_CLOSE    8
+#define SYS_PROC_LIST     9
 
 /* ========== 标准流 (11~12) ========== */
 #define SYS_READ                     11
@@ -43,6 +44,7 @@
 #define SYS_FS_MKDIR      40
 #define SYS_FS_RMDIR      41
 #define SYS_FS_RENAME     42
+#define SYS_FS_FSTAT      43
 
 /* ========== 设备 (51~59) ========== */
 #define SYS_DEV_OPEN      51
@@ -54,6 +56,7 @@
 /* ========== 进程环境 (61~69) ========== */
 #define SYS_GETCWD        61
 #define SYS_CHDIR         62
+#define SYS_UNAME         63
 
 /* ========== 信号 (71~79) ========== */
 #define SYS_SIGACTION     71

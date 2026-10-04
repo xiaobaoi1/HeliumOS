@@ -20,6 +20,7 @@
 #include <rtc.h>
 #include <acpi.h>
 
+#define PROC_LIST_MAX 64
 
 /* 用户态结构体镜像。字段顺序和 user/libc/include/syscall.h 保持一致。
  * size 用于版本兼容：内核只读 min(size, 本结构体大小) 字节。 */
@@ -213,6 +214,63 @@ static int sys_waitpid(int pid, int *status) {
         }
     }
     return ECHILD;
+}
+
+/* ---------- proc_list ---------- */
+
+static int sys_proc_list(uint32_t *user_buf, int max) {
+    struct task *cur = get_current_task();
+    if (!cur || !user_buf || max <= 0) return EINVAL;
+    if (max > PROC_LIST_MAX) max = PROC_LIST_MAX;
+    if (check_user_range((uint32_t)user_buf, (uint32_t)max * 4) < 0)
+        return EFAULT;
+
+    /* syscall 上下文 IF=0（int 0x80 中断门自动关中断），
+     * proc_list_head 不会被时钟中断修改。直接遍历安全。 */
+    uint32_t tmp[PROC_LIST_MAX];
+    int n = proc_list(tmp, max);
+    if (copy_to_user((uint32_t)user_buf, tmp, (uint32_t)n * 4) < 0)
+        return EFAULT;
+    return n;
+}
+
+/* ---------- uname ---------- */
+
+struct uname_buf {
+    char sysname[16];
+    char release[16];
+    char machine[16];
+};
+
+static int sys_uname(struct uname_buf *user_buf) {
+    if (!user_buf) return EINVAL;
+    if (check_user_range((uint32_t)user_buf, sizeof(struct uname_buf)) < 0)
+        return EFAULT;
+
+    struct uname_buf u;
+    memset(&u, 0, sizeof(u));
+    strncpy(u.sysname, "HeliumOS", sizeof(u.sysname) - 1);
+    strncpy(u.release, "0.1",     sizeof(u.release) - 1);
+    strncpy(u.machine, "i686",    sizeof(u.machine) - 1);
+
+    if (copy_to_user((uint32_t)user_buf, &u, sizeof(u)) < 0)
+        return EFAULT;
+    return OK;
+}
+
+/* ---------- fstat ---------- */
+
+static int sys_fstat(int fd, struct fstat_buf *user_buf) {
+    if (!user_buf) return EINVAL;
+    if (check_user_range((uint32_t)user_buf, sizeof(struct fstat_buf)) < 0)
+        return EFAULT;
+
+    struct fstat_buf tmp;
+    int r = fs_fstat(fd, &tmp);
+    if (r != OK) return r;
+    if (copy_to_user((uint32_t)user_buf, &tmp, sizeof(tmp)) < 0)
+        return EFAULT;
+    return OK;
 }
 
 static int sys_brk(uint32_t new_brk) {
@@ -514,6 +572,12 @@ void syscall_handler(struct registers *regs) {
         case SYS_GETPID:
             ret = get_current_task()->pid;
             break;
+        case SYS_GETPPID:
+            ret = (int)get_current_task()->creator_pid;
+            break;
+        case SYS_PROC_LIST:
+            ret = sys_proc_list((uint32_t*)arg1, (int)arg2);
+            break;
         case SYS_BRK:
             ret = sys_brk(arg1);
             break;
@@ -590,6 +654,9 @@ void syscall_handler(struct registers *regs) {
         case SYS_FS_CLOSE:
             ret = fs_close(arg1);
             break;
+        case SYS_FS_FSTAT:
+            ret = sys_fstat(arg1, (struct fstat_buf*)arg2);
+            break;
         case SYS_FS_OPENDIR: {
             char path_buf[PATH_MAX_LEN];
             if (strncpy_from_user(path_buf, (const char*)arg1, sizeof(path_buf)) < 0) {
@@ -658,6 +725,9 @@ void syscall_handler(struct registers *regs) {
             }
             break;
         }
+        case SYS_UNAME:
+            ret = sys_uname((struct uname_buf*)arg1);
+            break;
 
         /* ---------- 设备 ---------- */
         case SYS_DEV_OPEN:

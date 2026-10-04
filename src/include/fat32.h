@@ -59,15 +59,20 @@ struct fat32_dir_entry {
     uint32_t file_size;
 } __attribute__((packed));
 
-/* 文件句柄（不变） */
+/* 文件句柄 */
 struct fat32_file {
     uint32_t first_cluster;
     uint32_t current_cluster;
     uint32_t current_offset;
     uint32_t file_size;
-    uint32_t dirent_sector_lba;   /* 目录项所在扇区 LBA */
-    uint32_t dirent_entry_idx;    /* 扇区内的项索引 */
-    uint8_t  dirent_valid;        /* 是否已记录 */
+    uint32_t dirent_sector_lba;
+    uint32_t dirent_entry_idx;
+    uint8_t  dirent_valid;
+    uint8_t  pad[3];
+    uint16_t create_time;   /* FAT32 原始格式 */
+    uint16_t create_date;
+    uint16_t mod_time;
+    uint16_t mod_date;
 };
 
 /* ★ 新增：FAT32 卷上下文。每个挂载点一个 */

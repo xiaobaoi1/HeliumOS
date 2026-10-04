@@ -71,3 +71,40 @@ char *strchr(const char *s, int c) {
     }
     return (c == '\0') ? (char*)s : NULL;
 }
+
+char *strcat(char *dest, const char *src) {
+    char *d = dest;
+    while (*d) d++;
+    while ((*d++ = *src++) != '\0');
+    return dest;
+}
+
+char *strncat(char *dest, const char *src, size_t n) {
+    char *d = dest;
+    while (*d) d++;
+    size_t i = 0;
+    while (i < n && src[i]) { d[i] = src[i]; i++; }
+    d[i] = '\0';
+    return dest;
+}
+
+char *strrchr(const char *s, int c) {
+    const char *last = NULL;
+    while (*s) {
+        if (*s == (char)c) last = s;
+        s++;
+    }
+    if ((char)c == '\0') return (char*)s;
+    return (char*)last;
+}
+
+char *strstr(const char *haystack, const char *needle) {
+    if (!*needle) return (char*)haystack;
+    for (; *haystack; haystack++) {
+        const char *h = haystack;
+        const char *n = needle;
+        while (*h && *n && *h == *n) { h++; n++; }
+        if (!*n) return (char*)haystack;
+    }
+    return NULL;
+}

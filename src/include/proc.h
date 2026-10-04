@@ -36,6 +36,7 @@ void proc_unref(struct task *t);            /* 归零且 zombie 时释放 */
 
 /* ---------- 全局查询 ---------- */
 struct task *proc_find_by_pid(uint32_t pid);
+/* 列出所有非 zombie 进程的 pid。返回实际数量。 */
 int          proc_list(uint32_t *pids, int max);
 
 /* ---------- 句柄 ---------- */

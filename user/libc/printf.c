@@ -1,5 +1,6 @@
 #include "stdio.h"
-#include "syscall.h"     /* ← 新增，为了 write */
+#include "syscall.h"
+#include <stdint.h>
 
 /* ---------- putchar ---------- */
 
@@ -32,41 +33,93 @@ static void putc_str(char c, void *ctx) {
     sc->pos++;
 }
 
-/* ---------- 数字输出 ---------- */
+/* ---------- 无符号整数 ---------- */
 
-static void print_uint(putc_fn putc, void *ctx, unsigned int v,
-                       int base, int uppercase) {
+static void print_uint(putc_fn putc, void *ctx, uint32_t v,
+                       int base, int uppercase,
+                       int width, int zero_pad, int left_align) {
     char buf[32];
-    int i = 0;
-    if (v == 0) { putc('0', ctx); return; }
-    while (v > 0) {
-        unsigned int d = v % base;
-        buf[i++] = (d < 10) ? ('0' + d)
-                            : ((uppercase ? 'A' : 'a') + (d - 10));
-        v /= base;
-    }
-    while (i > 0) putc(buf[--i], ctx);
-}
+    int len = 0;
+    const char *digits = uppercase ? "0123456789ABCDEF"
+                                   : "0123456789abcdef";
 
-static void print_int(putc_fn putc, void *ctx, int v) {
-    if (v < 0) {
-        putc('-', ctx);
-        print_uint(putc, ctx, (unsigned int)(-(long)v), 10, 0);
+    if (v == 0) {
+        buf[len++] = '0';
     } else {
-        print_uint(putc, ctx, (unsigned int)v, 10, 0);
+        while (v > 0) {
+            buf[len++] = digits[v % base];
+            v /= base;
+        }
+    }
+
+    int pad = (width > len) ? width - len : 0;
+
+    if (left_align) {
+        for (int i = len - 1; i >= 0; i--) putc(buf[i], ctx);
+        for (int i = 0; i < pad; i++) putc(' ', ctx);
+    } else {
+        char pc = zero_pad ? '0' : ' ';
+        for (int i = 0; i < pad; i++) putc(pc, ctx);
+        for (int i = len - 1; i >= 0; i--) putc(buf[i], ctx);
     }
 }
 
-static void print_hex8(putc_fn putc, void *ctx, unsigned int v) {
+/* ---------- 有符号整数 ---------- */
+
+static void print_int(putc_fn putc, void *ctx, int64_t v,
+                      int width, int zero_pad, int left_align) {
+    char buf[24];
+    int len = 0;
+    int neg = 0;
+    uint32_t u;
+
+    if (v < 0) {
+        neg = 1;
+        u = (uint32_t)(-v);
+    } else {
+        u = (uint32_t)v;
+    }
+
+    if (u == 0) {
+        buf[len++] = '0';
+    } else {
+        while (u > 0) {
+            buf[len++] = '0' + (u % 10);
+            u /= 10;
+        }
+    }
+
+    int total = len + (neg ? 1 : 0);
+    int pad = (width > total) ? width - total : 0;
+
+    if (left_align) {
+        if (neg) putc('-', ctx);
+        for (int i = len - 1; i >= 0; i--) putc(buf[i], ctx);
+        for (int i = 0; i < pad; i++) putc(' ', ctx);
+    } else {
+        if (zero_pad) {
+            if (neg) putc('-', ctx);
+            for (int i = 0; i < pad; i++) putc('0', ctx);
+        } else {
+            for (int i = 0; i < pad; i++) putc(' ', ctx);
+            if (neg) putc('-', ctx);
+        }
+        for (int i = len - 1; i >= 0; i--) putc(buf[i], ctx);
+    }
+}
+
+/* ---------- 指针 ---------- */
+
+static void print_ptr(putc_fn putc, void *ctx, uint32_t v) {
     putc('0', ctx);
     putc('x', ctx);
     for (int i = 7; i >= 0; i--) {
-        unsigned int d = (v >> (i * 4)) & 0xF;
+        uint32_t d = (v >> (i * 4)) & 0xF;
         putc((d < 10) ? ('0' + d) : ('a' + d - 10), ctx);
     }
 }
 
-/* ---------- 核心格式化 ---------- */
+/* ---------- 核心 ---------- */
 
 static void vformat(putc_fn putc, void *ctx, const char *fmt, va_list ap) {
     while (*fmt) {
@@ -75,50 +128,84 @@ static void vformat(putc_fn putc, void *ctx, const char *fmt, va_list ap) {
             continue;
         }
         fmt++;
-        if (*fmt == '%') { putc('%', ctx); fmt++; continue; }
+
+        if (*fmt == '%') {
+            putc('%', ctx);
+            fmt++;
+            continue;
+        }
+
+        int zero_pad = 0;
+        int left_align = 0;
+        for (;;) {
+            if (*fmt == '0')      { zero_pad = 1; fmt++; }
+            else if (*fmt == '-') { left_align = 1; fmt++; }
+            else break;
+        }
+
+        int width = 0;
+        while (*fmt >= '0' && *fmt <= '9') {
+            width = width * 10 + (*fmt - '0');
+            fmt++;
+        }
+
+        int is_long = 0;
+        if (*fmt == 'l') { is_long = 1; fmt++; }
 
         switch (*fmt) {
             case 'd':
-            case 'i':
-                print_int(putc, ctx, va_arg(ap, int));
+            case 'i': {
+                int64_t v = is_long ? (int64_t)va_arg(ap, long)
+                                    : (int64_t)va_arg(ap, int);
+                print_int(putc, ctx, v, width, zero_pad, left_align);
                 break;
-            case 'u':
-                print_uint(putc, ctx, va_arg(ap, unsigned int), 10, 0);
+            }
+            case 'u': {
+                uint32_t v = is_long
+                    ? (uint32_t)va_arg(ap, unsigned long)
+                    : va_arg(ap, unsigned int);
+                print_uint(putc, ctx, v, 10, 0, width, zero_pad, left_align);
                 break;
-            case 'x':
-                print_uint(putc, ctx, va_arg(ap, unsigned int), 16, 0);
+            }
+            case 'x': {
+                uint32_t v = is_long
+                    ? (uint32_t)va_arg(ap, unsigned long)
+                    : va_arg(ap, unsigned int);
+                print_uint(putc, ctx, v, 16, 0, width, zero_pad, left_align);
                 break;
-            case 'X':
-                print_uint(putc, ctx, va_arg(ap, unsigned int), 16, 1);
+            }
+            case 'X': {
+                uint32_t v = is_long
+                    ? (uint32_t)va_arg(ap, unsigned long)
+                    : va_arg(ap, unsigned int);
+                print_uint(putc, ctx, v, 16, 1, width, zero_pad, left_align);
                 break;
-            case 'p':
-                print_hex8(putc, ctx, (unsigned int)(long)va_arg(ap, void*));
+            }
+            case 'p': {
+                uint32_t v = (uint32_t)(uintptr_t)va_arg(ap, void*);
+                print_ptr(putc, ctx, v);
                 break;
+            }
             case 'c':
                 putc((char)va_arg(ap, int), ctx);
                 break;
             case 's': {
                 const char *s = va_arg(ap, const char*);
                 if (!s) s = "(null)";
+                int len = 0;
+                for (const char *p = s; *p; p++) len++;
+                int pad = (width > len) ? width - len : 0;
+                if (!left_align) for (int i = 0; i < pad; i++) putc(' ', ctx);
                 while (*s) putc(*s++, ctx);
+                if (left_align)  for (int i = 0; i < pad; i++) putc(' ', ctx);
                 break;
             }
-            case 'l':
-                fmt++;
-                if (*fmt == 'd' || *fmt == 'i') {
-                    print_int(putc, ctx, va_arg(ap, long));
-                } else if (*fmt == 'u') {
-                    print_uint(putc, ctx, va_arg(ap, unsigned long), 10, 0);
-                } else if (*fmt == 'x') {
-                    print_uint(putc, ctx, va_arg(ap, unsigned long), 16, 0);
-                }
-                break;
             default:
                 putc('%', ctx);
-                putc(*fmt, ctx);
+                if (*fmt) putc(*fmt, ctx);
                 break;
         }
-        fmt++;
+        if (*fmt) fmt++;
     }
 }
 

@@ -132,6 +132,39 @@ int fs_write(fd_t fd, const void *buf, uint32_t n) {
     }
 }
 
+static void fat32_decode_time(uint16_t d, uint16_t t, struct fs_time *out) {
+    out->year   = (uint16_t)(1980 + ((d >> 9) & 0x7F));
+    out->month  = (d >> 5) & 0x0F;
+    out->day    = d & 0x1F;
+    out->hour   = (t >> 11) & 0x1F;
+    out->minute = (t >> 5) & 0x3F;
+    out->second = (uint8_t)((t & 0x1F) * 2);
+    out->reserved = 0;
+}
+
+int fs_fstat(fd_t fd, struct fstat_buf *out) {
+    struct fs_handle *h = fs_get(fd);
+    if (!h || !out) return EINVAL;
+
+    if (h->obj_type == FS_OBJ_FILE) {
+        out->size = h->u.fat32_file.file_size;
+        out->attributes = 0x20;
+        fat32_decode_time(h->u.fat32_file.create_date,
+                          h->u.fat32_file.create_time, &out->ctime);
+        fat32_decode_time(h->u.fat32_file.mod_date,
+                          h->u.fat32_file.mod_time, &out->mtime);
+    } else if (h->obj_type == FS_OBJ_DIR) {
+        out->size = 0;
+        out->attributes = 0x10;
+        memset(&out->ctime, 0, sizeof(out->ctime));
+        memset(&out->mtime, 0, sizeof(out->mtime));
+    } else {
+        return EINVAL;
+    }
+    memset(out->reserved, 0, sizeof(out->reserved));
+    return OK;
+}
+
 /* ---------- 目录 ---------- */
 fd_t fs_opendir(const char *path) {
     struct resolved_path rp;

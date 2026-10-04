@@ -39,6 +39,27 @@ struct fs_handle {
     } u;
 };
 
+/* 解析后的时间（和 RTC 布局一致） */
+struct fs_time {
+    uint16_t year;
+    uint8_t  month;
+    uint8_t  day;
+    uint8_t  hour;
+    uint8_t  minute;
+    uint8_t  second;
+    uint8_t  reserved;
+};
+
+struct fstat_buf {
+    uint32_t size;
+    struct fs_time ctime;
+    struct fs_time mtime;
+    uint8_t  attributes;
+    uint8_t  reserved[3];
+};
+
+
+
 /* ---------- 生命周期 ---------- */
 void fs_init(void);
 /* 释放一个进程的所有文件句柄。
@@ -58,6 +79,7 @@ int  fs_read(fd_t fd, void *buf, uint32_t n);
 int  fs_write(fd_t fd, const void *buf, uint32_t n);
 int  fs_seek(fd_t fd, uint32_t offset);
 int  fs_close(fd_t fd);
+int  fs_fstat(fd_t fd, struct fstat_buf *out);
 
 /* ---------- 目录 API ---------- */
 fd_t fs_opendir(const char *path);

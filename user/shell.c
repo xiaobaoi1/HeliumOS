@@ -69,7 +69,7 @@ static void set_color(int fg, int bg) {
 
 static void cmd_help(void) {
     printf("HeliumOS Shell commands:\n");
-    printf("  ls [path]    list directory\n");
+    printf("  ls [-l] [path]  list directory\n");
     printf("  cd [path]    change directory (no arg: show cwd)\n");
     printf("  pwd          print working directory\n");
     printf("  clear        clear screen\n");
@@ -84,12 +84,22 @@ static void cmd_help(void) {
     printf("  date         show current date/time\n");
     printf("  halt         power off\n");
     printf("  reboot       restart\n");
+    printf("  ps           list processes\n");
+    printf("  uname        system information\n");
     printf("  sink <prog>  run program with stdout discarded\n");
     printf("  <prog>       run program\n");
 }
 
 static void cmd_ls(int argc, char **argv) {
-    const char *path = (argc >= 2) ? argv[1] : ".";
+    int long_fmt = 0;
+    const char *path = ".";
+    int argi = 1;
+
+    if (argc >= 2 && strcmp(argv[1], "-l") == 0) {
+        long_fmt = 1;
+        argi = 2;
+    }
+    if (argc > argi) path = argv[argi];
 
     int fd = fs_opendir(path);
     if (fd < 0) {
@@ -103,12 +113,29 @@ static void cmd_ls(int argc, char **argv) {
     int n;
     int count = 0;
     while ((n = fs_readdir(fd, &ent)) == 1) {
-        if (ent.attributes & 0x10) {
-            set_color(VGA_LIGHT_BLUE, VGA_BLACK);
-            printf("%s/\n", ent.name);
+        if (ent.attributes & 0x10) set_color(VGA_LIGHT_BLUE, VGA_BLACK);
+        else                       set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+
+        if (long_fmt) {
+            /* 解析 FAT32 日期/时间（dir 返回原始格式） */
+            uint16_t d = ent.mod_date;
+            uint16_t t = ent.mod_time;
+            int year  = 1980 + ((d >> 9) & 0x7F);
+            int month = (d >> 5) & 0x0F;
+            int day   = d & 0x1F;
+            int hour  = (t >> 11) & 0x1F;
+            int min   = (t >> 5) & 0x3F;
+
+            if (ent.attributes & 0x10) {
+                printf("%04d-%02d-%02d %02d:%02d    <DIR>  %s/\n",
+                       year, month, day, hour, min, ent.name);
+            } else {
+                printf("%04d-%02d-%02d %02d:%02d  %7u  %s\n",
+                       year, month, day, hour, min, ent.size, ent.name);
+            }
         } else {
-            set_color(VGA_LIGHT_GRAY, VGA_BLACK);
-            printf("%s\n", ent.name);
+            if (ent.attributes & 0x10) printf("%s/\n", ent.name);
+            else                       printf("%s\n", ent.name);
         }
         count++;
     }
@@ -286,6 +313,36 @@ static void cmd_reboot(void) {
         set_color(VGA_LIGHT_GRAY, VGA_BLACK);
     }
 }
+static void cmd_ps(void) {
+    unsigned int pids[32];
+    int n = proc_list(pids, 32);
+    if (n < 0) {
+        set_color(VGA_LIGHT_RED, VGA_BLACK);
+        printf("ps: error %d\n", n);
+        set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+        return;
+    }
+    printf("PID\n");
+    for (int i = 0; i < n; i++) {
+        printf("%u\n", pids[i]);
+    }
+    printf("total: %d\n", n);
+}
+
+static void cmd_uname(void) {
+    struct uname_buf u;
+    int r = sys_uname(&u);
+    if (r < 0) {
+        set_color(VGA_LIGHT_RED, VGA_BLACK);
+        printf("uname: error %d\n", r);
+        set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+        return;
+    }
+    u.sysname[15] = '\0';
+    u.release[15] = '\0';
+    u.machine[15] = '\0';
+    printf("%s %s %s\n", u.sysname, u.release, u.machine);
+}
 
 /* ---------- 主循环 ---------- */
 
@@ -347,7 +404,12 @@ void main(int _argc, char **_argv) {
         } else if (strcmp(c, "halt") == 0) {
             cmd_halt();
         } else if (strcmp(c, "reboot") == 0) {
-            cmd_reboot();} else if (strcmp(c, "sink") == 0) {
+            cmd_reboot();
+        } else if (strcmp(c, "ps") == 0) {
+            cmd_ps();
+        } else if (strcmp(c, "uname") == 0) {
+            cmd_uname();
+        } else if (strcmp(c, "sink") == 0) {
             struct spawn_params p = {
                 .size   = sizeof(p),
                 .in_fd  = SPAWN_FD_INHERIT,

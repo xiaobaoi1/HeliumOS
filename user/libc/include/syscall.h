@@ -5,10 +5,12 @@
 #define SYS_EXIT          1
 #define SYS_GETPID        2
 #define SYS_SPAWN         3
+#define SYS_GETPPID       4
 #define SYS_SLEEP         5
 #define SYS_WAIT          6
 #define SYS_KILL          7
 #define SYS_PROC_CLOSE    8
+#define SYS_PROC_LIST     9
 
 /* ========== 标准流 (11~12) ========== */
 #define SYS_READ                     11
@@ -40,6 +42,7 @@
 #define SYS_FS_MKDIR      40
 #define SYS_FS_RMDIR      41
 #define SYS_FS_RENAME     42
+#define SYS_FS_FSTAT      43
 
 /* ========== 设备 (51~59) ========== */
 #define SYS_DEV_OPEN      51
@@ -51,6 +54,7 @@
 /* ========== 进程环境 (61~69) ========== */
 #define SYS_GETCWD        61
 #define SYS_CHDIR         62
+#define SYS_UNAME         63
 
 /* ========== 信号 (71~79) ========== */
 #define SYS_SIGACTION     71
@@ -67,6 +71,30 @@
 #define SYS_RTC_GET_TIME  91
 #define SYS_REBOOT        92
 
+
+struct uname_buf {
+    char sysname[16];
+    char release[16];
+    char machine[16];
+};
+
+struct fs_time {
+    unsigned short year;
+    unsigned char  month;
+    unsigned char  day;
+    unsigned char  hour;
+    unsigned char  minute;
+    unsigned char  second;
+    unsigned char  reserved;
+};
+
+struct fstat_buf {
+    unsigned int   size;
+    struct fs_time ctime;
+    struct fs_time mtime;
+    unsigned char  attributes;
+    unsigned char  reserved[3];
+};
 
 /* 传给 spawn 的重定向描述。
  * size 字段必须填为 sizeof(struct spawn_params)。 */
@@ -205,6 +233,22 @@ static inline int tty_set_foreground(int handle) {
     return __syscall(SYS_TTY_SET_FOREGROUND, handle, 0, 0);
 }
 
+static inline int getppid(void) {
+    return __syscall(SYS_GETPPID, 0, 0, 0);
+}
+
+static inline int proc_list(unsigned int *pids, int max) {
+    return __syscall(SYS_PROC_LIST, (int)pids, max, 0);
+}
+
+static inline int sys_uname(struct uname_buf *u) {
+    return __syscall(SYS_UNAME, (int)u, 0, 0);
+}
+
+static inline int fs_fstat(int fd, struct fstat_buf *st) {
+    return __syscall(SYS_FS_FSTAT, fd, (int)st, 0);
+}
+
 /* 内存 */
 static inline int brk(int new_brk) {
     return __syscall(SYS_BRK, new_brk, 0, 0);
@@ -298,6 +342,9 @@ struct dirent {
     unsigned char attributes;
     unsigned char reserved[3];
     unsigned int  size;
+    unsigned short mod_date;
+    unsigned short mod_time;
+    unsigned int   pad;
 };
 
 /* 与内核 src/include/rtc.h 一致 */

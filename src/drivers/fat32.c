@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <stddef.h>
 #include <path.h>
+#include <rtc.h>
 
 #define FAT32_MAX_VOLUMES 4
 
@@ -378,6 +379,10 @@ int fat32_open_file(struct fat32_volume *vol, const char *path,
             file->dirent_sector_lba = lba;
             file->dirent_entry_idx = idx;
             file->dirent_valid = 1;
+            file->create_time = e.create_time;
+            file->create_date = e.create_date;
+            file->mod_time    = e.mod_time;
+            file->mod_date    = e.mod_date;
             return OK;
         }
     }
@@ -583,6 +588,9 @@ int fat32_readdir(struct fat32_volume *vol, struct fat32_dir *dir,
                 }
                 out->attributes = e->attributes;
                 out->size = e->file_size;
+                out->mod_date = e->mod_date;
+                out->mod_time = e->mod_time;
+                out->pad = 0;
                 return 1;
             }
             dir->sector++;
@@ -620,6 +628,27 @@ static void name_to_83(const char *name, uint8_t *out8, uint8_t *out3) {
             out3[j++] = c;
         }
     }
+}
+
+/* 当前 RTC 时间 → FAT32 目录项的 time/date 格式。
+ * time: hour(5)<<11 | minute(6)<<5 | (second/2)(5)
+ * date: (year-1980)(7)<<9 | month(4)<<5 | day(5)
+ * RTC 读失败时填 0（目录项显示 1980-00-00，可接受）。 */
+static void fat32_now(uint16_t *out_time, uint16_t *out_date) {
+    struct rtc_time t;
+    if (rtc_read(&t) < 0) {
+        *out_time = 0;
+        *out_date = 0;
+        return;
+    }
+    uint16_t year = (t.year >= 1980) ? (uint16_t)(t.year - 1980) : 0;
+    if (year > 127) year = 127;
+    *out_time = (uint16_t)(((t.hour & 0x1F) << 11) |
+                           ((t.minute & 0x3F) << 5) |
+                           ((t.second / 2) & 0x1F));
+    *out_date = (uint16_t)((year << 9) |
+                           ((t.month & 0x0F) << 5) |
+                           (t.day & 0x1F));
 }
 
 /* 8.3 目录项 → 名字字符串 */
@@ -893,21 +922,20 @@ static void write_lfn_sequence(struct fat32_volume *vol,
                                const char *name, int name_len,
                                const uint8_t *name8, const uint8_t *ext3,
                                uint8_t attr, uint32_t first_cluster,
-                               uint32_t size) {
+                               uint32_t size,
+                               uint16_t *out_time, uint16_t *out_date) {
     uint8_t sector[SECTOR_SIZE];
     ata_read_sector(vol->dev, sect_lba, sector);
     struct fat32_dir_entry *entries = (struct fat32_dir_entry*)sector;
 
     int n_lfn = (name_len + 12) / 13;
 
-    /* 校验和：对 11 字节短名 */
     uint8_t sum = 0;
     for (int i = 0; i < 8; i++)
         sum = ((sum & 1) << 7) + (sum >> 1) + name8[i];
     for (int i = 0; i < 3; i++)
         sum = ((sum & 1) << 7) + (sum >> 1) + ext3[i];
 
-    /* 写 LFN 项（磁盘顺序：seq 大的在前） */
     for (int k = 0; k < n_lfn; k++) {
         int seq = k + 1;
         int char_start = k * 13;
@@ -916,11 +944,10 @@ static void write_lfn_sequence(struct fat32_volume *vol,
         e->name[0] = (seq == n_lfn) ? (seq | 0x40) : seq;
         e->attributes = 0x0F;
         e->reserved = 0;
-        e->create_time_tenth = sum;   /* 校验和在偏移 13 */
+        e->create_time_tenth = sum;
         e->cluster_low = 0;
     }
 
-    /* 短名项 */
     struct fat32_dir_entry *se = &entries[entry_idx + n_lfn];
     memset(se, 0, sizeof(*se));
     memcpy(se->name, name8, 8);
@@ -930,13 +957,25 @@ static void write_lfn_sequence(struct fat32_volume *vol,
     se->cluster_low  = first_cluster & 0xFFFF;
     se->file_size = size;
 
+    uint16_t t, d;
+    fat32_now(&t, &d);
+    se->create_time = t;
+    se->create_date = d;
+    se->mod_time    = t;
+    se->mod_date    = d;
+    se->access_date = d;
+
     ata_write_sector(vol->dev, sect_lba, sector);
+
+    if (out_time) *out_time = t;
+    if (out_date) *out_date = d;
 }
 
 /* 写目录项 */
 static void write_dirent(struct fat32_volume *vol, uint32_t sector_lba,
                          uint32_t entry_idx, const char *name,
-                         uint8_t attr, uint32_t first_cluster, uint32_t size) {
+                         uint8_t attr, uint32_t first_cluster, uint32_t size,
+                         uint16_t *out_time, uint16_t *out_date) {
     uint8_t sector[SECTOR_SIZE];
     ata_read_sector(vol->dev, sector_lba, sector);
     struct fat32_dir_entry *entries = (struct fat32_dir_entry*)sector;
@@ -952,13 +991,25 @@ static void write_dirent(struct fat32_volume *vol, uint32_t sector_lba,
     e->cluster_low  = first_cluster & 0xFFFF;
     e->file_size    = size;
 
+    uint16_t t, d;
+    fat32_now(&t, &d);
+    e->create_time = t;
+    e->create_date = d;
+    e->mod_time    = t;
+    e->mod_date    = d;
+    e->access_date = d;
+
     ata_write_sector(vol->dev, sector_lba, sector);
+
+    if (out_time) *out_time = t;
+    if (out_date) *out_date = d;
 }
 
 /* 更新目录项的 first_cluster / file_size */
 static void update_dirent(struct fat32_volume *vol, uint32_t sector_lba,
                           uint32_t entry_idx, uint32_t first_cluster,
-                          uint32_t size) {
+                          uint32_t size,
+                          uint16_t *out_time, uint16_t *out_date) {
     uint8_t sector[SECTOR_SIZE];
     ata_read_sector(vol->dev, sector_lba, sector);
     struct fat32_dir_entry *entries = (struct fat32_dir_entry*)sector;
@@ -968,7 +1019,16 @@ static void update_dirent(struct fat32_volume *vol, uint32_t sector_lba,
     e->cluster_low  = first_cluster & 0xFFFF;
     e->file_size    = size;
 
+    uint16_t t, d;
+    fat32_now(&t, &d);
+    e->mod_time    = t;
+    e->mod_date    = d;
+    e->access_date = d;
+
     ata_write_sector(vol->dev, sector_lba, sector);
+
+    if (out_time) *out_time = t;
+    if (out_date) *out_date = d;
 }
 
 /* ---------- 创建文件（存在则打开） ---------- */
@@ -1032,6 +1092,10 @@ int fat32_create_file(struct fat32_volume *vol, const char *path,
         file->dirent_sector_lba = sect_lba;
         file->dirent_entry_idx = idx;
         file->dirent_valid = 1;
+        file->create_time = found.create_time;
+        file->create_date = found.create_date;
+        file->mod_time    = found.mod_time;
+        file->mod_date    = found.mod_date;
         return OK;
     }
 
@@ -1064,7 +1128,6 @@ int fat32_create_file(struct fat32_volume *vol, const char *path,
     if (name_len > 195) return ENAMETOOLONG;
 
     if (is_83_compatible(name)) {
-        /* 短名，直接写 */
         memset(file, 0, sizeof(*file));
         file->first_cluster = 0;
         file->current_cluster = 0;
@@ -1074,7 +1137,13 @@ int fat32_create_file(struct fat32_volume *vol, const char *path,
         file->dirent_entry_idx = idx;
         file->dirent_valid = 1;
 
-        write_dirent(vol, sect_lba, idx, name, 0x20, 0, 0);
+        uint16_t t, d;
+        write_dirent(vol, sect_lba, idx, name, 0x20, 0, 0, &t, &d);
+        file->create_time = t;
+        file->create_date = d;
+        file->mod_time    = t;
+        file->mod_date    = d;
+
         ata_flush(vol->dev);
         return OK;
     }
@@ -1123,8 +1192,13 @@ int fat32_create_file(struct fat32_volume *vol, const char *path,
     file->dirent_entry_idx  = idx2 + n_lfn;
     file->dirent_valid = 1;
 
+    uint16_t t, d;
     write_lfn_sequence(vol, lba2, idx2, name, name_len,
-                       name8, ext3, 0x20, 0, 0);
+                       name8, ext3, 0x20, 0, 0, &t, &d);
+    file->create_time = t;
+    file->create_date = d;
+    file->mod_time    = t;
+    file->mod_date    = d;
     ata_flush(vol->dev);
     return OK;
 }
@@ -1232,8 +1306,11 @@ int fat32_write_file(struct fat32_volume *vol, struct fat32_file *file,
 
     /* 5. 更新目录项 */
     if (file->dirent_valid) {
+        uint16_t t, d;
         update_dirent(vol, file->dirent_sector_lba, file->dirent_entry_idx,
-                      file->first_cluster, file->file_size);
+                      file->first_cluster, file->file_size, &t, &d);
+        file->mod_time = t;
+        file->mod_date = d;
     }
 
     /* 一次 flush，覆盖本次写入的所有扇区 */
@@ -1258,8 +1335,11 @@ int fat32_truncate(struct fat32_volume *vol, struct fat32_file *file) {
     file->file_size = 0;
 
     if (file->dirent_valid) {
+        uint16_t t, d;
         update_dirent(vol, file->dirent_sector_lba, file->dirent_entry_idx,
-                      0, 0);
+                      0, 0, &t, &d);
+        file->mod_time = t;
+        file->mod_date = d;
     }
     ata_flush(vol->dev);
     return OK;
@@ -1379,7 +1459,7 @@ int fat32_mkdir(struct fat32_volume *vol, const char *path) {
     }
 
     if (is_83_compatible(name)) {
-        write_dirent(vol, sect_lba, idx, name, 0x10, new_cluster, 0);
+        write_dirent(vol, sect_lba, idx, name, 0x10, new_cluster, 0, NULL, NULL);
         ata_flush(vol->dev);
         return OK;
     }
@@ -1406,7 +1486,7 @@ int fat32_mkdir(struct fat32_volume *vol, const char *path) {
     }
 
     write_lfn_sequence(vol, lba2, idx2, name, name_len,
-                       name8, ext3, 0x10, new_cluster, 0);
+                       name8, ext3, 0x10, new_cluster, 0, NULL, NULL);
     ata_flush(vol->dev);
     return OK;
 }
@@ -1538,7 +1618,7 @@ int fat32_rename(struct fat32_volume *vol, const char *old_path,
 
     if (is_83_compatible(new_name)) {
         write_dirent(vol, sect_lba, idx, new_name,
-                     attr, first_cluster, file_size);
+                     attr, first_cluster, file_size, NULL, NULL);
     } else {
         uint8_t name8[8], ext3[3];
         if (make_short_name(vol, new_parent.start_cluster,
@@ -1563,7 +1643,7 @@ int fat32_rename(struct fat32_volume *vol, const char *old_path,
             idx2 = 0;
         }
         write_lfn_sequence(vol, lba2, idx2, new_name, name_len,
-                           name8, ext3, attr, first_cluster, file_size);
+                           name8, ext3, attr, first_cluster, file_size, NULL, NULL);
     }
 
     /* 删源目录项 */

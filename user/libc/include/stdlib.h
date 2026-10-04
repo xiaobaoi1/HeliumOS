@@ -23,4 +23,17 @@ int   unsetenv(const char *name);
 /* libc 内部，由 crt0 调用 */
 void  __libc_init_environ(char **envp);
 
+/* 转换 */
+int   atoi(const char *s);
+long  atol(const char *s);
+long  strtol(const char *s, char **endptr, int base);
+
+/* 绝对值 */
+int   abs(int x);
+long  labs(long x);
+
+/* 随机数 */
+void  srand(unsigned int seed);
+int   rand(void);
+
 #endif
