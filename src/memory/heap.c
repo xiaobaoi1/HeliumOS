@@ -17,6 +17,22 @@
 #define NUM_CACHES      9
 #define MAX_OBJ_SIZE    2048
 
+
+/* 大对象（> MAX_OBJ_SIZE）：直通 pmm，一页内。
+ * 页头 16 字节，双 magic 防与 slab 页头碰撞。 */
+#define LARGE_MAGIC1    0xB16B00B5u
+#define LARGE_MAGIC2    0xDEADBEEFu
+
+struct large_header {
+    uint32_t magic1;
+    uint32_t magic2;
+    uint32_t pages;    /* 当前固定 1 */
+    uint32_t size;     /* 用户请求的字节数 */
+};
+
+#define LARGE_MAX_SIZE  (4096 - (uint32_t)sizeof(struct large_header))
+
+
 static const uint32_t cache_sizes[NUM_CACHES] = {
     8, 16, 32, 64, 128, 256, 512, 1024, 2048
 };
@@ -84,10 +100,22 @@ void heap_init(void) {
 }
 
 void *kmalloc(size_t size) {
-    if (size == 0 || size > MAX_OBJ_SIZE) {
-        return NULL;
+    if (size == 0) return NULL;
+
+    /* 大对象：直通 pmm，一页内 */
+    if (size > MAX_OBJ_SIZE) {
+        if (size > LARGE_MAX_SIZE) return NULL;
+        uint32_t phys = pmm_alloc_page();
+        if (!phys) return NULL;
+        struct large_header *h = (struct large_header*)phys;
+        h->magic1 = LARGE_MAGIC1;
+        h->magic2 = LARGE_MAGIC2;
+        h->pages  = 1;
+        h->size   = (uint32_t)size;
+        return (void*)(phys + sizeof(struct large_header));
     }
 
+    /* 小对象：slab 路径 */
     int idx = size_to_cache(size);
     if (idx < 0) return NULL;
 
@@ -131,12 +159,24 @@ void *kzalloc(size_t size) {
 void kfree(void *ptr) {
     if (!ptr) return;
 
-    /* 找到页头 */
     uint32_t phys = (uint32_t)ptr;
     uint32_t page = phys & ~0xFFF;
+
+    /* 大对象识别：读页头双 magic */
+    struct large_header *h = (struct large_header*)page;
+    if (h->magic1 == LARGE_MAGIC1 && h->magic2 == LARGE_MAGIC2) {
+        uint32_t pages = h->pages;
+        h->magic1 = 0;
+        h->magic2 = 0;
+        for (uint32_t i = 0; i < pages; i++) {
+            pmm_free_page(page + i * 4096);
+        }
+        return;
+    }
+
+    /* slab 路径 */
     struct slab *s = (struct slab*)page;
 
-    /* 简单校验：对象大小必须合法 */
     if (s->obj_size == 0 || s->obj_size > MAX_OBJ_SIZE) {
         kprintf("[HEAP] WARN: kfree on non-slab ptr %p\n", ptr);
         return;
@@ -149,7 +189,6 @@ void kfree(void *ptr) {
     int idx = size_to_cache(s->obj_size);
     if (idx < 0) return;
 
-    /* 放回 free_list */
     *(void**)ptr = s->free_list;
     s->free_list = ptr;
     s->free_count++;

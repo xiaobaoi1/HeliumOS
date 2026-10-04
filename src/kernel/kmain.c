@@ -23,6 +23,7 @@
 #include <acpi.h>
 #include <pci.h>
 #include <partition.h>
+#include <panic.h>
 
 
 static const char *shell_env[] = {
@@ -73,8 +74,7 @@ static struct task *create_task_from_elf(struct fat32_volume *vol,
 void create_idle_task(struct fat32_volume *vol) {
     struct task *task = create_task_from_elf(vol, "/IDLE.ELF", 0, NULL);
     if (!task) {
-        kprintf("[KERNEL] FATAL: cannot create idle task\n");
-        while (1) __asm__("hlt");
+        panic("cannot create idle task");
     }
 
     /* IDLE 的任务：尽量少占 CPU
@@ -91,8 +91,7 @@ void create_idle_task(struct fat32_volume *vol) {
 void create_shell_task(struct fat32_volume *vol) {
     struct task *task = create_task_from_elf(vol, "/SHELL.ELF", 3, (char *const*)shell_env);
     if (!task) {
-        kprintf("[KERNEL] FATAL: cannot create shell task\n");
-        while (1) __asm__("hlt");
+        panic("cannot create shell task\n");
     }
 
     /* SHELL 是交互进程，给它正常时间片
@@ -181,12 +180,25 @@ void kmain(uint32_t magic, uint32_t addr) {
     }
 
     if (!sys_vol) {
-        kprintf("[KERNEL] No FAT32 volume found\n");
-        while (1) __asm__("hlt");
+        panic("no FAT32 volume found");
     }
 
     create_idle_task(sys_vol);
     create_shell_task(sys_vol);
+
+    /* kmalloc 大对象验证 */
+    void *big = kmalloc(3000);
+    kprintf("[TEST] kmalloc(3000) = %p\n", big);
+    if (big) {
+        memset(big, 0xCD, 3000);
+        kprintf("[TEST] big[0]=%x big[2999]=%x\n",
+                ((unsigned char*)big)[0],
+                ((unsigned char*)big)[2999]);
+        kfree(big);
+    }
+
+    void *huge = kmalloc(5000);
+    kprintf("[TEST] kmalloc(5000) = %p (expect 0)\n", huge);
 
 
 

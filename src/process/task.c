@@ -11,6 +11,17 @@
 extern void enter_user_mode(void);
 
 static uint32_t next_pid = 1;
+
+/* 分配一个未被占用的 PID。回绕时跳过 0。 */
+static uint32_t alloc_pid(void) {
+    for (uint32_t tries = 0; tries < 0xFFFFFFFFu; tries++) {
+        uint32_t pid = next_pid++;
+        if (next_pid == 0) next_pid = 1;   /* 跳过 0 */
+        if (!proc_find_by_pid(pid)) return pid;
+    }
+    return 0;   /* 全部占满——理论不可达 */
+}
+
 struct task *current_task = NULL;
 
 /* 两个队列 */
@@ -244,7 +255,16 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd,
     }
 
     /* 2. 初始化字段 */
-    task->pid = next_pid++;
+    uint32_t new_pid = alloc_pid();
+    if (new_pid == 0) {
+        /* 理论上不可达。此处释放已分配资源，返回失败。 */
+        pmm_free_page(stack_high);
+        pmm_free_page(stack_low);
+        pmm_free_page(kernel_stack);
+        pmm_free_page((uint32_t)task);
+        return NULL;
+    }
+    task->pid = new_pid;
     task->state = TASK_STATE_READY;
     task->time_slice = TIME_SLICE_TICKS;
     task->pgd = pgd;

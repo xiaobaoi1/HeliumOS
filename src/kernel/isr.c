@@ -7,6 +7,7 @@
 #include <keyboard.h>
 #include <io.h>
 #include <signal.h>
+#include <panic.h>
 
 extern void sleep_tick(void);
 
@@ -45,9 +46,8 @@ void isr_handler(struct registers *regs) {
     }
 
     /* 内核态异常：无法恢复 */
-    kprintf("[KERNEL FAULT] int=%d err=0x%x cr2=0x%x eip=0x%x\n",
-            (int)regs->int_no, regs->err_code, cr2, regs->eip);
-    while (1) __asm__ volatile("cli; hlt");
+    panic_regs(regs, "kernel exception int=%d err=%p cr2=%p",
+               (int)regs->int_no, regs->err_code, cr2);
 }
 
 /* 硬件中断处理 */
