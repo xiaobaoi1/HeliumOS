@@ -12,7 +12,7 @@
 #define VGA_LIGHT_RED    12
 
 #define CMD_MAX          128
-#define ARGV_MAX         8
+#define ARGV_MAX         16
 
 extern char **environ;
 
@@ -86,6 +86,7 @@ static void cmd_help(void) {
     printf("  reboot       restart\n");
     printf("  ps           list processes\n");
     printf("  uname        system information\n");
+    printf("  kill <pid>   send SIGTERM to process\n");
     printf("  sink <prog>  run program with stdout discarded\n");
     printf("  <prog>       run program\n");
 }
@@ -274,6 +275,226 @@ static void cmd_cp(int argc, char **argv) {
     }
 }
 
+static void cmd_kill(int argc, char **argv) {
+    if (argc < 2) { printf("usage: kill <pid>\n"); return; }
+
+    unsigned int pid = (unsigned int)atoi(argv[1]);
+    if (pid == 0) {
+        set_color(VGA_LIGHT_RED, VGA_BLACK);
+        printf("kill: invalid pid\n");
+        set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+        return;
+    }
+
+    int h = proc_open(pid, PROC_TERMINATE);
+    if (h < 0) {
+        set_color(VGA_LIGHT_RED, VGA_BLACK);
+        printf("kill: pid %u: error %d\n", pid, h);
+        set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+        return;
+    }
+
+    int r = kill(h, SIGTERM);
+    process_close(h);
+
+    if (r < 0) {
+        set_color(VGA_LIGHT_RED, VGA_BLACK);
+        printf("kill: error %d\n", r);
+        set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+    }
+}
+
+/* ---------- 管道 / 重定向 ---------- */
+
+#define PIPE_MAX_SEGS 8
+
+struct redirect {
+    const char *in_file;
+    const char *out_file;
+};
+
+/* 删除 argv[start..start+count-1]。argv 原地修改。 */
+static void remove_argv_range(char **argv, int start, int count) {
+    int i = start;
+    while (argv[i + count]) {
+        argv[i] = argv[i + count];
+        i++;
+    }
+    argv[i] = NULL;
+}
+
+/* 解析并摘除 argv 里的 < file 和 > file。
+ * argv 原地修改。返回 0 成功，-1 语法错误。 */
+static int parse_redirect(char **argv, struct redirect *r) {
+    r->in_file = NULL;
+    r->out_file = NULL;
+
+    int i = 0;
+    while (argv[i]) {
+        if (strcmp(argv[i], "<") == 0) {
+            if (!argv[i + 1] || r->in_file) return -1;
+            r->in_file = argv[i + 1];
+            remove_argv_range(argv, i, 2);
+        } else if (strcmp(argv[i], ">") == 0) {
+            if (!argv[i + 1] || r->out_file) return -1;
+            r->out_file = argv[i + 1];
+            remove_argv_range(argv, i, 2);
+        } else {
+            i++;
+        }
+    }
+    return 0;
+}
+
+/* 按 | 分割 argv。argv 原地修改：| 变成 NULL 终结符。
+ * 返回段数（>=1），超限返回 -1。 */
+static int split_by_pipe(char **argv, char **segs, int max) {
+    if (max < 1) return -1;
+    int n = 1;
+    segs[0] = argv;
+
+    for (int i = 0; argv[i]; i++) {
+        if (strcmp(argv[i], "|") == 0) {
+            argv[i] = NULL;
+            if (n >= max) return -1;
+            segs[n++] = &argv[i + 1];
+        }
+    }
+    return n;
+}
+
+/* 执行管道 + 重定向。argv 会被原地修改。 */
+static void run_pipeline(char **argv) {
+    char **segs[PIPE_MAX_SEGS];
+    int nseg = split_by_pipe(argv, segs, PIPE_MAX_SEGS);
+    if (nseg <= 0) {
+        set_color(VGA_LIGHT_RED, VGA_BLACK);
+        printf("syntax error: too many pipes\n");
+        set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+        return;
+    }
+
+    struct redirect redirs[PIPE_MAX_SEGS];
+    for (int i = 0; i < nseg; i++) {
+        if (parse_redirect(segs[i], &redirs[i]) < 0) {
+            set_color(VGA_LIGHT_RED, VGA_BLACK);
+            printf("syntax error in segment %d\n", i + 1);
+            set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+            return;
+        }
+        if (!segs[i][0]) {
+            set_color(VGA_LIGHT_RED, VGA_BLACK);
+            printf("syntax error: empty command\n");
+            set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+            return;
+        }
+    }
+
+    /* 创建 pipe（nseg - 1 个） */
+    int pipes[PIPE_MAX_SEGS - 1][2];
+    int npipe = nseg - 1;
+    int made = 0;
+    for (int i = 0; i < npipe; i++) {
+        if (pipe(pipes[i]) < 0) {
+            set_color(VGA_LIGHT_RED, VGA_BLACK);
+            printf("pipe failed\n");
+            set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+            for (int j = 0; j < made; j++) {
+                ipc_close(pipes[j][0]);
+                ipc_close(pipes[j][1]);
+            }
+            return;
+        }
+        made++;
+    }
+
+    /* 逐段 spawn */
+    int handles[PIPE_MAX_SEGS];
+    int open_in[PIPE_MAX_SEGS];
+    int open_out[PIPE_MAX_SEGS];
+    for (int i = 0; i < nseg; i++) {
+        handles[i] = -1;
+        open_in[i] = -1;
+        open_out[i] = -1;
+    }
+
+    int failed = 0;
+    for (int i = 0; i < nseg; i++) {
+        int in_fd = SPAWN_FD_INHERIT;
+        int out_fd = SPAWN_FD_INHERIT;
+
+        if (redirs[i].in_file) {
+            in_fd = fs_open(redirs[i].in_file, FS_O_RDONLY);
+            if (in_fd < 0) {
+                set_color(VGA_LIGHT_RED, VGA_BLACK);
+                printf("%s: error %d\n", redirs[i].in_file, in_fd);
+                set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+                failed = 1;
+                break;
+            }
+            open_in[i] = in_fd;
+        }
+        if (redirs[i].out_file) {
+            out_fd = fs_open(redirs[i].out_file,
+                             FS_O_WRONLY | FS_O_CREAT | FS_O_TRUNC);
+            if (out_fd < 0) {
+                set_color(VGA_LIGHT_RED, VGA_BLACK);
+                printf("%s: error %d\n", redirs[i].out_file, out_fd);
+                set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+                failed = 1;
+                break;
+            }
+            open_out[i] = out_fd;
+        }
+
+        int in_pipe  = (i > 0)    ? pipes[i - 1][0] : -1;
+        int out_pipe = (i < npipe) ? pipes[i][1]     : -1;
+
+        struct spawn_params p = {
+            .size = sizeof(p),
+            .in_fd = in_fd,
+            .out_fd = out_fd,
+            .err_fd = SPAWN_FD_INHERIT,
+            .in_pipe = in_pipe,
+            .out_pipe = out_pipe,
+            .err_pipe = -1,
+            .flags = 0,
+            .envp = (uint32_t)environ,
+        };
+
+        handles[i] = spawn(segs[i][0], segs[i], &p);
+        if (handles[i] < 0) {
+            set_color(VGA_LIGHT_RED, VGA_BLACK);
+            printf("spawn '%s' failed (error %d)\n", segs[i][0], handles[i]);
+            set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+            failed = 1;
+            break;
+        }
+    }
+
+    /* 关 shell 侧的文件 fd */
+    for (int i = 0; i < nseg; i++) {
+        if (open_in[i]  >= 0) fs_close(open_in[i]);
+        if (open_out[i] >= 0) fs_close(open_out[i]);
+    }
+
+    /* 关 shell 侧的 pipe handle */
+    for (int i = 0; i < npipe; i++) {
+        ipc_close(pipes[i][0]);
+        ipc_close(pipes[i][1]);
+    }
+
+    /* wait 所有已 spawn 的子进程 */
+    for (int i = 0; i < nseg; i++) {
+        if (handles[i] < 0) continue;
+        int st = 0;
+        wait(handles[i], &st, 0);
+        process_close(handles[i]);
+    }
+
+    (void)failed;
+}
+
 static void cmd_date(void) {
     struct rtc_time t;
     int r = rtc_get_time(&t);
@@ -409,6 +630,8 @@ void main(int _argc, char **_argv) {
             cmd_ps();
         } else if (strcmp(c, "uname") == 0) {
             cmd_uname();
+        } else if (strcmp(c, "kill") == 0) {
+            cmd_kill(argc, argv);
         } else if (strcmp(c, "sink") == 0) {
             struct spawn_params p = {
                 .size   = sizeof(p),
@@ -437,65 +660,21 @@ void main(int _argc, char **_argv) {
                 }
             }
         } else {
-            /* 找 | */
-            int pipe_idx = -1;
+            /* 检测是否有 | < > */
+            int has_special = 0;
             for (int i = 0; i < argc; i++) {
-                if (strcmp(argv[i], "|") == 0) {
-                    pipe_idx = i;
+                if (strcmp(argv[i], "|") == 0 ||
+                    strcmp(argv[i], "<") == 0 ||
+                    strcmp(argv[i], ">") == 0) {
+                    has_special = 1;
                     break;
                 }
             }
 
-            if (pipe_idx > 0 && pipe_idx < argc - 1) {
-                int fds[2];
-                if (pipe(fds) < 0) {
-                    set_color(VGA_LIGHT_RED, VGA_BLACK);
-                    printf("pipe failed\n");
-                    set_color(VGA_LIGHT_GRAY, VGA_BLACK);
-                } else {
-                    argv[pipe_idx] = NULL;
-
-                    struct spawn_params p1 = {
-                        .size = sizeof(p1),
-                        .in_fd  = SPAWN_FD_INHERIT,
-                        .out_fd = SPAWN_FD_INHERIT,
-                        .err_fd = SPAWN_FD_INHERIT,
-                        .in_pipe  = -1,
-                        .out_pipe = fds[1],
-                        .err_pipe = -1,
-                        .flags = 0,
-                        .envp = (uint32_t)environ,
-                    };
-                    int h1 = spawn(argv[0], &argv[0], &p1);
-
-                    struct spawn_params p2 = {
-                        .size = sizeof(p2),
-                        .in_fd  = SPAWN_FD_INHERIT,
-                        .out_fd = SPAWN_FD_INHERIT,
-                        .err_fd = SPAWN_FD_INHERIT,
-                        .in_pipe  = fds[0],
-                        .out_pipe = -1,
-                        .err_pipe = -1,
-                        .flags = 0,
-                        .envp = (uint32_t)environ,
-                    };
-                    int h2 = spawn(argv[pipe_idx + 1], &argv[pipe_idx + 1], &p2);
-
-                    ipc_close(fds[0]);
-                    ipc_close(fds[1]);
-
-                    if (h1 >= 0) {
-                        int st1; wait(h1, &st1, 0); process_close(h1);
-                    }
-                    if (h2 >= 0) {
-                        int st2; wait(h2, &st2, 0); process_close(h2);
-                    }
-                }
-            } else if (pipe_idx >= 0) {
-                set_color(VGA_LIGHT_RED, VGA_BLACK);
-                printf("syntax error: empty pipe\n");
-                set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+            if (has_special) {
+                run_pipeline(argv);
             } else {
+                /* 普通 spawn */
                 int h = spawn(c, argv, NULL);
                 if (h < 0) {
                     set_color(VGA_LIGHT_RED, VGA_BLACK);

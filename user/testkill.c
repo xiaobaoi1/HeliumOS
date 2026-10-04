@@ -40,10 +40,10 @@ static void section(const char *title) {
 }
 
 static int spawn_sleeper(void) {
-    int h = spawn("SLEEPER.ELF", NULL, NULL);
+    int h = spawn("SLEEPER", NULL, NULL);
     if (h < 0) {
         tty_set_color(C_RED, C_BLACK);
-        printf("  spawn SLEEPER.ELF failed: %d\n", h);
+        printf("  spawn SLEEPER failed: %d\n", h);
         tty_set_color(C_GRAY, C_BLACK);
     }
     return h;
@@ -59,7 +59,7 @@ static void test_kill_sleeping(void) {
 
     int h = spawn_sleeper();
     if (h < 0) { fail("spawn", "returned error"); return; }
-    ok("spawn SLEEPER.ELF");
+    ok("spawn SLEEPER");
 
     sleep_ms(50);
 
@@ -89,7 +89,7 @@ static void test_kill_then_close(void) {
 
     int h = spawn_sleeper();
     if (h < 0) { fail("spawn", "returned error"); return; }
-    ok("spawn SLEEPER.ELF");
+    ok("spawn SLEEPER");
 
     sleep_ms(50);
 
@@ -140,7 +140,7 @@ static void test_wait_timeout_then_kill(void) {
 
     int h = spawn_sleeper();
     if (h < 0) { fail("spawn", "returned error"); return; }
-    ok("spawn SLEEPER.ELF");
+    ok("spawn SLEEPER");
 
     int status = 0;
     int wr = wait(h, &status, 50);

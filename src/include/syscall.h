@@ -13,6 +13,7 @@
 #define SYS_KILL          7
 #define SYS_PROC_CLOSE    8
 #define SYS_PROC_LIST     9
+#define SYS_PROC_OPEN     10
 
 /* ========== 标准流 (11~12) ========== */
 #define SYS_READ                     11

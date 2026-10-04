@@ -122,7 +122,7 @@ $(ISO): $(KERNEL_ELF)
 	@echo "ISO 镜像生成成功: $(ISO)"
 
 # ==================== 硬盘镜像（用于测试文件系统写入） ====================
-$(DISK_IMG): $(KERNEL_ELF) $(BUILD_DIR)/SHELL.ELF $(BUILD_DIR)/IDLE.ELF $(BUILD_DIR)/TEST.ELF $(BUILD_DIR)/TESTKILL.ELF $(BUILD_DIR)/SLEEPER.ELF $(BUILD_DIR)/ARGTEST.ELF $(BUILD_DIR)/TESTWRITE.ELF $(BUILD_DIR)/TESTFAULT.ELF $(BUILD_DIR)/TESTENV.ELF $(BUILD_DIR)/COUNT.ELF $(BUILD_DIR)/CAT.ELF
+$(DISK_IMG): $(KERNEL_ELF) $(BUILD_DIR)/SHELL.ELF $(BUILD_DIR)/IDLE.ELF $(BUILD_DIR)/TEST.ELF $(BUILD_DIR)/TESTKILL.ELF $(BUILD_DIR)/SLEEPER.ELF $(BUILD_DIR)/ARGTEST.ELF $(BUILD_DIR)/TESTWRITE.ELF $(BUILD_DIR)/TESTFAULT.ELF $(BUILD_DIR)/TESTENV.ELF $(BUILD_DIR)/COUNT.ELF $(BUILD_DIR)/CAT.ELF $(BUILD_DIR)/ECHO.ELF $(BUILD_DIR)/HEAD.ELF $(BUILD_DIR)/TAIL.ELF $(BUILD_DIR)/WC.ELF
 	@echo "正在创建 FAT32 硬盘镜像 (需要 sudo 权限)..."
 	dd if=/dev/zero of=$(DISK_IMG) bs=1M count=64 status=none
 	(echo o; echo n; echo p; echo 1; echo 2048; echo; echo t; echo c; echo a; echo 1; echo w) | fdisk $(DISK_IMG) > /dev/null 2>&1
@@ -136,17 +136,21 @@ $(DISK_IMG): $(KERNEL_ELF) $(BUILD_DIR)/SHELL.ELF $(BUILD_DIR)/IDLE.ELF $(BUILD_
 	sudo cp $(KERNEL_ELF) /mnt/build/boot/; \
 
 
-	sudo cp $(BUILD_DIR)/IDLE.ELF /mnt/build/IDLE.ELF; \
-	sudo cp $(BUILD_DIR)/SHELL.ELF /mnt/build/SHELL.ELF; \
-	sudo cp $(BUILD_DIR)/TEST.ELF /mnt/build/TEST.ELF; \
-	sudo cp $(BUILD_DIR)/TESTKILL.ELF /mnt/build/TESTKILL.ELF; \
-	sudo cp $(BUILD_DIR)/SLEEPER.ELF /mnt/build/SLEEPER.ELF; \
-	sudo cp $(BUILD_DIR)/ARGTEST.ELF /mnt/build/ARGTEST.ELF; \
-	sudo cp $(BUILD_DIR)/TESTWRITE.ELF /mnt/build/TESTWRITE.ELF; \
-	sudo cp $(BUILD_DIR)/TESTFAULT.ELF /mnt/build/TESTFAULT.ELF; \
-	sudo cp $(BUILD_DIR)/TESTENV.ELF /mnt/build/TESTENV.ELF; \
-	sudo cp $(BUILD_DIR)/COUNT.ELF /mnt/build/COUNT.ELF; \
-	sudo cp $(BUILD_DIR)/CAT.ELF /mnt/build/CAT.ELF; \
+	sudo cp $(BUILD_DIR)/IDLE.ELF /mnt/build/IDLE; \
+	sudo cp $(BUILD_DIR)/SHELL.ELF /mnt/build/SHELL; \
+	sudo cp $(BUILD_DIR)/TEST.ELF /mnt/build/TEST; \
+	sudo cp $(BUILD_DIR)/TESTKILL.ELF /mnt/build/TESTKILL; \
+	sudo cp $(BUILD_DIR)/SLEEPER.ELF /mnt/build/SLEEPER; \
+	sudo cp $(BUILD_DIR)/ARGTEST.ELF /mnt/build/ARGTEST; \
+	sudo cp $(BUILD_DIR)/TESTWRITE.ELF /mnt/build/TESTWRITE; \
+	sudo cp $(BUILD_DIR)/TESTFAULT.ELF /mnt/build/TESTFAULT; \
+	sudo cp $(BUILD_DIR)/TESTENV.ELF /mnt/build/TESTENV; \
+	sudo cp $(BUILD_DIR)/COUNT.ELF /mnt/build/COUNT; \
+	sudo cp $(BUILD_DIR)/CAT.ELF /mnt/build/CAT; \
+	sudo cp $(BUILD_DIR)/ECHO.ELF /mnt/build/ECHO; \
+	sudo cp $(BUILD_DIR)/HEAD.ELF /mnt/build/HEAD; \
+	sudo cp $(BUILD_DIR)/TAIL.ELF /mnt/build/TAIL; \
+	sudo cp $(BUILD_DIR)/WC.ELF /mnt/build/WC; \
 
 	sudo cp $(SRC_DIR)/kernel/kmain.c /mnt/build/kmain.c; \
 	sudo cp user/idle.c /mnt/build/idle.c; \
@@ -336,6 +340,33 @@ $(BUILD_DIR)/cat.o: user/cat.c
 $(BUILD_DIR)/CAT.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/cat.o $(LIBC_OBJS) user/linker.ld
 	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/cat.o $(LIBC_OBJS)
 
+# echo
+$(BUILD_DIR)/echo.o: user/echo.c
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/ECHO.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/echo.o $(LIBC_OBJS) user/linker.ld
+	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/echo.o $(LIBC_OBJS)
+
+# head
+$(BUILD_DIR)/head.o: user/head.c
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/HEAD.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/head.o $(LIBC_OBJS) user/linker.ld
+	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/head.o $(LIBC_OBJS)
+
+# tail
+$(BUILD_DIR)/tail.o: user/tail.c
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/TAIL.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/tail.o $(LIBC_OBJS) user/linker.ld
+	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/tail.o $(LIBC_OBJS)
+
+# wc
+$(BUILD_DIR)/wc.o: user/wc.c
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/WC.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/wc.o $(LIBC_OBJS) user/linker.ld
+	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/wc.o $(LIBC_OBJS)
 
 
 

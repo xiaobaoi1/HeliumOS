@@ -35,7 +35,7 @@ int main(int argc, char **argv) {
     title("select mode");
 
     if (mode == 0) {
-        printf("usage: TESTFAULT.ELF <mode>\n");
+        printf("usage: TESTFAULT <mode>\n");
         printf("  1 = write unmapped (page fault, write)\n");
         printf("  2 = read unmapped (page fault, read)\n");
         printf("  3 = divide by zero\n");

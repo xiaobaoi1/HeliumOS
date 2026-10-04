@@ -11,6 +11,7 @@
 #define SYS_KILL          7
 #define SYS_PROC_CLOSE    8
 #define SYS_PROC_LIST     9
+#define SYS_PROC_OPEN     10
 
 /* ========== 标准流 (11~12) ========== */
 #define SYS_READ                     11
@@ -71,6 +72,15 @@
 #define SYS_RTC_GET_TIME  91
 #define SYS_REBOOT        92
 
+
+
+
+
+/* 进程 access 掩码。与内核 src/include/proc.h 一致。 */
+#define PROC_QUERY        0x01
+#define PROC_TERMINATE    0x02
+#define PROC_WAIT         0x04
+#define PROC_ALL          0x07
 
 struct uname_buf {
     char sysname[16];
@@ -157,6 +167,10 @@ static inline int kill(int handle, int status) {
 
 static inline int process_close(int handle) {
     return __syscall(SYS_PROC_CLOSE, handle, 0, 0);
+}
+
+static inline int proc_open(unsigned int pid, int access) {
+    return __syscall(SYS_PROC_OPEN, (int)pid, access, 0);
 }
 
 static inline void sleep_ms(int ms) {

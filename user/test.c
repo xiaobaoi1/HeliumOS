@@ -230,8 +230,8 @@ static void test_fs(void) {
     section("filesystem");
 
     /* 1. 打开已知文件 */
-    int fd = fs_open("SYS:/SHELL.ELF", FS_O_RDONLY);
-    check(fd >= 0, "fs_open SYS:/SHELL.ELF");
+    int fd = fs_open("SYS:/SHELL", FS_O_RDONLY);
+    check(fd >= 0, "fs_open SYS:/SHELL");
 
     if (fd >= 0) {
         /* ELF magic */
@@ -394,7 +394,7 @@ static void test_ptr_bounds(void) {
           "kernel ptr rejected");
 
     /* 合法路径仍能工作 */
-    int fd = fs_open("SYS:/SHELL.ELF", FS_O_RDONLY);
+    int fd = fs_open("SYS:/SHELL", FS_O_RDONLY);
     check(fd >= 0, "valid path still works");
     if (fd >= 0) fs_close(fd);
 }
@@ -404,9 +404,9 @@ static void test_ptr_bounds(void) {
 static void test_blocking_syscall(void) {
     section("blocking syscall return value");
 
-    /* spawn 一个不会退出的进程（IDLE.ELF 用 pause 空转） */
-    int h = spawn("IDLE.ELF", NULL, NULL);
-    check(h >= 0, "spawn IDLE.ELF");
+    /* spawn 一个不会退出的进程（IDLE 用 pause 空转） */
+    int h = spawn("IDLE", NULL, NULL);
+    check(h >= 0, "spawn IDLE");
     if (h < 0) return;
 
     /* 给 IDLE 一点时间进入运行态 */
@@ -445,7 +445,7 @@ static void test_blocking_syscall(void) {
 static void test_spawn_errors(void) {
     section("spawn error paths");
 
-    int h = spawn("SYS:/NOT_EXIST_99999.ELF", NULL, NULL);
+    int h = spawn("SYS:/NOT_EXIST_99999", NULL, NULL);
     check(h < 0, "spawn nonexistent -> negative");
 
     h = spawn("", NULL, NULL);
@@ -467,8 +467,8 @@ static void test_spawn_errors(void) {
 static void test_fs_boundaries(void) {
     section("fs boundaries");
 
-    int fd = fs_open("SYS:/SHELL.ELF", FS_O_RDONLY);
-    check(fd >= 0, "fs_open SHELL.ELF");
+    int fd = fs_open("SYS:/SHELL", FS_O_RDONLY);
+    check(fd >= 0, "fs_open SHELL");
     if (fd < 0) return;
 
     /* seek 超出文件大小 */
@@ -526,8 +526,8 @@ static void test_fs_boundaries(void) {
 static void test_multi_open(void) {
     section("multiple opens");
 
-    int fd1 = fs_open("SYS:/SHELL.ELF", FS_O_RDONLY);
-    int fd2 = fs_open("SYS:/SHELL.ELF", FS_O_RDONLY);
+    int fd1 = fs_open("SYS:/SHELL", FS_O_RDONLY);
+    int fd2 = fs_open("SYS:/SHELL", FS_O_RDONLY);
     check(fd1 >= 0 && fd2 >= 0, "two opens same file");
     check(fd1 != fd2, "fd1 != fd2");
 
@@ -556,7 +556,7 @@ static void test_multi_open(void) {
     int fds[16];
     int ok_count = 0;
     for (int i = 0; i < 16; i++) {
-        fds[i] = fs_open("SYS:/SHELL.ELF", FS_O_RDONLY);
+        fds[i] = fs_open("SYS:/SHELL", FS_O_RDONLY);
         if (fds[i] >= 0) ok_count++;
     }
     check_eq(ok_count, 16, "open 16 handles simultaneously");
@@ -686,8 +686,8 @@ static void test_chdir_relative(void) {
     check_eq(chdir("SYS:/"), 0, "chdir SYS:/");
 
     /* 相对路径打开 */
-    int fd = fs_open("SHELL.ELF", FS_O_RDONLY);
-    check(fd >= 0, "open relative SHELL.ELF");
+    int fd = fs_open("SHELL", FS_O_RDONLY);
+    check(fd >= 0, "open relative SHELL");
     if (fd >= 0) fs_close(fd);
 
     /* 尝试进入 /BOOT */
@@ -727,7 +727,7 @@ static void test_spawn_stress(void) {
 
     int failures = 0;
     for (int i = 0; i < 8; i++) {
-        int h = spawn("IDLE.ELF", NULL, NULL);
+        int h = spawn("IDLE", NULL, NULL);
         if (h < 0) { failures++; continue; }
 
         sleep_ms(5);
@@ -782,15 +782,15 @@ static void test_slot_null(void) {
         .envp   = 0,
     };
 
-    /* 用 TEST.ELF 自己，但 stdout 丢弃——屏幕上不应有输出 */
-    int h = spawn("SYS:/TESTKILL.ELF", NULL, &r);
+    /* 用 TEST 自己，但 stdout 丢弃——屏幕上不应有输出 */
+    int h = spawn("SYS:/TESTKILL", NULL, &r);
     check(h >= 0, "spawn with stdout=NULL");
 
     if (h >= 0) {
         int status = 0;
         int r2 = wait(h, &status, 10000);
         check_eq(r2, OK, "wait returns OK");
-        check_eq(status, 0, "TEST.ELF exits 0 (no output visible)");
+        check_eq(status, 0, "TEST exits 0 (no output visible)");
         process_close(h);
     }
 }

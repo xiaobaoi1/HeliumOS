@@ -517,6 +517,19 @@ static int sys_process_close(proc_handle_t h) {
     return OK;
 }
 
+/* 打开一个进程，获得 handle。access 是 PROC_* 掩码。 */
+static int sys_proc_open(uint32_t pid, uint8_t access) {
+    struct task *cur = get_current_task();
+    if (!cur) return EINVAL;
+    if (access == 0 || (access & ~PROC_ALL)) return EINVAL;
+
+    struct task *target = proc_find_by_pid(pid);
+    if (!target) return ENOENT;
+    if (target->zombie) return ENOENT;
+
+    return proc_handle_alloc(target, access);
+}
+
 static int sys_sleep(uint32_t ms) {
     struct task *cur = get_current_task();
     if (!cur) return EINVAL;
@@ -595,6 +608,9 @@ void syscall_handler(struct registers *regs) {
             break;
         case SYS_PROC_CLOSE:
             ret = sys_process_close((proc_handle_t)arg1);
+            break;
+        case SYS_PROC_OPEN:
+            ret = sys_proc_open((uint32_t)arg1, (uint8_t)arg2);
             break;
         
         case SYS_SIGACTION:

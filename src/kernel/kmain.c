@@ -73,7 +73,7 @@ static struct task *create_task_from_elf(struct fat32_volume *vol,
 /* ---------- 创建 IDLE 进程 ---------- */
 
 void create_idle_task(struct fat32_volume *vol) {
-    struct task *task = create_task_from_elf(vol, "/IDLE.ELF", 0, NULL);
+    struct task *task = create_task_from_elf(vol, "/IDLE", 0, NULL);
     if (!task) {
         panic("cannot create idle task");
     }
@@ -90,7 +90,7 @@ void create_idle_task(struct fat32_volume *vol) {
 /* ---------- 创建 SHELL 进程 ---------- */
 
 void create_shell_task(struct fat32_volume *vol) {
-    struct task *task = create_task_from_elf(vol, "/SHELL.ELF", 3, (char *const*)shell_env);
+    struct task *task = create_task_from_elf(vol, "/SHELL", 3, (char *const*)shell_env);
     if (!task) {
         panic("cannot create shell task\n");
     }
