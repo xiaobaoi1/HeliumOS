@@ -63,7 +63,8 @@ OBJS = $(BUILD_DIR)/start.o \
 	   $(BUILD_DIR)/uaccess.o \
 	   $(BUILD_DIR)/rtc.o \
 	   $(BUILD_DIR)/acpi.o \
-	   $(BUILD_DIR)/panic.o
+	   $(BUILD_DIR)/panic.o \
+	   $(BUILD_DIR)/irq.o
 
 	   
 

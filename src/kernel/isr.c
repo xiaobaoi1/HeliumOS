@@ -52,17 +52,17 @@ void isr_handler(struct registers *regs) {
 
 /* 硬件中断处理 */
 void irq_handler(struct registers *regs) {
-    // 发送 EOI
+    /* EOI 先发——让 PIC 可以接受新中断。
+     * 从 PIC 的 IRQ（>= 40）额外发从 PIC EOI。 */
     if (regs->int_no >= 40) {
         __asm__ volatile("mov $0x20, %%al; out %%al, $0xA0" ::: "eax", "memory");
     }
     __asm__ volatile("mov $0x20, %%al; out %%al, $0x20" ::: "eax", "memory");
 
-        if (regs->int_no == 32) {
-        /* 先回收 graveyard（上次 task_exit 挂入的 PCB） */
+    if (regs->int_no == 32) {
+        /* IRQ 0（PIT）：调度器心跳。保留硬编码——
+         * 它必须在 irq_handler 里直接处理，不能走注册表。 */
         proc_reap_graveyard();
-
-        /* tick 相关：SLEEPING 递减 + WAITING_CHILD 超时 */
         sleep_tick();
 
         struct task *current = get_current_task();
@@ -72,14 +72,13 @@ void irq_handler(struct registers *regs) {
                 schedule();
             }
         } else {
-            /* current == NULL：只有启动早期（scheduler_start 之前）
-             * 时钟中断先于首次调度触发时才会到这里。
-             * 调 schedule 让它走 idle 兜底。 */
             schedule();
         }
-    } else if (regs->int_no == 33) {
-        keyboard_handle_irq();
+    } else if (regs->int_no >= 33 && regs->int_no <= 47) {
+        /* IRQ 1..15：分发到注册表 */
+        irq_dispatch((uint8_t)(regs->int_no - 32));
     }
+
     struct task *cur = get_current_task();
     if (cur) {
         signal_deliver_pending(regs, cur);

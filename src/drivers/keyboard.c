@@ -162,4 +162,5 @@ static const struct device_ops kb_ops = {
 /* 在 keyboard_init 里注册 */
 void keyboard_init(void) {
     dev_register(DEV_TYPE_KEYBOARD, &kb_ops);
+    irq_register(1, keyboard_handle_irq, "keyboard");
 }
