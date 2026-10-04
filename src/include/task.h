@@ -56,6 +56,8 @@ extern struct task *blocked_list_tail;
 
 extern struct task *current_task;
 
+
+struct vma;
 /* 字段偏移约定（与 start.asm 的 switch_to 强耦合）：
  *   offset 0  = pid
  *   offset 4  = state
@@ -117,6 +119,9 @@ struct task {
 
     /* ---------- 状态字段扩展 ---------- */
     struct pipe *wait_pipe;   /* WAITING_PIPE 时有效 */
+
+    /* ---------- 虚拟地址区间 ---------- */
+    struct vma *vma_list;   /* 按 start 升序；NULL = 空 */
 
     /* ---------- IPC ---------- */
     struct ipc_handle ipc_handles[IPC_MAX_HANDLES];

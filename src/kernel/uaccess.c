@@ -3,6 +3,7 @@
 #include <vmm.h>
 #include <string.h>
 #include <stddef.h>
+#include <vma.h>
 
 int check_user_range(uint32_t addr, uint32_t size) {
     if (size == 0) return 0;
@@ -17,8 +18,17 @@ int check_user_range(uint32_t addr, uint32_t size) {
     uint32_t last_page  = ((uint32_t)(end - 1)) & ~0xFFF;
 
     for (uint32_t p = first_page; p <= last_page; p += 4096) {
-        if (!vmm_get_phys(cur->pgd, p)) return -1;
+        if (vmm_get_phys(cur->pgd, p)) continue;
+        if (!is_legal_user_page(p)) return -1;
     }
+    return 0;
+}
+
+int is_legal_user_page(uint32_t page) {
+    struct task *cur = get_current_task();
+    if (!cur) return 0;
+    if (page >= cur->heap_base && page < cur->heap_brk) return 1;
+    if (vma_find(cur, page)) return 1;
     return 0;
 }
 
@@ -31,7 +41,8 @@ int strncpy_from_user(char *dst, const char *src, uint32_t max_len) {
 
     uint32_t u_src = (uint32_t)src;
     uint32_t cur_page = u_src & ~0xFFF;
-    if (!vmm_get_phys(cur->pgd, cur_page)) return -1;
+    if (!vmm_get_phys(cur->pgd, cur_page) &&
+        !is_legal_user_page(cur_page)) return -1;
 
     for (uint32_t i = 0; i < max_len; i++) {
         uint32_t addr = u_src + i;
@@ -39,7 +50,8 @@ int strncpy_from_user(char *dst, const char *src, uint32_t max_len) {
 
         uint32_t page = addr & ~0xFFF;
         if (page != cur_page) {
-            if (!vmm_get_phys(cur->pgd, page)) return -1;
+            if (!vmm_get_phys(cur->pgd, page) &&
+                !is_legal_user_page(page)) return -1;
             cur_page = page;
         }
 

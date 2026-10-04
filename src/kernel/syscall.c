@@ -281,46 +281,21 @@ static int sys_brk(uint32_t new_brk) {
     if (new_brk < cur->heap_base || new_brk > cur->heap_limit) return EINVAL;
 
     uint32_t old_brk = cur->heap_brk;
+    if (new_brk == old_brk) return 0;
 
-    if (new_brk > old_brk) {
-        /* 扩展：从 old_brk 所在页向上扫到 new_brk。
-         * 已映射的页跳过——否则会重映射同一虚拟页，丢掉旧物理页。 */
-        uint32_t first_new = 0;
-        for (uint32_t page = old_brk & ~0xFFF; page < new_brk; page += 0x1000) {
-            if (vmm_get_phys(cur->pgd, page)) continue;
-
-            uint32_t phys = pmm_alloc_page();
-            if (!phys) {
-                /* 回滚本次新映射的页 */
-                if (first_new) {
-                    for (uint32_t a = first_new; a < page; a += 0x1000) {
-                        uint32_t p = vmm_get_phys(cur->pgd, a);
-                        if (p) {
-                            vmm_unmap_user_page(cur->pgd, a);
-                            pmm_free_page(p);
-                        }
-                    }
-                }
-                return ENOMEM;
-            }
-            vmm_map_user_page(cur->pgd, page, phys, PTE_WRITE | PTE_USER);
-            if (!first_new) first_new = page;
-        }
-    } else if (new_brk < old_brk) {
-        /* 收缩：只释放完整落在 [new_brk, old_brk) 内的页。
-         * 非对齐的 new_brk 不会 unmap 含它的活跃页——那页里有 [< new_brk] 的部分还在用。
-         * 非对齐的 old_brk 不会被越过——只释放到 old_brk 所在页之前。 */
+    if (new_brk < old_brk) {
+        /* 收缩：unmap 完整落在 [new_brk, old_brk) 内的页并释放物理页。
+         * 扩展：不分配——page fault 时按需分配。 */
         for (uint32_t page = (new_brk + 0xFFF) & ~0xFFF;
              page + 0x1000 <= old_brk;
              page += 0x1000) {
             uint32_t phys = vmm_get_phys(cur->pgd, page);
             if (phys) {
                 vmm_unmap_user_page(cur->pgd, page);
-                pmm_free_page(phys);
+                pmm_free_page(phys & ~0xFFF);
             }
         }
     }
-    /* new_brk == old_brk：无操作 */
 
     cur->heap_brk = new_brk;
     return 0;

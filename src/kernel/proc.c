@@ -5,6 +5,7 @@
 #include <printf.h>
 #include <errno.h>
 #include <stddef.h>
+#include <vma.h>
 
 /* ---------- 全局进程链表 ---------- */
 static struct task *proc_list_head = NULL;
@@ -85,6 +86,9 @@ void proc_free_pcb(struct task *t) {
     /* 先从所有队列里摘掉，再释放内存 */
     remove_task_from_queue(&blocked_list_head, &blocked_list_tail, t);
     remove_task_from_queue(&ready_queue_head, &ready_queue_tail, t);
+
+    /* 释放 VMA 节点 */
+    vma_free_all(t);
 
     /* 释放用户地址空间 */
     if (t->pgd) {

@@ -71,6 +71,7 @@ OBJS = $(BUILD_DIR)/start.o \
 	   $(BUILD_DIR)/irq.o \
 	   $(BUILD_DIR)/uaccess_asm.o \
 	   $(BUILD_DIR)/extable.o \
+	   $(BUILD_DIR)/vma.o 
 
 	   
 

@@ -18,4 +18,8 @@ int copy_from_user(void *dst, uint32_t u_addr, uint32_t n);
 /* 定长拷贝：内核 → 用户。返回 0 成功，-1 失败。 */
 int copy_to_user(uint32_t u_addr, const void *src, uint32_t n);
 
+/* 判断一个未映射页是否在合法可分配范围内（heap 或 VMA）。
+ * 返回 1 合法，0 非法。 */
+int is_legal_user_page(uint32_t page);
+
 #endif

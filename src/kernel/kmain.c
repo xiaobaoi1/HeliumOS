@@ -25,6 +25,7 @@
 #include <partition.h>
 #include <panic.h>
 #include <irq.h>
+#include <vma.h>
 
 
 static const char *shell_env[] = {
@@ -120,6 +121,7 @@ void kmain(uint32_t magic, uint32_t addr) {
 
     pmm_init(addr);
     heap_init();
+    vma_init();
     gdt_init();
     tss_init();
     vmm_init();

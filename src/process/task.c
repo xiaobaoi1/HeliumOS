@@ -7,6 +7,7 @@
 #include <isr.h>
 #include <errno.h>
 #include <tty.h>
+#include <vma.h>
 
 extern void enter_user_mode(void);
 
@@ -311,6 +312,9 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd,
     }
     task->wait_pipe = NULL;
 
+    /* 初始化 VMA */
+    task->vma_list = NULL;
+
 
     task->kernel_stack_phys = kernel_stack;
     task->user_stack_virt = 0x7FFFE000;
@@ -318,6 +322,13 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd,
     /* 3. 映射用户栈 */
     vmm_map_user_page(pgd, 0x7FFFC000, stack_low, PTE_WRITE | PTE_USER);
     vmm_map_user_page(pgd, 0x7FFFD000, stack_high, PTE_WRITE | PTE_USER);
+
+    /* 3b. 建栈 VMA。覆盖两页 [0x7FFFC000, 0x7FFFE000)。 */
+    if (vma_insert(task, 0x7FFFC000, 0x7FFFE000,
+                   VMA_READ | VMA_WRITE | VMA_USER,
+                   VMA_TYPE_STACK) != OK) {
+        KLOG_WARN("VMA: stack insert failed for pid %d\n", task->pid);
+    }
 
     /* 4. 加入全局链表 */
     proc_register(task);
@@ -350,7 +361,7 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd,
         task->dev_handles[i].used = 0;
     }
 
-        /* 8. 在用户栈上构造 argc/argv/envp
+    /* 8. 在用户栈上构造 argc/argv/envp
      *
      * 栈布局（从高地址到低地址）：
      *   环境变量字符串
