@@ -68,7 +68,9 @@ OBJS = $(BUILD_DIR)/start.o \
 	   $(BUILD_DIR)/rtc.o \
 	   $(BUILD_DIR)/acpi.o \
 	   $(BUILD_DIR)/panic.o \
-	   $(BUILD_DIR)/irq.o
+	   $(BUILD_DIR)/irq.o \
+	   $(BUILD_DIR)/uaccess_asm.o \
+	   $(BUILD_DIR)/extable.o \
 
 	   
 
@@ -82,6 +84,10 @@ all: $(ISO)
 
 # ==================== 编译规则 ====================
 $(BUILD_DIR)/start.o: $(BOOT_DIR)/start.asm
+	@mkdir -p $(BUILD_DIR)
+	$(ASM) $(ASMFLAGS) $< -o $@
+
+$(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.asm
 	@mkdir -p $(BUILD_DIR)
 	$(ASM) $(ASMFLAGS) $< -o $@
 

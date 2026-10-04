@@ -17,6 +17,12 @@ SECTIONS
         *(.rodata)
     }
 
+    /* 异常表：用于内核访问用户指针 fault 恢复 */
+    . = ALIGN(4);
+    __ex_table_start = .;
+    .ex_table : { *(__ex_table) }
+    __ex_table_end = .;
+
     .data ALIGN(4K) :
     {
         *(.data)

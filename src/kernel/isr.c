@@ -8,6 +8,7 @@
 #include <io.h>
 #include <signal.h>
 #include <panic.h>
+#include <extable.h>
 
 extern void sleep_tick(void);
 
@@ -41,6 +42,17 @@ void isr_handler(struct registers *regs) {
             /* 有 handler：投递 */
             cur->pending_signals |= (1u << sig);
             signal_deliver_pending(regs, cur);
+            return;
+        }
+    }
+
+    /* 内核态异常。page fault 先查异常表——
+     * 命中说明是 copy_from_user / copy_to_user 的合法 fault，
+     * 跳到 fixup 恢复。 */
+    if (regs->int_no == 14) {
+        uint32_t fixup = extable_lookup(regs->eip);
+        if (fixup) {
+            regs->eip = fixup;
             return;
         }
     }
