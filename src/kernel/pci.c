@@ -64,7 +64,7 @@ static void scan_function(uint8_t bus, uint8_t slot, uint8_t func) {
     d->interrupt_line = irq & 0xFF;
     d->interrupt_pin  = (irq >> 8) & 0xFF;
 
-    kprintf("[PCI] %02x:%02x.%x vend=%04x dev=%04x class=%02x:%02x progif=%02x\n",
+    KLOG_DBG("[PCI] %02x:%02x.%x vend=%04x dev=%04x class=%02x:%02x progif=%02x\n",
             bus, slot, func,
             d->vendor_id, d->device_id,
             d->class_code, d->subclass, d->prog_if);

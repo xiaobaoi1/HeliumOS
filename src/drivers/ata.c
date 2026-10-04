@@ -83,7 +83,7 @@ void ata_init(void) {
             d->drive     = drive;
             d->present   = 1;
 
-            kprintf("[ATA] %s %s detected (io=0x%x)\n",
+            KLOG_DBG("[ATA] %s %s detected (io=0x%x)\n",
                     channels[c].name, drive ? "slave" : "master",
                     channels[c].io_base);
             g_count++;

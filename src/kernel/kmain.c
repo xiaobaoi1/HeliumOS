@@ -190,6 +190,8 @@ void kmain(uint32_t magic, uint32_t addr) {
 
     kprintf("[KERNEL] Processes created. Starting scheduler...\n");
 
+    // kprintf("[TEST] size of task: %d\n", sizeof(struct task));
+
     scheduler_start();
 
     while (1) __asm__("hlt");

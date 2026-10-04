@@ -135,33 +135,56 @@ static const struct acpi_rsdp_v2 *rsdp_scan(void) {
 static const struct acpi_sdt_header *find_fadt_from_rsdt(uint32_t rsdt_phys) {
     const struct acpi_sdt_header *rsdt =
         (const struct acpi_sdt_header*)rsdt_phys;
-    if (!checksum_ok(rsdt, rsdt->length)) return NULL;
+    if (!checksum_ok(rsdt, rsdt->length)) {
+        KLOG_WARN("ACPI: RSDT checksum bad\n");
+        return NULL;
+    }
 
     uint32_t count = (rsdt->length - sizeof(*rsdt)) / 4;
     const uint32_t *ptrs = (const uint32_t*)((uint8_t*)rsdt + sizeof(*rsdt));
     for (uint32_t i = 0; i < count; i++) {
         const struct acpi_sdt_header *h =
             (const struct acpi_sdt_header*)ptrs[i];
-        if (memcmp(h->signature, "FACP", 4) == 0) return h;
+        if (memcmp(h->signature, "FACP", 4) != 0) continue;
+
+        if (!checksum_ok(h, h->length)) {
+            KLOG_WARN("ACPI: FADT checksum bad\n");
+            return NULL;
+        }
+        return h;
     }
     return NULL;
 }
 
 static const struct acpi_sdt_header *find_fadt_from_xsdt(uint64_t xsdt_phys) {
-    /* 32 位系统 + 1GB 恒等映射，物理地址 > 4GB 不可访问 */
-    if (xsdt_phys > 0xFFFFFFFFULL) return NULL;
+    if (xsdt_phys > 0xFFFFFFFFULL) {
+        KLOG_WARN("ACPI: XSDT above 4GB, skipped\n");
+        return NULL;
+    }
 
     const struct acpi_sdt_header *xsdt =
         (const struct acpi_sdt_header*)(uint32_t)xsdt_phys;
-    if (!checksum_ok(xsdt, xsdt->length)) return NULL;
+    if (!checksum_ok(xsdt, xsdt->length)) {
+        KLOG_WARN("ACPI: XSDT checksum bad\n");
+        return NULL;
+    }
 
     uint32_t count = (xsdt->length - sizeof(*xsdt)) / 8;
     const uint64_t *ptrs = (const uint64_t*)((uint8_t*)xsdt + sizeof(*xsdt));
     for (uint32_t i = 0; i < count; i++) {
-        if (ptrs[i] > 0xFFFFFFFFULL) continue;
+        if (ptrs[i] > 0xFFFFFFFFULL) {
+            KLOG_DBG("ACPI: table %u above 4GB, skipped\n", i);
+            continue;
+        }
         const struct acpi_sdt_header *h =
             (const struct acpi_sdt_header*)(uint32_t)ptrs[i];
-        if (memcmp(h->signature, "FACP", 4) == 0) return h;
+        if (memcmp(h->signature, "FACP", 4) != 0) continue;
+
+        if (!checksum_ok(h, h->length)) {
+            KLOG_WARN("ACPI: FADT checksum bad\n");
+            return NULL;
+        }
+        return h;
     }
     return NULL;
 }

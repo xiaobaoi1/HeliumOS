@@ -119,7 +119,7 @@ static void sys_exit(int status) {
 /* 通用等待逻辑。target == NULL 表示等任意子进程 */
 static int wait_impl(struct task *cur, struct task *target,
                      int *status, uint32_t timeout_ms) {
-    uint32_t deadline = 0;
+    uint64_t deadline = 0;
     if (timeout_ms > 0) deadline = get_ticks() + timeout_ms;
 
     while (1) {

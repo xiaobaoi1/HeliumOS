@@ -4,9 +4,9 @@
 #include <printf.h>
 #include <stddef.h>
 
-static uint32_t g_ticks = 0;
+static uint64_t g_ticks = 0;
 
-uint32_t get_ticks(void) { return g_ticks; }
+uint64_t get_ticks(void) { return g_ticks; }
 
 /* 处理睡眠：遍历 blocked_list，递减 SLEEPING 进程的 sleep_ticks */
 void sleep_tick(void) {

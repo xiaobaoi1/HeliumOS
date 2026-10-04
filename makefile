@@ -15,6 +15,10 @@ GRUB    = grub-mkrescue
 # -------------------- 编译参数 --------------------
 CFLAGS  = -m32 -ffreestanding -nostdlib -fno-pie -Wall -Wextra -g \
           -I src/include                          # 公共头文件路径
+
+# CFLAGS  = -m32 -ffreestanding -nostdlib -fno-pie -Wall -Wextra -g \
+          -I src/include -DKERNEL_DEBUG #DEBUG
+
 ASMFLAGS = -f elf32
 LDFLAGS = -m elf_i386 -T linker.ld -nostdlib
 

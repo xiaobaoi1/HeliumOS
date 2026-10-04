@@ -2,6 +2,7 @@
 #define SCHEDULER_H
 
 #include <task.h>
+#include <stdint.h>
 
 /* 在时钟中断中调用，进行调度 */
 void schedule(void);
@@ -10,6 +11,6 @@ void schedule(void);
 void switch_to(struct task *prev, struct task *next);
 void sleep_tick(void);
 
-uint32_t get_ticks(void);
+uint64_t get_ticks(void);
 
 #endif

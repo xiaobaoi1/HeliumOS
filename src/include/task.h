@@ -91,7 +91,7 @@ struct task {
 
     uint32_t sleep_ticks;
     struct task *wait_target;
-    uint32_t wait_deadline;          /* WAITING_CHILD 的超时时刻（tick） */
+    uint64_t wait_deadline;          /* WAITING_CHILD 的超时时刻（tick） */
 
     char cwd_volume[VOL_NAME_LEN];
     char cwd_path[PATH_MAX_LEN];
