@@ -17,6 +17,7 @@
 #define VMA_USER   0x08
 
 struct task;
+struct shm;
 
 /* 一个虚拟地址区间 [start, end)。页对齐，半开。 */
 struct vma {
@@ -25,6 +26,8 @@ struct vma {
     uint32_t flags;
     uint8_t  type;
     uint8_t  reserved[3];
+    struct shm *shm;        /* 共享映射时非 NULL */
+    uint32_t shm_offset;    /* 在 shm->pages 里的起始页索引 */
     struct vma *next;
 };
 
@@ -36,7 +39,8 @@ struct vma *vma_find(struct task *t, uint32_t addr);
 
 /* 插入 VMA。start/end 自动页对齐。区间与现有 VMA 重叠时返回 EEXIST。 */
 int vma_insert(struct task *t, uint32_t start, uint32_t end,
-               uint32_t flags, uint8_t type);
+               uint32_t flags, uint8_t type,
+               struct shm *shm, uint32_t shm_offset);
 
 /* 移除 [start, end)。部分重叠时拆分。
  * kmalloc 失败时保守保留——不丢数据。 */

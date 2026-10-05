@@ -11,6 +11,7 @@
 #include <extable.h>
 #include <vma.h>
 #include <vmm.h>
+#include <shm.h>
 
 extern void sleep_tick(void);
 
@@ -26,10 +27,7 @@ static int handle_page_fault(struct task *cur, uint32_t fault_addr,
     int write   = err_code & 2;
     int user    = err_code & 4;
 
-    /* 内核态访问内核地址 fault——不是用户内存 */
     if (!user && fault_addr < USER_SPACE_START) return -1;
-
-    /* 页已映射但权限不足——无法按需修复 */
     if (present) return -1;
 
     struct vma *v = vma_find(cur, fault_addr);
@@ -37,24 +35,42 @@ static int handle_page_fault(struct task *cur, uint32_t fault_addr,
                    fault_addr < cur->heap_brk);
     if (!v && !is_heap) return -1;
 
-    /* 用户态访问检查 VMA 权限；内核态访问用户地址信任调用方 */
     if (user && v) {
         if (write && !(v->flags & VMA_WRITE)) return -1;
         if (!write && !(v->flags & VMA_READ)) return -1;
     }
 
+    uint32_t page = fault_addr & ~0xFFF;
+    uint32_t pte_flags = PTE_USER;
+
+    if (v && v->shm) {
+        /* 共享映射：从 shm 页数组取/分配 */
+        uint32_t page_idx = (fault_addr - v->start) / 0x1000 + v->shm_offset;
+        if (page_idx >= v->shm->num_pages) return -1;
+
+        uint32_t phys = v->shm->pages[page_idx];
+        if (!phys) {
+            phys = pmm_alloc_page();
+            if (!phys) return -1;
+            memset((void*)phys, 0, 4096);
+            v->shm->pages[page_idx] = phys;
+        }
+
+        if (v->flags & VMA_WRITE) pte_flags |= PTE_WRITE;
+        vmm_map_user_page(cur->pgd, page, phys, pte_flags);
+        return 0;
+    }
+
+    /* 私有 / heap：独立分配 */
     uint32_t phys = pmm_alloc_page();
     if (!phys) return -1;
     memset((void*)phys, 0, 4096);
 
-    uint32_t page = fault_addr & ~0xFFF;
-    uint32_t pte_flags = PTE_USER;
     if (v) {
         if (v->flags & VMA_WRITE) pte_flags |= PTE_WRITE;
     } else {
-        pte_flags |= PTE_WRITE;   /* heap 总是可写 */
+        pte_flags |= PTE_WRITE;
     }
-
     vmm_map_user_page(cur->pgd, page, phys, pte_flags);
     return 0;
 }

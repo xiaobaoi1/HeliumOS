@@ -19,6 +19,20 @@
 #include <uaccess.h>
 #include <rtc.h>
 #include <acpi.h>
+#include <shm.h>
+#include <vma.h>
+
+#define PROT_READ   0x01
+#define PROT_WRITE  0x02
+#define PROT_EXEC   0x04
+
+#define MAP_PRIVATE    0x01
+#define MAP_SHARED     0x02
+#define MAP_ANONYMOUS  0x04
+#define MAP_FIXED      0x10
+
+#define MMAP_BASE  0x60000000u
+#define MMAP_END   0x70000000u
 
 #define PROC_LIST_MAX 64
 
@@ -301,6 +315,93 @@ static int sys_brk(uint32_t new_brk) {
     return 0;
 }
 
+/* 在 MMAP_BASE..MMAP_END 找 len 字节的空闲区间 */
+static uint32_t mmap_find_free(struct task *t, uint32_t len) {
+    uint32_t addr = MMAP_BASE;
+    while (addr + len <= MMAP_END) {
+        int free_here = 1;
+        for (struct vma *v = t->vma_list; v; v = v->next) {
+            if (v->start < addr + len && v->end > addr) {
+                free_here = 0;
+                addr = v->end;
+                break;
+            }
+        }
+        if (free_here) return addr;
+    }
+    return 0;
+}
+
+static uint32_t sys_mmap(uint32_t addr, uint32_t length, uint32_t prot,
+                         uint32_t flags, int shm_idx) {
+    struct task *cur = get_current_task();
+    if (!cur) return EINVAL;
+    if (length == 0) return EINVAL;
+    if (length > 0x10000000) return EINVAL;
+
+    length = (length + 0xFFF) & ~0xFFFu;
+
+    int is_shared = (flags & MAP_SHARED) != 0;
+    int is_anon   = (flags & MAP_ANONYMOUS) != 0;
+
+    if (is_shared && is_anon) return EINVAL;   /* 不支持匿名的命名共享 */
+    if (is_shared && shm_idx < 0) return EINVAL;
+
+    uint32_t start;
+    if (addr != 0) {
+        if (addr & 0xFFF) return EINVAL;
+        if (addr < USER_SPACE_START || addr + length > USER_SPACE_END)
+            return EINVAL;
+        start = addr;
+    } else {
+        start = mmap_find_free(cur, length);
+        if (start == 0) return ENOMEM;
+    }
+
+    uint32_t vma_flags = VMA_USER;
+    if (prot & PROT_READ)  vma_flags |= VMA_READ;
+    if (prot & PROT_WRITE) vma_flags |= VMA_WRITE;
+    if (prot & PROT_EXEC)  vma_flags |= VMA_EXEC;
+
+    struct shm *s = NULL;
+    if (is_shared) {
+        s = shm_at(shm_idx);
+        if (!s) return EINVAL;
+        if (length > s->num_pages * 0x1000) return EINVAL;
+    }
+
+    int r = vma_insert(cur, start, start + length, vma_flags,
+                       VMA_TYPE_MMAP, s, 0);
+    if (r != OK) return (uint32_t)r;
+
+    return start;
+}
+
+static int sys_munmap(uint32_t addr, uint32_t length) {
+    struct task *cur = get_current_task();
+    if (!cur) return EINVAL;
+    if (addr == 0 || (addr & 0xFFF)) return EINVAL;
+    if (length == 0) return EINVAL;
+
+    length = (length + 0xFFF) & ~0xFFFu;
+    uint32_t end = addr + length;
+
+    /* 先 unmap 物理页（已映射的） */
+    for (uint32_t page = addr; page < end; page += 0x1000) {
+        uint32_t phys = vmm_get_phys(cur->pgd, page);
+        if (phys) {
+            struct vma *v = vma_find(cur, page);
+            /* 共享页由 shm 对象管理，不释放；只解映射 */
+            int is_shared = (v && v->shm);
+            vmm_unmap_user_page(cur->pgd, page);
+            if (!is_shared) pmm_free_page(phys & ~0xFFF);
+        }
+    }
+
+    vma_remove_range(cur, addr, end);
+    return OK;
+}
+
 static int sys_spawn(const char *path, char *const argv[], void *params_user) {
     struct task *parent = get_current_task();
     if (!parent) return EINVAL;
@@ -544,6 +645,8 @@ void syscall_handler(struct registers *regs) {
     uint32_t arg1 = regs->ebx;
     uint32_t arg2 = regs->ecx;
     uint32_t arg3 = regs->edx;
+    uint32_t arg4 = regs->esi;
+    uint32_t arg5 = regs->edi;
 
     int32_t ret = 0;
 
@@ -568,6 +671,18 @@ void syscall_handler(struct registers *regs) {
             break;
         case SYS_BRK:
             ret = sys_brk(arg1);
+            break;
+        case SYS_MMAP:
+            ret = (int)sys_mmap(arg1, arg2, arg3, arg4, (int)arg5);
+            break;
+        case SYS_MUNMAP:
+            ret = sys_munmap(arg1, arg2);
+            break;
+        case SYS_SHM_OPEN:
+            ret = sys_shm_open((const char*)arg1, arg2, (int)arg3);
+            break;
+        case SYS_SHM_UNLINK:
+            ret = sys_shm_unlink((const char*)arg1);
             break;
         case SYS_SPAWN:
             ret = sys_spawn((const char*)arg1, (char *const*)arg2, (void*)arg3);

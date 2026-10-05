@@ -31,6 +31,10 @@
 
 /* ========== 内存管理 (21~29) ========== */
 #define SYS_BRK        21
+#define SYS_MMAP       22
+#define SYS_MUNMAP     23
+#define SYS_SHM_OPEN   24
+#define SYS_SHM_UNLINK 25
 
 /* ========== 文件系统 (31~49) ========== */
 #define SYS_FS_OPEN       31

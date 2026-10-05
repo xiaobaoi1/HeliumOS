@@ -29,6 +29,10 @@
 
 /* ========== 内存管理 (21~29) ========== */
 #define SYS_BRK        21
+#define SYS_MMAP       22
+#define SYS_MUNMAP     23
+#define SYS_SHM_OPEN   24
+#define SYS_SHM_UNLINK 25
 
 /* ========== 文件系统 (31~49) ========== */
 #define SYS_FS_OPEN       31
@@ -73,7 +77,14 @@
 #define SYS_REBOOT        92
 
 
+#define PROT_READ   0x01
+#define PROT_WRITE  0x02
+#define PROT_EXEC   0x04
 
+#define MAP_PRIVATE    0x01
+#define MAP_SHARED     0x02
+#define MAP_ANONYMOUS  0x04
+#define MAP_FIXED      0x10
 
 
 /* 进程 access 掩码。与内核 src/include/proc.h 一致。 */
@@ -134,6 +145,17 @@ static inline int __syscall(int num, int a, int b, int c) {
         "int $0x80"
         : "=a"(ret)
         : "a"(num), "b"(a), "c"(b), "d"(c)
+        : "memory", "cc"
+    );
+    return ret;
+}
+
+static inline int __syscall5(int num, int a, int b, int c, int d, int e) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(num), "b"(a), "c"(b), "d"(c), "S"(d), "D"(e)
         : "memory", "cc"
     );
     return ret;
@@ -266,6 +288,25 @@ static inline int fs_fstat(int fd, struct fstat_buf *st) {
 /* 内存 */
 static inline int brk(int new_brk) {
     return __syscall(SYS_BRK, new_brk, 0, 0);
+}
+
+static inline unsigned int mmap(unsigned int addr, unsigned int length,
+                                int prot, int flags, int shm_idx) {
+    return (unsigned int)__syscall5(SYS_MMAP, (int)addr, (int)length,
+                                    prot, flags, shm_idx);
+}
+
+static inline int munmap(unsigned int addr, unsigned int length) {
+    return __syscall(SYS_MUNMAP, (int)addr, (int)length, 0);
+}
+
+static inline int shm_open(const char *name, unsigned int size_bytes,
+                           int flags) {
+    return __syscall(SYS_SHM_OPEN, (int)name, (int)size_bytes, flags);
+}
+
+static inline int shm_unlink(const char *name) {
+    return __syscall(SYS_SHM_UNLINK, (int)name, 0, 0);
 }
 
 /* 文件系统 */

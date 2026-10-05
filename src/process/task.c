@@ -326,7 +326,7 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd,
     /* 3b. 建栈 VMA。覆盖两页 [0x7FFFC000, 0x7FFFE000)。 */
     if (vma_insert(task, 0x7FFFC000, 0x7FFFE000,
                    VMA_READ | VMA_WRITE | VMA_USER,
-                   VMA_TYPE_STACK) != OK) {
+                   VMA_TYPE_STACK, NULL, 0) != OK) {
         KLOG_WARN("VMA: stack insert failed for pid %d\n", task->pid);
     }
 

@@ -26,6 +26,7 @@
 #include <panic.h>
 #include <irq.h>
 #include <vma.h>
+#include <shm.h>
 
 
 static const char *shell_env[] = {
@@ -122,6 +123,7 @@ void kmain(uint32_t magic, uint32_t addr) {
     pmm_init(addr);
     heap_init();
     vma_init();
+    shm_init();
     gdt_init();
     tss_init();
     vmm_init();
