@@ -31,6 +31,7 @@
 #include <rtl8139.h>
 #include <net_proto.h>
 #include <io.h>
+#include <net_sock.h>
 
 
 static const char *shell_env[] = {
@@ -146,7 +147,7 @@ void kmain(uint32_t magic, uint32_t addr) {
     net_init();
     rtl8139_init();
     net_proto_init();
-    // fat32_init(2048);
+    net_sock_init();
 
     /* 遍历所有 ATA 设备的所有 MBR 主分区，尝试挂载 FAT32。
      * 第一个成功的是 SYS，其余按 A/B/C... 编号。 */
@@ -204,43 +205,11 @@ void kmain(uint32_t magic, uint32_t addr) {
     // kprintf("[TEST] size of task: %d\n", sizeof(struct task));
 
         /* 构造 ICMP echo request 到网关 10.0.2.2 */
-    {
-        uint8_t ping[64];
-        memset(ping, 0, sizeof(ping));
-        ping[0] = 8;    /* type = echo request */
-        ping[1] = 0;
-        ping[4] = 0x12; ping[5] = 0x34;   /* identifier */
-        ping[6] = 0;    ping[7] = 1;      /* sequence */
-        for (int i = 8; i < 64; i++) ping[i] = (uint8_t)i;
 
-        uint16_t csum = 0;
-        uint32_t sum = 0;
-        for (int i = 0; i + 1 < 64; i += 2) {
-            sum += ((uint16_t)ping[i] << 8) | ping[i + 1];
-        }
-        while (sum >> 16) sum = (sum & 0xFFFF) + (sum >> 16);
-        csum = (uint16_t)(~sum);
-        ping[2] = (csum >> 8) & 0xFF;
-        ping[3] = csum & 0xFF;
-
-        kprintf("[TEST] Sending ping to 10.0.2.2...\n");
-        int r = net_ip_send(htonl(NET_IP_GATEWAY_HOST), IP_PROTO_ICMP, ping, 64);
-        kprintf("[TEST] net_ip_send returned %d\n", r);
-        
-        /* 临时屏蔽 PIT（IRQ 0），让网卡 IRQ 能单独生效。
-         * 中断使能前，RTL8139 的 ARP reply 收不到。 */
-        outb(0x21, inb(0x21) | 0x01);
-        __asm__ volatile("sti");
-        for (int i = 0; i < 5; i++) {
-            int r = net_ip_send(htonl(NET_IP_GATEWAY_HOST), IP_PROTO_ICMP, ping, 64);
-            kprintf("[TEST] try %d: %d\n", i, r);
-            /* 不 break —— 多发几次，给 echo reply 时间到达 */
-            for (volatile int d = 0; d < 50000000; d++);
-        }
-        __asm__ volatile("cli");
-        outb(0x21, inb(0x21) & ~0x01);   /* 恢复 PIT */
+    kprintf("[TASK] sizeof(task)=%d\n", sizeof(struct task));
+    if(sizeof(struct task) > PAGE_SIZE){
+        panic("size of task (%u) bigger than PAGE_SIZE(4096)", sizeof(struct task));
     }
-
     
 
     scheduler_start();

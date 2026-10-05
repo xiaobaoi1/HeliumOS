@@ -8,6 +8,7 @@
 #include <errno.h>
 #include <tty.h>
 #include <vma.h>
+#include <net_sock.h>
 
 extern void enter_user_mode(void);
 
@@ -315,6 +316,11 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd,
     /* 初始化 VMA */
     task->vma_list = NULL;
 
+    for (int i = 0; i < SOCK_MAX_HANDLES; i++) {
+        task->sock_handles[i].used = 0;
+        task->sock_handles[i].sock = NULL;
+    }
+
 
     task->kernel_stack_phys = kernel_stack;
     task->user_stack_virt = 0x7FFFE000;
@@ -540,6 +546,7 @@ void task_terminate(struct task *t, int status) {
     fs_release_all(t);
     dev_release_all(t);
     ipc_release_all(t);
+    net_sock_release_all(t);
     proc_release_all_handles(t);
 
     /* 从任何队列移除 */
@@ -583,6 +590,7 @@ void task_exit(struct task *task, int status) {
     fs_release_all(task);
     dev_release_all(task);
     ipc_release_all(task);
+    net_sock_release_all(task);
     proc_release_all_handles(task);
 
     /* 从就绪队列移除 */

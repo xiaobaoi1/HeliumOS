@@ -4,6 +4,7 @@
 #include <printf.h>
 #include <string.h>
 #include <stddef.h>
+#include <net_sock.h>
 
 /* ---------- 本地状态 ---------- */
 
@@ -188,6 +189,12 @@ void net_ip_rx(const uint8_t *p, uint32_t len, const uint8_t *src_mac) {
 
     if (proto == IP_PROTO_ICMP) {
         net_icmp_rx(src_ip, payload, payload_len);
+    } else if (proto == IP_PROTO_UDP) {
+        if (payload_len >= 8) {
+            uint16_t sp = ((uint16_t)payload[0] << 8) | payload[1];
+            uint16_t dp = ((uint16_t)payload[2] << 8) | payload[3];
+            net_udp_rx(src_ip, sp, dp, payload + 8, payload_len - 8);
+        }
     }
     /* UDP 在 B4b */
 }
@@ -219,7 +226,7 @@ int net_ip_send(uint32_t dst_ip_be, uint8_t proto,
 
         uint8_t bcast[6] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
         net_eth_send(bcast, ETH_TYPE_ARP, req, 28);
-        kprintf("[IP] ARP miss for next hop\n");
+        KLOG_DBG("[IP] ARP miss for next hop\n");
         return -1;
     }
 

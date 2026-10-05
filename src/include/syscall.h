@@ -78,6 +78,13 @@
 #define SYS_RTC_GET_TIME  91
 #define SYS_REBOOT        92
 
+/* ========== 网络 (100~109) ========== */
+#define SYS_SOCKET      100
+#define SYS_BIND        101
+#define SYS_SENDTO      102
+#define SYS_RECVFROM    103
+#define SYS_SOCKCLOSE   104
+
 /* 系统调用处理函数声明 */
 void syscall_handler(struct registers *regs);
 

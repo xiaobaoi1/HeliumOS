@@ -76,6 +76,18 @@
 #define SYS_RTC_GET_TIME  91
 #define SYS_REBOOT        92
 
+#define SYS_SOCKET      100
+#define SYS_BIND        101
+#define SYS_SENDTO      102
+#define SYS_RECVFROM    103
+#define SYS_SOCKCLOSE   104
+
+
+
+
+#define AF_INET     2
+#define SOCK_DGRAM  2
+
 
 #define PROT_READ   0x01
 #define PROT_WRITE  0x02
@@ -424,5 +436,38 @@ struct rtc_time {
 #define DEV_TYPE_SERIAL    2
 #define DEV_TYPE_VGA       3
 #define DEV_TYPE_ATA       4
+
+
+
+
+
+static inline unsigned int htonl(unsigned int x) {
+    return ((x & 0xFF) << 24) | ((x & 0xFF00) << 8) |
+           ((x >> 8) & 0xFF00) | ((x >> 24) & 0xFF);
+}
+static inline unsigned short htons(unsigned short x) {
+    return ((x & 0xFF) << 8) | ((x >> 8) & 0xFF);
+}
+
+static inline int socket(int domain, int type, int proto) {
+    return __syscall(SYS_SOCKET, domain, type, proto);
+}
+static inline int bind(int h, unsigned short port_be) {
+    return __syscall(SYS_BIND, h, port_be, 0);
+}
+static inline int sendto(int h, unsigned int dst_ip_be,
+                         unsigned short dst_port_be,
+                         const void *buf, unsigned int len) {
+    return __syscall5(SYS_SENDTO, h, dst_ip_be, dst_port_be,
+                      (int)buf, len);
+}
+static inline int recvfrom(int h, void *buf, unsigned int max,
+                           unsigned int *src_ip, unsigned short *src_port) {
+    return __syscall5(SYS_RECVFROM, h, (int)buf, max,
+                      (int)src_ip, (int)src_port);
+}
+static inline int sockclose(int h) {
+    return __syscall(SYS_SOCKCLOSE, h, 0, 0);
+}
 
 #endif

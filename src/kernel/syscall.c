@@ -21,6 +21,7 @@
 #include <acpi.h>
 #include <shm.h>
 #include <vma.h>
+#include <net_sock.h>
 
 #define PROT_READ   0x01
 #define PROT_WRITE  0x02
@@ -123,7 +124,7 @@ static int sys_read(int fd, char *buf, uint32_t count) {
 
 /* 系统调用 exit */
 static void sys_exit(int status) {
-    kprintf("[SYSCALL] Process %d exiting with status %d\n", get_current_task()->pid, status);
+    KLOG_DBG("[SYSCALL] Process %d exiting with status %d\n", get_current_task()->pid, status);
     struct task *current = get_current_task();
     if (current) {
         task_exit(current, status);
@@ -947,6 +948,26 @@ void syscall_handler(struct registers *regs) {
                 ret = EINVAL;
             }
             /* 成功的话系统已经关了/重启了；到这里说明失败 */
+            break;
+        
+        
+            /* ---------- 网络 ---------- */
+        case SYS_SOCKET:
+            ret = sys_socket((int)arg1, (int)arg2, (int)arg3);
+            break;
+        case SYS_BIND:
+            ret = sys_bind((int)arg1, (uint16_t)arg2);
+            break;
+        case SYS_SENDTO:
+            ret = sys_sendto((int)arg1, arg2, (uint16_t)arg3,
+                             (const void*)arg4, arg5);
+            break;
+        case SYS_RECVFROM:
+            ret = sys_recvfrom((int)arg1, (void*)arg2, arg3,
+                               (uint32_t*)arg4, (uint16_t*)arg5);
+            break;
+        case SYS_SOCKCLOSE:
+            ret = sys_sockclose((int)arg1);
             break;
 
         default:

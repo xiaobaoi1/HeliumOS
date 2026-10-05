@@ -9,6 +9,7 @@
 #include <proc.h>
 #include <signal.h>
 #include <ipc.h>
+#include <net_sock.h>
 
 /* ---------- I/O slot（进程的标准流端点） ---------- */
 
@@ -125,6 +126,8 @@ struct task {
 
     /* ---------- IPC ---------- */
     struct ipc_handle ipc_handles[IPC_MAX_HANDLES];
+
+    struct sock_handle sock_handles[SOCK_MAX_HANDLES];
 };
 
 void enqueue_task(struct task **head, struct task **tail, struct task *task);

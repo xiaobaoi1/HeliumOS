@@ -24,5 +24,6 @@
 #define ENOEXEC    -19
 #define ENAMETOOLONG -20
 #define EXDEV      -21
+#define EADDRINUSE -22
 
 #endif
