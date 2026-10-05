@@ -85,12 +85,43 @@ void net_sock_release_all(struct task *t) {
     }
 }
 
+static int copy_sockaddr_in_from_user(struct sockaddr_in *out,
+                                       const void *addr_user,
+                                       uint32_t addrlen) {
+    if (!addr_user) return EINVAL;
+    if (addrlen < sizeof(struct sockaddr_in)) return EINVAL;
+    if (check_user_range((uint32_t)addr_user, sizeof(*out)) < 0)
+        return EFAULT;
+    if (copy_from_user(out, (uint32_t)addr_user, sizeof(*out)) < 0)
+        return EFAULT;
+    if (out->sin_family != AF_INET) return EINVAL;
+    return OK;
+}
+
+static int copy_sockaddr_in_to_user(void *addr_user, uint32_t *addrlen_user,
+                                     const struct sockaddr_in *src) {
+    if (!addr_user) return OK;
+    if (!addrlen_user) return EINVAL;
+    if (check_user_range((uint32_t)addrlen_user, 4) < 0) return EFAULT;
+
+    uint32_t avail;
+    if (copy_from_user(&avail, (uint32_t)addrlen_user, 4) < 0) return EFAULT;
+    if (avail < sizeof(*src)) return EINVAL;
+
+    if (check_user_range((uint32_t)addr_user, sizeof(*src)) < 0) return EFAULT;
+    if (copy_to_user((uint32_t)addr_user, src, sizeof(*src)) < 0) return EFAULT;
+
+    uint32_t actual = sizeof(*src);
+    if (copy_to_user((uint32_t)addrlen_user, &actual, 4) < 0) return EFAULT;
+    return OK;
+}
+
 /* ---------- syscall ---------- */
 
 int sys_socket(int domain, int type, int proto) {
     (void)proto;
     if (domain != AF_INET) return EINVAL;
-    if (type != SOCK_DGRAM) return EINVAL;
+    if (type != SOCK_DGRAM && type != SOCK_ICMP) return EINVAL;
 
     struct task *cur = get_current_task();
     if (!cur) return EINVAL;
@@ -103,53 +134,72 @@ int sys_socket(int domain, int type, int proto) {
         udp_socket_free(s);
         return ENOSPC;
     }
+    cur->sock_handles[h].type = type;   /* 覆盖 sock_handle_alloc 里的默认 */
     return h;
 }
 
-int sys_bind(int h, uint16_t port_be) {
+int sys_bind(int h, const void *addr_user, uint32_t addrlen) {
     struct task *cur = get_current_task();
     if (!cur) return EINVAL;
+    if (h < 0 || h >= SOCK_MAX_HANDLES) return EINVAL;
+    if (!cur->sock_handles[h].used) return EINVAL;
+    if (cur->sock_handles[h].type != SOCK_DGRAM) return EINVAL;
 
-    struct udp_socket *s = sock_handle_deref(cur, h);
+    struct sockaddr_in addr;
+    int r = copy_sockaddr_in_from_user(&addr, addr_user, addrlen);
+    if (r != OK) return r;
+    if (addr.sin_port == 0) return EINVAL;
+
+    struct udp_socket *s = cur->sock_handles[h].sock;
     if (!s) return EINVAL;
-    if (port_be == 0) return EINVAL;
 
-    struct udp_socket *other = udp_socket_by_port(port_be);
+    struct udp_socket *other = udp_socket_by_port(addr.sin_port);
     if (other && other != s) return EADDRINUSE;
 
-    s->local_port = port_be;
+    s->local_port = addr.sin_port;
     return OK;
 }
 
-int sys_sendto(int h, uint32_t dst_ip_be, uint16_t dst_port_be,
-               const void *buf_user, uint32_t len) {
+int sys_sendto(int h, const void *buf_user, uint32_t len,
+               const void *dst_user, uint32_t addrlen) {
     struct task *cur = get_current_task();
     if (!cur) return EINVAL;
-
-    struct udp_socket *s = sock_handle_deref(cur, h);
-    if (!s) return EINVAL;
-    if (s->local_port == 0) return EINVAL;
+    if (h < 0 || h >= SOCK_MAX_HANDLES) return EINVAL;
+    if (!cur->sock_handles[h].used) return EINVAL;
     if (len > UDP_PAYLOAD_MAX) return EINVAL;
-    if (len > 0) {
-        if (!buf_user) return EINVAL;
-        if (check_user_range((uint32_t)buf_user, len) < 0) return EFAULT;
-    }
+
+    struct sockaddr_in dst;
+    int r = copy_sockaddr_in_from_user(&dst, dst_user, addrlen);
+    if (r != OK) return r;
+
+    struct udp_socket *s = cur->sock_handles[h].sock;
+    if (!s) return EINVAL;
 
     uint8_t tmp[UDP_PAYLOAD_MAX];
     if (len > 0) {
+        if (!buf_user) return EINVAL;
+        if (check_user_range((uint32_t)buf_user, len) < 0) return EFAULT;
         if (copy_from_user(tmp, (uint32_t)buf_user, len) < 0) return EFAULT;
     }
 
-    int r = net_udp_send(dst_ip_be, s->local_port, dst_port_be, tmp, len);
-    return r < 0 ? r : (int)len;
+    if (cur->sock_handles[h].type == SOCK_ICMP) {
+        int ret = net_icmp_send(dst.sin_addr, tmp, len);
+        return ret < 0 ? ret : (int)len;
+    }
+
+    if (s->local_port == 0) return EINVAL;
+    int ret = net_udp_send(dst.sin_addr, s->local_port, dst.sin_port, tmp, len);
+    return ret < 0 ? ret : (int)len;
 }
 
 int sys_recvfrom(int h, void *buf_user, uint32_t max,
-                 uint32_t *src_ip_user, uint16_t *src_port_user) {
+                 void *src_user, uint32_t *addrlen_user) {
     struct task *cur = get_current_task();
     if (!cur) return EINVAL;
+    if (h < 0 || h >= SOCK_MAX_HANDLES) return EINVAL;
+    if (!cur->sock_handles[h].used) return EINVAL;
 
-    struct udp_socket *s = sock_handle_deref(cur, h);
+    struct udp_socket *s = cur->sock_handles[h].sock;
     if (!s) return EINVAL;
 
     uint32_t range = max > UDP_PAYLOAD_MAX ? UDP_PAYLOAD_MAX : max;
@@ -157,12 +207,12 @@ int sys_recvfrom(int h, void *buf_user, uint32_t max,
         if (!buf_user) return EINVAL;
         if (check_user_range((uint32_t)buf_user, range) < 0) return EFAULT;
     }
-    if (src_ip_user && check_user_range((uint32_t)src_ip_user, 4) < 0)
-        return EFAULT;
-    if (src_port_user && check_user_range((uint32_t)src_port_user, 2) < 0)
-        return EFAULT;
 
-    if (s->rx_count == 0) return EAGAIN;
+    if (s->rx_count == 0) {
+        KLOG_DBG("[RECVFROM] empty\n");
+        return EAGAIN;
+    }
+    
 
     struct udp_packet *p = s->rx_queue[s->rx_head];
     s->rx_queue[s->rx_head] = NULL;
@@ -176,8 +226,16 @@ int sys_recvfrom(int h, void *buf_user, uint32_t max,
             return EFAULT;
         }
     }
-    if (src_ip_user) copy_to_user((uint32_t)src_ip_user, &p->src_ip, 4);
-    if (src_port_user) copy_to_user((uint32_t)src_port_user, &p->src_port, 2);
+
+    if (src_user) {
+        struct sockaddr_in src;
+        memset(&src, 0, sizeof(src));
+        src.sin_family = AF_INET;
+        src.sin_port = p->src_port;
+        src.sin_addr = p->src_ip;
+        int r = copy_sockaddr_in_to_user(src_user, addrlen_user, &src);
+        if (r != OK) { kfree(p); return r; }
+    }
 
     kfree(p);
     return (int)copy_len;
@@ -248,4 +306,30 @@ int net_udp_send(uint32_t dst_ip_be, uint16_t src_port_be,
     int r = net_ip_send(dst_ip_be, IP_PROTO_UDP, pkt, total);
     kfree(pkt);
     return r < 0 ? r : (int)len;
+}
+
+/* 由 net_proto.c 的 net_icmp_rx 调用。把 echo reply 塞进 ICMP socket。 */
+void net_icmp_deliver(uint32_t src_ip, const uint8_t *p, uint32_t len) {   
+    struct udp_socket *s = NULL;
+    for (int i = 0; i < UDP_MAX_SOCKETS; i++) {
+        if (g_pool[i].used && g_pool[i].local_port == 0) {
+            s = &g_pool[i];
+            break;
+        }
+    }
+    if (!s) return;
+    if (s->rx_count >= UDP_RX_QUEUE_LEN) return;
+    if (len > UDP_PAYLOAD_MAX) len = UDP_PAYLOAD_MAX;
+
+    struct udp_packet *pkt = (struct udp_packet*)kmalloc(sizeof(struct udp_packet));
+    if (!pkt) return;
+
+    pkt->src_ip = src_ip;
+    pkt->src_port = 0;
+    pkt->len = (uint16_t)len;
+    if (len > 0) memcpy(pkt->data, p, len);
+
+    s->rx_queue[s->rx_tail] = pkt;
+    s->rx_tail = (s->rx_tail + 1) % UDP_RX_QUEUE_LEN;
+    s->rx_count++;
 }

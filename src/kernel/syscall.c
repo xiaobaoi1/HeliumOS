@@ -956,15 +956,15 @@ void syscall_handler(struct registers *regs) {
             ret = sys_socket((int)arg1, (int)arg2, (int)arg3);
             break;
         case SYS_BIND:
-            ret = sys_bind((int)arg1, (uint16_t)arg2);
+            ret = sys_bind((int)arg1, (const void*)arg2, arg3);
             break;
         case SYS_SENDTO:
-            ret = sys_sendto((int)arg1, arg2, (uint16_t)arg3,
+            ret = sys_sendto((int)arg1, (const void*)arg2, arg3,
                              (const void*)arg4, arg5);
             break;
         case SYS_RECVFROM:
             ret = sys_recvfrom((int)arg1, (void*)arg2, arg3,
-                               (uint32_t*)arg4, (uint16_t*)arg5);
+                               (void*)arg4, (uint32_t*)arg5);
             break;
         case SYS_SOCKCLOSE:
             ret = sys_sockclose((int)arg1);

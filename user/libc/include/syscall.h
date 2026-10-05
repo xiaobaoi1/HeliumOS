@@ -449,25 +449,7 @@ static inline unsigned short htons(unsigned short x) {
     return ((x & 0xFF) << 8) | ((x >> 8) & 0xFF);
 }
 
-static inline int socket(int domain, int type, int proto) {
-    return __syscall(SYS_SOCKET, domain, type, proto);
-}
-static inline int bind(int h, unsigned short port_be) {
-    return __syscall(SYS_BIND, h, port_be, 0);
-}
-static inline int sendto(int h, unsigned int dst_ip_be,
-                         unsigned short dst_port_be,
-                         const void *buf, unsigned int len) {
-    return __syscall5(SYS_SENDTO, h, dst_ip_be, dst_port_be,
-                      (int)buf, len);
-}
-static inline int recvfrom(int h, void *buf, unsigned int max,
-                           unsigned int *src_ip, unsigned short *src_port) {
-    return __syscall5(SYS_RECVFROM, h, (int)buf, max,
-                      (int)src_ip, (int)src_port);
-}
-static inline int sockclose(int h) {
-    return __syscall(SYS_SOCKCLOSE, h, 0, 0);
-}
+static inline unsigned int   ntohl(unsigned int x)   { return htonl(x); }
+static inline unsigned short ntohs(unsigned short x) { return htons(x); }
 
 #endif

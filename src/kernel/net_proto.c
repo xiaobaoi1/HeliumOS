@@ -27,7 +27,7 @@ static struct arp_entry g_arp[ARP_CACHE_SIZE];
 
 /* ---------- 校验和 ---------- */
 
-static uint16_t ip_checksum(const uint8_t *data, uint32_t len) {
+uint16_t ip_checksum(const uint8_t *data, uint32_t len) {
     uint32_t sum = 0;
     for (uint32_t i = 0; i + 1 < len; i += 2) {
         sum += ((uint16_t)data[i] << 8) | data[i + 1];
@@ -257,18 +257,24 @@ int net_ip_send(uint32_t dst_ip_be, uint8_t proto,
 
 /* ---------- ICMP ---------- */
 
+int net_icmp_send(uint32_t dst_ip_be, const uint8_t *icmp_payload, uint32_t len) {
+    if (len < 4 || len > 1472) return -1;
+    return net_ip_send(dst_ip_be, IP_PROTO_ICMP, icmp_payload, len);
+}
+
 void net_icmp_rx(uint32_t src_ip_be, const uint8_t *p, uint32_t len) {
     if (len < 8) return;
 
     uint8_t type = p[0];
     uint8_t code = p[1];
 
-    /* Echo reply：打印，交给上层（未来） */
     if (type == 0 && code == 0) {
         uint32_t ip_h = ntohl(src_ip_be);
-        kprintf("[ICMP] Echo reply from %u.%u.%u.%u\n",
+        KLOG_DBG("[ICMP] Echo reply from %u.%u.%u.%u\n",
                 ip_h >> 24, (ip_h >> 16) & 0xFF,
                 (ip_h >> 8) & 0xFF, ip_h & 0xFF);
+        extern void net_icmp_deliver(uint32_t src_ip, const uint8_t *p, uint32_t len);
+        net_icmp_deliver(src_ip_be, p, len);
         return;
     }
 

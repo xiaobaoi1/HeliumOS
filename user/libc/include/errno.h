@@ -25,5 +25,6 @@
 #define ENAMETOOLONG -20
 #define EXDEV      -21
 #define EADDRINUSE -22
+#define ETIMEDOUT  -23
 
 #endif

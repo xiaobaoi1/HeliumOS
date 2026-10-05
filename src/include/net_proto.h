@@ -58,5 +58,10 @@ int  net_ip_send(uint32_t dst_ip_be, uint8_t proto,
 
 /* ---------- ICMP ---------- */
 void net_icmp_rx(uint32_t src_ip_be, const uint8_t *p, uint32_t len);
+int net_icmp_send(uint32_t dst_ip_be, const uint8_t *icmp_payload, uint32_t len);
+
+/* 因是共享 API，公开 */
+uint16_t ip_checksum(const uint8_t *data, uint32_t len);
+
 
 #endif

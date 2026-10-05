@@ -16,6 +16,7 @@ struct task;   /* 前向声明 */
 /* ---------- 常量（与用户态一致） ---------- */
 #define AF_INET     2
 #define SOCK_DGRAM  2
+#define SOCK_ICMP   3
 
 /* ---------- 结构 ---------- */
 
@@ -45,6 +46,14 @@ struct sock_handle {
     struct udp_socket *sock;
 };
 
+/* ---------- 内核镜像：sockaddr_in ---------- */
+struct sockaddr_in {
+    uint16_t sin_family;    /* AF_INET */
+    uint16_t sin_port;      /* 网络字节序 */
+    uint32_t sin_addr;      /* 网络字节序 */
+    uint8_t  sin_zero[8];
+} __attribute__((packed));
+
 /* ---------- 生命周期 ---------- */
 void net_sock_init(void);
 void net_sock_release_all(struct task *t);
@@ -62,11 +71,11 @@ int  net_udp_send(uint32_t dst_ip_be, uint16_t src_port_be,
 
 /* ---------- syscall 实现 ---------- */
 int sys_socket(int domain, int type, int proto);
-int sys_bind(int h, uint16_t port_be);
-int sys_sendto(int h, uint32_t dst_ip_be, uint16_t dst_port_be,
-               const void *buf_user, uint32_t len);
+int sys_bind(int h, const void *addr_user, uint32_t addrlen);
+int sys_sendto(int h, const void *buf_user, uint32_t len,
+               const void *dst_user, uint32_t addrlen);
 int sys_recvfrom(int h, void *buf_user, uint32_t max,
-                 uint32_t *src_ip_user, uint16_t *src_port_user);
+                 void *src_user, uint32_t *addrlen_user);
 int sys_sockclose(int h);
 
 #endif
