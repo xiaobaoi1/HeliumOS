@@ -32,22 +32,38 @@ _start:
 
     mov esp, temp_stack_top
 
+    cld
+
+    ; 拷贝 Multiboot2 info 到 bss（分页前，物理地址直接可访问）
+    ; GRUB 可能把 info 放在任意物理地址，拷贝后只访问 bss
+    mov esi, ebx
+    mov edi, mb_info_buf
+    mov ecx, [esi]              ; total_size（首字段）
+    cmp ecx, 16384
+    jbe .copy_ok
+    mov ecx, 16384
+.copy_ok:
+    rep movsb
+    mov [addr_phys], dword mb_info_buf
+
     ; 清零 page_directory（4KB）
     mov edi, page_directory
     mov ecx, PAGE_SIZE / 4
     xor eax, eax
     rep stosd
 
-    ; 填 256 个 PSE 4MB 大页 PDE，覆盖 0..1GB
-    ; PDE 格式：[31:22]=物理地址高位，[7]=PS=1，[1]=W=1，[0]=P=1
-    ; 0x83 = 1000_0011b = PS | W | P
+    ; PDE 0..31：恒等映射物理 0..128MB
     mov edi, page_directory
     mov eax, 0x83
-    mov ecx, 256
-.fill_pde:
+    mov ecx, 32
+.fill_low:
     stosd
-    add eax, 0x400000           ; 每项覆盖 4MB
-    loop .fill_pde
+    add eax, 0x400000
+    loop .fill_low
+
+    ; PDE 32..63：kmap 窗口（虚拟 0x08000000..0x10000000）
+    ; 内核运行时按需填 4KB 页表
+    ; PDE 64..255：未映射
 
     ; 打开 CR4.PSE
     mov eax, cr4
@@ -335,6 +351,9 @@ temp_stack_top:
 stack_bottom:
     resb 16384
 stack_top:
+
+mb_info_buf:
+    resb 16384
 
 section .data
 align 4

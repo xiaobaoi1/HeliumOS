@@ -9,7 +9,7 @@
 extern uint32_t page_directory[1024];
 
 void vmm_init(void) {
-    /* 恒等映射由 start.asm 用 PSE 4MB 大页建立，覆盖 0..1GB。
+    /* 恒等映射由 start.asm 用 PSE 4MB 大页建立，覆盖 0..128MB。
      * 这里只补上递归映射，方便内核代码通过 0xFFC00000 访问页表。 */
     uint32_t pd_phys = (uint32_t)page_directory;
 
@@ -18,7 +18,7 @@ void vmm_init(void) {
     /* 刷新 TLB */
     __asm__ volatile("mov %%cr3, %%eax; mov %%eax, %%cr3" :: "a"(pd_phys));
 
-    kprintf("[VMM] Paging enabled (PSE 4MB pages, 0..1GB identity).\n");
+    kprintf("[VMM] Identity: 0..128MB. Kmap window: 0x8000000..0x10000000.\n");
     kprintf("[VMM] User space starts at 0x40000000.\n");
 }
 

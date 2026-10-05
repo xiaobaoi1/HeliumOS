@@ -33,6 +33,7 @@
 #include <io.h>
 #include <net_sock.h>
 #include <tcp.h>
+#include <kmap.h>
 
 
 static const char *shell_env[] = {
@@ -133,6 +134,7 @@ void kmain(uint32_t magic, uint32_t addr) {
     gdt_init();
     tss_init();
     vmm_init();
+    kmap_init();
     idt_init();
     rtc_init();
     acpi_init(addr);

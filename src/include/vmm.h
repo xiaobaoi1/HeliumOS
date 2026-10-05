@@ -10,6 +10,10 @@
 #define PTE_WRITE   0x002
 #define PTE_USER    0x004
 
+/* 内核恒等映射 0..128MB（PDE 0..31）
+ * kmap 窗口 0x08000000..0x10000000（PDE 32..63）
+ * 用户空间 0x40000000..0xFFFFFFFF */
+
 /* 内核空间：低 1GB (0x00000000 - 0x3FFFFFFF) */
 #define KERNEL_SPACE_START 0x00000000
 #define KERNEL_SPACE_END   0x40000000   /* 1GB 边界 */

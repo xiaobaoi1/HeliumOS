@@ -93,6 +93,16 @@ void pmm_init(uint32_t multiboot_info_addr) {
             free_page_count--;
         }
     }
+    
+    /* 保留 0x08000000..0x10000000（128MB）：
+     * 这段物理地址无法通过恒等映射访问——虚拟同地址是 kmap 窗口。 */
+    for (uint32_t addr = 0x08000000; addr < 0x10000000; addr += PAGE_SIZE) {
+        uint32_t idx = addr >> PAGE_SHIFT;
+        if (bitmap_test(idx) == 0) {
+            bitmap_set(idx);
+            free_page_count--;
+        }
+    }
 
     kprintf("[PMM] Done. Free pages: %d\n", free_page_count);
 }

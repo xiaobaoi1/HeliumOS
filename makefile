@@ -78,6 +78,7 @@ OBJS = $(BUILD_DIR)/start.o \
 	   $(BUILD_DIR)/net_proto.o \
 	   $(BUILD_DIR)/net_sock.o \
 	   $(BUILD_DIR)/tcp.o \
+	   $(BUILD_DIR)/kmap.o \
 
 	   
 

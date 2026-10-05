@@ -6,6 +6,7 @@
 #include <stddef.h>
 #include <errno.h>
 #include <multiboot2.h>
+#include <kmap.h>
 
 /* ---------- 结构 ---------- */
 
@@ -133,26 +134,66 @@ static const struct acpi_rsdp_v2 *rsdp_scan(void) {
 /* ---------- FADT 查找 ---------- */
 
 static const struct acpi_sdt_header *find_fadt_from_rsdt(uint32_t rsdt_phys) {
-    const struct acpi_sdt_header *rsdt =
-        (const struct acpi_sdt_header*)rsdt_phys;
-    if (!checksum_ok(rsdt, rsdt->length)) {
-        KLOG_WARN("ACPI: RSDT checksum bad\n");
+    /* 先映射 36 字节读表头 */
+    uint8_t *hdr = (uint8_t*)kmap(rsdt_phys, 36);
+    if (!hdr) {
+        KLOG_WARN("ACPI: cannot map RSDT header\n");
+        return NULL;
+    }
+    uint32_t rsdt_len = *(uint32_t*)(hdr + 4);
+    kmap_free(hdr, 36);
+
+    if (rsdt_len < 36 || rsdt_len > 1024 * 1024) {
+        KLOG_WARN("ACPI: bad RSDT length %u\n", rsdt_len);
         return NULL;
     }
 
-    uint32_t count = (rsdt->length - sizeof(*rsdt)) / 4;
-    const uint32_t *ptrs = (const uint32_t*)((uint8_t*)rsdt + sizeof(*rsdt));
-    for (uint32_t i = 0; i < count; i++) {
-        const struct acpi_sdt_header *h =
-            (const struct acpi_sdt_header*)ptrs[i];
-        if (memcmp(h->signature, "FACP", 4) != 0) continue;
+    /* 映射整表 */
+    uint8_t *rsdt = (uint8_t*)kmap(rsdt_phys, rsdt_len);
+    if (!rsdt) {
+        KLOG_WARN("ACPI: cannot map RSDT\n");
+        return NULL;
+    }
+    if (!checksum_ok(rsdt, rsdt_len)) {
+        KLOG_WARN("ACPI: RSDT checksum bad\n");
+        kmap_free(rsdt, rsdt_len);
+        return NULL;
+    }
 
-        if (!checksum_ok(h, h->length)) {
+    uint32_t count = (rsdt_len - 36) / 4;
+    const uint32_t *ptrs = (const uint32_t*)(rsdt + 36);
+
+    for (uint32_t i = 0; i < count; i++) {
+        uint32_t fadt_phys = ptrs[i];
+
+        /* 先映射表头读 length */
+        uint8_t *fh = (uint8_t*)kmap(fadt_phys, 36);
+        if (!fh) continue;
+        uint32_t fadt_len = *(uint32_t*)(fh + 4);
+        kmap_free(fh, 36);
+
+        if (fadt_len < 36 || fadt_len > 1024 * 1024) continue;
+
+        uint8_t *fadt = (uint8_t*)kmap(fadt_phys, fadt_len);
+        if (!fadt) continue;
+
+        if (memcmp(fadt, "FACP", 4) != 0) {
+            kmap_free(fadt, fadt_len);
+            continue;
+        }
+        if (!checksum_ok(fadt, fadt_len)) {
             KLOG_WARN("ACPI: FADT checksum bad\n");
+            kmap_free(fadt, fadt_len);
+            kmap_free(rsdt, rsdt_len);
             return NULL;
         }
-        return h;
+
+        /* 不释放——acpi_init 后续用 fadt 读字段，最后不再 kmap_free。
+         * 启动期一次性泄漏几 KB，接受。 */
+        return (const struct acpi_sdt_header*)fadt;
     }
+
+    kmap_free(rsdt, rsdt_len);
     return NULL;
 }
 
@@ -162,30 +203,59 @@ static const struct acpi_sdt_header *find_fadt_from_xsdt(uint64_t xsdt_phys) {
         return NULL;
     }
 
-    const struct acpi_sdt_header *xsdt =
-        (const struct acpi_sdt_header*)(uint32_t)xsdt_phys;
-    if (!checksum_ok(xsdt, xsdt->length)) {
-        KLOG_WARN("ACPI: XSDT checksum bad\n");
+    uint32_t phys = (uint32_t)xsdt_phys;
+
+    /* 先映射 36 字节读表头 */
+    uint8_t *hdr = (uint8_t*)kmap(phys, 36);
+    if (!hdr) return NULL;
+    uint32_t xsdt_len = *(uint32_t*)(hdr + 4);
+    kmap_free(hdr, 36);
+
+    if (xsdt_len < 36 || xsdt_len > 1024 * 1024) {
+        KLOG_WARN("ACPI: bad XSDT length %u\n", xsdt_len);
         return NULL;
     }
 
-    uint32_t count = (xsdt->length - sizeof(*xsdt)) / 8;
-    const uint64_t *ptrs = (const uint64_t*)((uint8_t*)xsdt + sizeof(*xsdt));
+    uint8_t *xsdt = (uint8_t*)kmap(phys, xsdt_len);
+    if (!xsdt) return NULL;
+    if (!checksum_ok(xsdt, xsdt_len)) {
+        KLOG_WARN("ACPI: XSDT checksum bad\n");
+        kmap_free(xsdt, xsdt_len);
+        return NULL;
+    }
+
+    uint32_t count = (xsdt_len - 36) / 8;
+    const uint64_t *ptrs = (const uint64_t*)(xsdt + 36);
+
     for (uint32_t i = 0; i < count; i++) {
-        if (ptrs[i] > 0xFFFFFFFFULL) {
-            KLOG_DBG("ACPI: table %u above 4GB, skipped\n", i);
+        if (ptrs[i] > 0xFFFFFFFFULL) continue;
+        uint32_t fadt_phys = (uint32_t)ptrs[i];
+
+        uint8_t *fh = (uint8_t*)kmap(fadt_phys, 36);
+        if (!fh) continue;
+        uint32_t fadt_len = *(uint32_t*)(fh + 4);
+        kmap_free(fh, 36);
+
+        if (fadt_len < 36 || fadt_len > 1024 * 1024) continue;
+
+        uint8_t *fadt = (uint8_t*)kmap(fadt_phys, fadt_len);
+        if (!fadt) continue;
+
+        if (memcmp(fadt, "FACP", 4) != 0) {
+            kmap_free(fadt, fadt_len);
             continue;
         }
-        const struct acpi_sdt_header *h =
-            (const struct acpi_sdt_header*)(uint32_t)ptrs[i];
-        if (memcmp(h->signature, "FACP", 4) != 0) continue;
-
-        if (!checksum_ok(h, h->length)) {
+        if (!checksum_ok(fadt, fadt_len)) {
             KLOG_WARN("ACPI: FADT checksum bad\n");
+            kmap_free(fadt, fadt_len);
+            kmap_free(xsdt, xsdt_len);
             return NULL;
         }
-        return h;
+
+        return (const struct acpi_sdt_header*)fadt;
     }
+
+    kmap_free(xsdt, xsdt_len);
     return NULL;
 }
 
@@ -255,22 +325,24 @@ int acpi_poweroff(void) {
 }
 
 int acpi_reboot(void) {
-    /* 1. ACPI RESET_REG */
     if (g_has_reset_reg && g_reset_reg.address != 0) {
         if (g_reset_reg.address_space_id == 1) {
-            /* System I/O */
             outb((uint16_t)g_reset_reg.address, g_reset_val);
             return OK;
         }
         if (g_reset_reg.address_space_id == 0 &&
             g_reset_reg.address <= 0xFFFFFFFFULL) {
-            /* System Memory */
-            *(volatile uint8_t*)(uint32_t)g_reset_reg.address = g_reset_val;
-            return OK;
+            /* System Memory：走 kmap */
+            uint8_t *p = (uint8_t*)kmap((uint32_t)g_reset_reg.address, 1);
+            if (p) {
+                *p = g_reset_val;
+                kmap_free(p, 1);
+                return OK;
+            }
         }
     }
 
-    /* 2. fallback：8042 键盘控制器 */
+    /* fallback：8042 */
     for (int i = 0; i < 100; i++) {
         if (!(inb(0x64) & 0x02)) break;
     }
