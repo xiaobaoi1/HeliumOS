@@ -81,6 +81,9 @@ OBJS = $(BUILD_DIR)/start.o \
 	   $(BUILD_DIR)/kmap.o \
 	   $(BUILD_DIR)/fb.o \
 	   $(BUILD_DIR)/font.o \
+	   $(BUILD_DIR)/display.o \
+	   $(BUILD_DIR)/vga_text.o \
+	   $(BUILD_DIR)/fb_char.o \
 
 	   
 

@@ -205,6 +205,7 @@ void kmain(uint32_t magic, uint32_t addr) {
     }
 
     font_init(sys_vol);
+    tty_try_upgrade();
 
     create_idle_task(sys_vol);
     create_shell_task(sys_vol);

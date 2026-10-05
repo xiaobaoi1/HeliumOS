@@ -16,6 +16,7 @@ int  tty_read(char *buf, uint32_t n);
 
 /* ---------- 光标 ---------- */
 void tty_set_cursor(int x, int y);
+void tty_get_size(int *cols, int *rows);
 void tty_get_cursor(int *x, int *y);
 void tty_save_cursor(void);
 void tty_restore_cursor(void);
@@ -29,5 +30,7 @@ int  tty_debug_write(const char *buf, uint32_t n);
 struct task;
 void tty_set_foreground(struct task *t);
 struct task *tty_get_foreground(void);
+
+void tty_try_upgrade(void);
 
 #endif

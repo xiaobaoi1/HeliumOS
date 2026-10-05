@@ -7,6 +7,8 @@
 #include <errno.h>
 #include <string.h>
 #include <stddef.h>
+#include <display.h>
+#include <display.h>
 
 /* tty 的内部状态 */
 static const struct device_ops *vga_ops = NULL;
@@ -24,32 +26,22 @@ static struct task *fg_task = NULL;
 /* ---------- 内部辅助 ---------- */
 
 static void put_cell(int x, int y, char c, uint8_t attr) {
-    if (!vga_ops || !vga_ops->write) return;
-    struct vga_cell cell = {
-        .x = (uint16_t)x,
-        .y = (uint16_t)y,
-        .attr = attr,
-        .c = c,
-    };
-    vga_ops->write(NULL, &cell, sizeof(cell));
+    display_draw_char(x, y, c, attr);
 }
 
 static void update_hw_cursor(void) {
-    if (!vga_ops || !vga_ops->ioctl) return;
-    uint32_t arg = ((uint32_t)cursor_x << 16) | (uint32_t)cursor_y;
-    vga_ops->ioctl(NULL, VGA_IOCTL_SET_HW_CURSOR, (void*)arg);
+    display_set_cursor(cursor_x, cursor_y);
 }
 
 static void scroll_up(void) {
-    if (!vga_ops || !vga_ops->ioctl) return;
-    vga_ops->ioctl(NULL, VGA_IOCTL_SCROLL, (void*)(uint32_t)current_attr);
-    cursor_y = VGA_HEIGHT - 1;
+    display_scroll(current_attr);
+    cursor_y = display_rows() - 1;
 }
 
 static void newline(void) {
     cursor_x = 0;
     cursor_y++;
-    if (cursor_y >= VGA_HEIGHT) {
+    if (cursor_y >= display_rows()) {
         scroll_up();
     }
 }
@@ -57,11 +49,7 @@ static void newline(void) {
 /* ---------- 生命周期 ---------- */
 
 void tty_init(void) {
-    vga_ops = dev_get_ops(DEV_TYPE_VGA);
-    if (!vga_ops) {
-        kprintf("[TTY] ERROR: VGA dev not registered\n");
-        return;
-    }
+    display_init();
 
     cursor_x = 0;
     cursor_y = 0;
@@ -71,6 +59,15 @@ void tty_init(void) {
     cursor_saved   = 0;
 
     kprintf("[TTY] Initialized\n");
+}
+
+void tty_try_upgrade(void) {
+    const struct display_ops *new_ops = fb_char_get_ops();
+    if (!new_ops) return;
+
+    /* VBE 模式下 0xB8000 已失效，之前的 tty 输出无法迁移。
+     * display_switch 内部已清屏。 */
+    display_switch(new_ops);
 }
 
 void tty_set_foreground(struct task *t) {
@@ -96,7 +93,7 @@ int tty_write(const char *buf, uint32_t n) {
                 break;
             case '\t': {
                 int next = (cursor_x + 8) & ~7;
-                while (cursor_x < next && cursor_x < VGA_WIDTH) {
+                while (cursor_x < next && cursor_x < display_cols()) {
                     put_cell(cursor_x, cursor_y, ' ', current_attr);
                     cursor_x++;
                 }
@@ -107,7 +104,7 @@ int tty_write(const char *buf, uint32_t n) {
                     cursor_x--;
                 } else if (cursor_y > 0) {
                     cursor_y--;
-                    cursor_x = VGA_WIDTH - 1;
+                    cursor_x = display_cols() - 1;
                 }
                 put_cell(cursor_x, cursor_y, ' ', current_attr);
                 break;
@@ -115,7 +112,7 @@ int tty_write(const char *buf, uint32_t n) {
                 if ((unsigned char)c < 0x20) break;
                 put_cell(cursor_x, cursor_y, c, current_attr);
                 cursor_x++;
-                if (cursor_x >= VGA_WIDTH) {
+                if (cursor_x >= display_cols()) {
                     newline();
                 }
                 break;
@@ -126,8 +123,7 @@ int tty_write(const char *buf, uint32_t n) {
 }
 
 void tty_clear(void) {
-    if (!vga_ops || !vga_ops->ioctl) return;
-    vga_ops->ioctl(NULL, VGA_IOCTL_CLEAR, (void*)(uint32_t)current_attr);
+    display_clear(current_attr);
     cursor_x = 0;
     cursor_y = 0;
     update_hw_cursor();
@@ -158,11 +154,16 @@ int tty_read(char *buf, uint32_t n) {
 /* ---------- 光标 ---------- */
 
 void tty_set_cursor(int x, int y) {
-    if (x < 0 || x >= VGA_WIDTH) return;
-    if (y < 0 || y >= VGA_HEIGHT) return;
+    if (x < 0 || x >= display_cols()) return;
+    if (y < 0 || y >= display_rows()) return;
     cursor_x = x;
     cursor_y = y;
     update_hw_cursor();
+}
+
+void tty_get_size(int *cols, int *rows) {
+    if (cols) *cols = display_cols();
+    if (rows) *rows = display_rows();
 }
 
 void tty_get_cursor(int *x, int *y) {
