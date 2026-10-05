@@ -46,5 +46,27 @@ int main(int argc, char **argv) {
     shm_unlink("/test");
 
     printf("=== done ===\n");
+
+        /* A2: malloc 大分配 */
+    printf("\n=== A2 malloc test ===\n");
+    void *big = malloc(128 * 1024);
+    if (!big) {
+        printf("malloc(128K) FAIL\n");
+        return 1;
+    }
+    memset(big, 0xAB, 128 * 1024);
+    if (((unsigned char*)big)[0] != 0xAB ||
+        ((unsigned char*)big)[128*1024 - 1] != 0xAB) {
+        printf("big write FAIL\n");
+        return 1;
+    }
+    free(big);
+    printf("malloc(128K) + free: PASS\n");
+
+    /* 小分配仍然走 brk */
+    void *small = malloc(100);
+    if (!small) { printf("malloc(100) FAIL\n"); return 1; }
+    free(small);
+    printf("malloc(100) + free: PASS\n");
     return 0;
 }

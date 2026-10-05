@@ -130,7 +130,7 @@ $(ISO): $(KERNEL_ELF)
 	@echo "ISO 镜像生成成功: $(ISO)"
 
 # ==================== 硬盘镜像（用于测试文件系统写入） ====================
-$(DISK_IMG): $(KERNEL_ELF) $(BUILD_DIR)/SHELL.ELF $(BUILD_DIR)/IDLE.ELF $(BUILD_DIR)/TEST.ELF $(BUILD_DIR)/TESTKILL.ELF $(BUILD_DIR)/SLEEPER.ELF $(BUILD_DIR)/ARGTEST.ELF $(BUILD_DIR)/TESTWRITE.ELF $(BUILD_DIR)/TESTFAULT.ELF $(BUILD_DIR)/TESTENV.ELF $(BUILD_DIR)/COUNT.ELF $(BUILD_DIR)/CAT.ELF $(BUILD_DIR)/ECHO.ELF $(BUILD_DIR)/HEAD.ELF $(BUILD_DIR)/TAIL.ELF $(BUILD_DIR)/WC.ELF $(BUILD_DIR)/TEST_MMAP.ELF
+$(DISK_IMG): $(KERNEL_ELF) $(BUILD_DIR)/SHELL.ELF $(BUILD_DIR)/IDLE.ELF $(BUILD_DIR)/TEST.ELF $(BUILD_DIR)/TESTKILL.ELF $(BUILD_DIR)/SLEEPER.ELF $(BUILD_DIR)/ARGTEST.ELF $(BUILD_DIR)/TESTWRITE.ELF $(BUILD_DIR)/TESTFAULT.ELF $(BUILD_DIR)/TESTENV.ELF $(BUILD_DIR)/COUNT.ELF $(BUILD_DIR)/CAT.ELF $(BUILD_DIR)/ECHO.ELF $(BUILD_DIR)/HEAD.ELF $(BUILD_DIR)/TAIL.ELF $(BUILD_DIR)/WC.ELF $(BUILD_DIR)/TEST_MMAP.ELF $(BUILD_DIR)/TESTSTACK.ELF
 	@echo "正在创建 FAT32 硬盘镜像 (需要 sudo 权限)..."
 	dd if=/dev/zero of=$(DISK_IMG) bs=1M count=64 status=none
 	(echo o; echo n; echo p; echo 1; echo 2048; echo; echo t; echo c; echo a; echo 1; echo w) | fdisk $(DISK_IMG) > /dev/null 2>&1
@@ -160,6 +160,7 @@ $(DISK_IMG): $(KERNEL_ELF) $(BUILD_DIR)/SHELL.ELF $(BUILD_DIR)/IDLE.ELF $(BUILD_
 	sudo cp $(BUILD_DIR)/TAIL.ELF /mnt/build/TAIL; \
 	sudo cp $(BUILD_DIR)/WC.ELF /mnt/build/WC; \
 	sudo cp $(BUILD_DIR)/TEST_MMAP.ELF /mnt/build/TEST_MMAP; \
+	sudo cp $(BUILD_DIR)/TESTSTACK.ELF /mnt/build/TESTSTACK; \
 	
 
 	sudo cp $(SRC_DIR)/kernel/kmain.c /mnt/build/kmain.c; \
@@ -385,6 +386,13 @@ $(BUILD_DIR)/test_mmap.o: user/test_mmap.c
 
 $(BUILD_DIR)/TEST_MMAP.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/test_mmap.o $(LIBC_OBJS) user/linker.ld
 	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/test_mmap.o $(LIBC_OBJS)
+
+# test_stack
+$(BUILD_DIR)/test_stack.o: user/test_stack.c
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/TESTSTACK.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/test_stack.o $(LIBC_OBJS) user/linker.ld
+	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/test_stack.o $(LIBC_OBJS)
 
 
 

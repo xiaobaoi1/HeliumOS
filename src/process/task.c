@@ -323,8 +323,9 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd,
     vmm_map_user_page(pgd, 0x7FFFC000, stack_low, PTE_WRITE | PTE_USER);
     vmm_map_user_page(pgd, 0x7FFFD000, stack_high, PTE_WRITE | PTE_USER);
 
-    /* 3b. 建栈 VMA。覆盖两页 [0x7FFFC000, 0x7FFFE000)。 */
-    if (vma_insert(task, 0x7FFFC000, 0x7FFFE000,
+    /* 栈 VMA 覆盖 128KB 预留区 [0x7FF00000, 0x7FFFE000)。
+     * 初始只映射顶两页（stack_low / stack_high），其余按需分配。 */
+    if (vma_insert(task, 0x7FF00000, 0x7FFFE000,
                    VMA_READ | VMA_WRITE | VMA_USER,
                    VMA_TYPE_STACK, NULL, 0) != OK) {
         KLOG_WARN("VMA: stack insert failed for pid %d\n", task->pid);

@@ -2,75 +2,77 @@
 #include "syscall.h"
 #include "string.h"
 
-/*
- * 简化的 malloc/free
- *
- * 结构：
- *   - 全局 heap_start / heap_end 记录当前 brk 区间
- *   - 每个块头部有 size + free + next
- *   - free 不归还给内核，只是标记为 free
- *   - malloc 优先复用 free 块，不够才 brk 扩展
- *
- * 不做：
- *   - 合并相邻 free 块（碎片问题先不管）
- *   - 多线程安全
- *   - 对齐到 8 字节以上
- */
-
 #define ALIGN_UP(x, a)  (((x) + ((a) - 1)) & ~((a) - 1))
 #define ALIGN_8(x)      ALIGN_UP((x), 8)
 
 struct block {
-    size_t        size;     /* 用户可用字节数 */
+    size_t        size;
     int           free;
+    int           is_mmap;    /* 1 = 来自 mmap */
     struct block *next;
 };
 
-/* 块头部对齐到 8 字节 */
 #define HEADER_SIZE  ((size_t)sizeof(struct block))
-#define MIN_SPLIT    16    /* 剩余至少这么多才拆分 */
+#define MIN_SPLIT    16
+
+/* 大分配走 mmap 的阈值 */
+#define MMAP_THRESHOLD  (64 * 1024)
 
 static struct block *head = NULL;
-static void         *heap_cur = NULL;   /* 当前 brk */
 
 /* 扩展物理内存：brk 对齐到 4KB */
 static void *heap_grow(size_t need) {
-    int cur = brk(0);            /* 查询当前 brk */
+    int cur = brk(0);
     if (cur < 0) return NULL;
 
     int new_brk = cur + (int)need;
-    new_brk = (new_brk + 4095) & ~4095;   /* 4KB 对齐 */
+    new_brk = (new_brk + 4095) & ~4095;
 
     if (brk(new_brk) != 0) return NULL;
 
-    void *ret = (void*)cur;
-    heap_cur = (void*)new_brk;
-    return ret;
+    return (void*)cur;
 }
 
 void *malloc(size_t size) {
     if (size == 0) return NULL;
     size = ALIGN_8(size);
 
-    /* 首次调用：初始化 head */
+    /* 大分配：走 mmap */
+    if (size >= MMAP_THRESHOLD) {
+        size_t total = size + HEADER_SIZE;
+        size_t map_size = (total + 4095) & ~4095u;
+        unsigned int addr = mmap(0, map_size,
+                                 PROT_READ | PROT_WRITE,
+                                 MAP_PRIVATE | MAP_ANONYMOUS, -1);
+        if ((int)addr <= 0) return NULL;
+
+        struct block *b = (struct block*)addr;
+        b->size    = size;
+        b->free    = 0;
+        b->is_mmap = 1;
+        b->next    = NULL;
+        return (char*)b + HEADER_SIZE;
+    }
+
+    /* 小分配：走 brk */
     if (head == NULL) {
         void *p = heap_grow(sizeof(struct block) + size + 4096);
         if (!p) return NULL;
         head = (struct block*)p;
-        head->size = 4096;       /* 预备一些余量 */
-        head->free = 1;
-        head->next = NULL;
+        head->size    = 4096;
+        head->free    = 1;
+        head->is_mmap = 0;
+        head->next    = NULL;
     }
 
-    /* 在 free 链表里找足够大的块 */
     for (struct block *b = head; b; b = b->next) {
         if (b->free && b->size >= size) {
-            /* 拆分：如果剩余足够大 */
             if (b->size >= size + HEADER_SIZE + MIN_SPLIT) {
                 struct block *nb = (struct block*)((char*)b + HEADER_SIZE + size);
-                nb->size = b->size - size - HEADER_SIZE;
-                nb->free = 1;
-                nb->next = b->next;
+                nb->size    = b->size - size - HEADER_SIZE;
+                nb->free    = 1;
+                nb->is_mmap = 0;
+                nb->next    = b->next;
                 b->next = nb;
                 b->size = size;
             }
@@ -79,14 +81,14 @@ void *malloc(size_t size) {
         }
     }
 
-    /* 没有合适的块：向操作系统要 */
     void *p = heap_grow(HEADER_SIZE + size);
     if (!p) return NULL;
 
     struct block *nb = (struct block*)p;
-    nb->size = size;
-    nb->free = 0;
-    nb->next = head;
+    nb->size    = size;
+    nb->free    = 0;
+    nb->is_mmap = 0;
+    nb->next    = head;
     head = nb;
 
     return (char*)nb + HEADER_SIZE;
@@ -95,8 +97,15 @@ void *malloc(size_t size) {
 void free(void *ptr) {
     if (!ptr) return;
     struct block *b = (struct block*)((char*)ptr - HEADER_SIZE);
+
+    if (b->is_mmap) {
+        size_t total = b->size + HEADER_SIZE;
+        size_t map_size = (total + 4095) & ~4095u;
+        munmap((unsigned int)b, map_size);
+        return;
+    }
+
     b->free = 1;
-    /* 不合并、不归还给内核 */
 }
 
 void *calloc(size_t n, size_t size) {
@@ -111,7 +120,7 @@ void *realloc(void *ptr, size_t new_size) {
     if (new_size == 0) { free(ptr); return NULL; }
 
     struct block *b = (struct block*)((char*)ptr - HEADER_SIZE);
-    if (b->size >= new_size) return ptr;   /* 已经够大 */
+    if (b->size >= new_size) return ptr;
 
     void *np = malloc(new_size);
     if (!np) return NULL;
