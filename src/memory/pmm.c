@@ -120,3 +120,38 @@ void pmm_free_page(uint32_t phys_addr) {
 uint32_t pmm_get_free_count(void) {
     return free_page_count;
 }
+
+uint32_t pmm_alloc_pages(uint32_t n) {
+    if (n == 0 || n > MAX_PAGES) return 0;
+    if (n == 1) return pmm_alloc_page();
+
+    /* 线性扫描找连续 n 个空页 */
+    for (uint32_t i = 0; i + n <= MAX_PAGES; i++) {
+        if (bitmap_test(i)) continue;   /* 起点已占用，跳过 */
+
+        int ok = 1;
+        for (uint32_t j = 1; j < n; j++) {
+            if (bitmap_test(i + j)) { ok = 0; break; }
+        }
+        if (!ok) continue;
+
+        for (uint32_t j = 0; j < n; j++) {
+            bitmap_set(i + j);
+        }
+        free_page_count -= n;
+        return i << PAGE_SHIFT;
+    }
+    kprintf("[PMM] ERROR: no contiguous %u pages\n", n);
+    return 0;
+}
+
+void pmm_free_pages(uint32_t phys, uint32_t n) {
+    if (n == 0) return;
+    uint32_t idx = phys >> PAGE_SHIFT;
+    for (uint32_t i = 0; i < n; i++) {
+        if (idx + i < MAX_PAGES && bitmap_test(idx + i)) {
+            bitmap_clear(idx + i);
+            free_page_count++;
+        }
+    }
+}

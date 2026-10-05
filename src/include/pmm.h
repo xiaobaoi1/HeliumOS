@@ -15,4 +15,10 @@ void pmm_free_page(uint32_t phys_addr);
 // 获取空闲页数
 uint32_t pmm_get_free_count(void);
 
+/* 分配 n 页物理连续内存。返回首物理地址，失败返回 0。 */
+uint32_t pmm_alloc_pages(uint32_t n);
+
+/* 释放 n 页物理连续内存。 */
+void     pmm_free_pages(uint32_t phys, uint32_t n);
+
 #endif

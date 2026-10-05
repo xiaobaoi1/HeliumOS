@@ -72,7 +72,10 @@ OBJS = $(BUILD_DIR)/start.o \
 	   $(BUILD_DIR)/uaccess_asm.o \
 	   $(BUILD_DIR)/extable.o \
 	   $(BUILD_DIR)/vma.o \
-	   $(BUILD_DIR)/shm.o 
+	   $(BUILD_DIR)/shm.o \
+	   $(BUILD_DIR)/net.o \
+	   $(BUILD_DIR)/rtl8139.o \
+	   $(BUILD_DIR)/net_proto.o
 
 	   
 
@@ -178,15 +181,15 @@ $(DISK_IMG): $(KERNEL_ELF) $(BUILD_DIR)/SHELL.ELF $(BUILD_DIR)/IDLE.ELF $(BUILD_
 	@echo "硬盘镜像生成成功: $(DISK_IMG)"
 
 # 	test
-	dd if=/dev/zero of=$(BUILD_DIR)/TESTIMG.img bs=1M count=64 status=none
-	(echo o; echo n; echo p; echo 1; echo 2048; echo; echo t; echo c; echo w) | fdisk $(BUILD_DIR)/TESTIMG.img > /dev/null 2>&1
-	@OFFSET=$$((2048*512)); \
-	sudo losetup /dev/loop22 $(BUILD_DIR)/TESTIMG.img; \
-	sudo losetup /dev/loop23 $(BUILD_DIR)/TESTIMG.img -o $$OFFSET; \
+# 	dd if=/dev/zero of=$(BUILD_DIR)/TESTIMG.img bs=1M count=64 status=none
+# 	(echo o; echo n; echo p; echo 1; echo 2048; echo; echo t; echo c; echo w) | fdisk $(BUILD_DIR)/TESTIMG.img > /dev/null 2>&1
+# 	@OFFSET=$$((2048*512)); \
+# 	sudo losetup /dev/loop22 $(BUILD_DIR)/TESTIMG.img; \
+# 	sudo losetup /dev/loop23 $(BUILD_DIR)/TESTIMG.img -o $$OFFSET; \
 
-	sudo mkfs.vfat -F 32 /dev/loop23 > /dev/null; \
-	sudo losetup -d /dev/loop23; \
-	sudo losetup -d /dev/loop22
+# 	sudo mkfs.vfat -F 32 /dev/loop23 > /dev/null; \
+# 	sudo losetup -d /dev/loop23; \
+# 	sudo losetup -d /dev/loop22
 	
 
 # ==================== 运行目标 ====================
@@ -196,14 +199,20 @@ run: $(ISO)
 
 # 运行硬盘镜像（测试文件系统时使用）
 run-disk: $(DISK_IMG)
-	$(QEMU) -drive file=$(DISK_IMG),format=raw -serial stdio -m 1024 -drive file=$(BUILD_DIR)/TESTIMG.img,format=raw
+	$(QEMU) -drive file=$(DISK_IMG),format=raw -serial stdio -m 1024 -netdev user,id=n0 -device rtl8139,netdev=n0
+
+run-net: $(DISK_IMG)
+	$(QEMU) -drive file=$(DISK_IMG),format=raw -serial stdio -m 1024 \
+	        -netdev user,id=n0 \
+	        -device rtl8139,netdev=n0 \
+	        -object filter-dump,id=f1,netdev=n0,file=/tmp/qemu-net.pcap
 
 # 调试（与 run 相同，只是名称更明确）
 debug: $(ISO)
 	$(QEMU) -cdrom $(ISO) -serial stdio -s -S
 
 debug-disk: $(DISK_IMG)
-	$(QEMU) -drive file=$(DISK_IMG),format=raw -serial stdio -s -S
+	$(QEMU) -drive file=$(DISK_IMG),format=raw -serial stdio -m 1024 -netdev user,id=n0 -device rtl8139,netdev=n0 -s -S
 
 # ==================== 清理 ====================
 clean:
@@ -397,4 +406,4 @@ $(BUILD_DIR)/TESTSTACK.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/test_stack.o $(LIBC
 
 
 # 声明伪目标
-.PHONY: all run run-disk debug debug-disk clean gdb pack
+.PHONY: all run run-disk debug debug-disk clean gdb pack run-net

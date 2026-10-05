@@ -2,6 +2,7 @@
 #define PCI_H
 
 #include <stdint.h>
+#include <vmm.h>
 
 #define PCI_MAX_DEVICES 64
 
@@ -53,5 +54,18 @@ const struct pci_device *pci_find(uint16_t vendor, uint16_t device);
 uint32_t pci_read_config(uint8_t bus, uint8_t slot, uint8_t func, uint8_t off);
 void     pci_write_config(uint8_t bus, uint8_t slot, uint8_t func,
                           uint8_t off, uint32_t val);
+
+/* BAR 编码辅助 */
+#define PCI_BAR_IS_IO(bar)     ((bar) & 0x1u)
+#define PCI_BAR_IO_ADDR(bar)   ((bar) & ~0x3u)
+#define PCI_BAR_MEM_ADDR(bar)  ((bar) & ~0xFu)
+#define PCI_BAR_MEM_TYPE(bar)  ((bar) & 0x6u)   /* 0=32位, 4=64位 */
+
+/* 检查 BAR 物理地址是否可通过恒等映射直接访问。
+ * 当前内核恒等映射 0..1GB（KERNEL_SPACE_END）。
+ * 超出范围的 MMIO 暂不支持——驱动应返回错误而不是崩溃。 */
+static inline int pci_bar_accessible(uint32_t bar_phys) {
+    return bar_phys != 0 && bar_phys < KERNEL_SPACE_END;
+}
 
 #endif

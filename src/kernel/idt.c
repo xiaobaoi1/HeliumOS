@@ -97,21 +97,20 @@ void idt_init(void) {
     pic_unmask_irq(0);
     pit_set_frequency(1000);
 
-    pic_unmask_irq(1);
-
     kprintf("[IDT] Initialization complete.\n");
 }
 
 /* 取消屏蔽特定IRQ（方便后续启用） */
 void pic_unmask_irq(uint8_t irq) {
-    uint16_t port;
-    uint8_t mask;
     if (irq < 8) {
-        port = 0x21;
-        mask = inb(port) & ~(1 << irq);
+        uint8_t mask = inb(0x21) & ~(1 << irq);
+        outb(0x21, mask);
     } else {
-        port = 0xA1;
-        mask = inb(port) & ~(1 << (irq - 8));
+        /* 先开从 PIC 的 cascade（主 PIC IRQ 2），否则从 PIC 中断传不上去 */
+        uint8_t master = inb(0x21) & ~(1 << 2);
+        outb(0x21, master);
+
+        uint8_t slave = inb(0xA1) & ~(1 << (irq - 8));
+        outb(0xA1, slave);
     }
-    outb(port, mask);
 }

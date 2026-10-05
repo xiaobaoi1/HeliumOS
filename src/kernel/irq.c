@@ -3,6 +3,7 @@
 #include <printf.h>
 #include <string.h>
 #include <stddef.h>
+#include <idt.h>
 
 struct irq_slot {
     irq_handler_fn fn;
@@ -23,6 +24,9 @@ int irq_register(uint8_t irq, irq_handler_fn fn, const char *name) {
     g_slots[irq].fn    = fn;
     g_slots[irq].name  = name;
     g_slots[irq].count = 0;
+
+    /* 取消 PIC 屏蔽，否则驱动收不到中断 */
+    pic_unmask_irq(irq);
 
     kprintf("[IRQ] Registered IRQ %d: %s\n",
             irq, name ? name : "(unnamed)");
