@@ -191,8 +191,9 @@ void net_ip_rx(const uint8_t *p, uint32_t len, const uint8_t *src_mac) {
         net_icmp_rx(src_ip, payload, payload_len);
     } else if (proto == IP_PROTO_UDP) {
         if (payload_len >= 8) {
-            uint16_t sp = ((uint16_t)payload[0] << 8) | payload[1];
-            uint16_t dp = ((uint16_t)payload[2] << 8) | payload[3];
+            uint16_t sp, dp;
+            memcpy(&sp, payload + 0, 2);
+            memcpy(&dp, payload + 2, 2);
             net_udp_rx(src_ip, sp, dp, payload + 8, payload_len - 8);
         }
     }

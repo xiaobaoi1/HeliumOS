@@ -18,6 +18,7 @@ static inline uint32_t ntohl(uint32_t x) { return htonl(x); }
  * 宏是主机字节序；运行时 htonl 转网络字节序。 */
 #define NET_IP_LOCAL_HOST      0x0A00020Fu   /* 10.0.2.15 */
 #define NET_IP_GATEWAY_HOST    0x0A000202u   /* 10.0.2.2 */
+#define NET_IP_DNS_HOST        0x0A000203u   /* 10.0.2.3 (QEMU slirp) */
 #define NET_IP_NETMASK_HOST    0xFFFFFF00u
 #define NET_IP_BROADCAST_HOST  0x0A0002FFu
 

@@ -293,10 +293,8 @@ int net_udp_send(uint32_t dst_ip_be, uint16_t src_port_be,
     uint8_t *pkt = (uint8_t*)kmalloc(total);
     if (!pkt) return ENOMEM;
 
-    pkt[0] = (src_port_be >> 8) & 0xFF;
-    pkt[1] = src_port_be & 0xFF;
-    pkt[2] = (dst_port_be >> 8) & 0xFF;
-    pkt[3] = dst_port_be & 0xFF;
+    memcpy(pkt + 0, &src_port_be, 2);
+    memcpy(pkt + 2, &dst_port_be, 2);
     pkt[4] = (total >> 8) & 0xFF;
     pkt[5] = total & 0xFF;
     pkt[6] = 0; pkt[7] = 0;   /* 校验和 = 0：不校验 */
