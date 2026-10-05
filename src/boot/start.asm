@@ -13,6 +13,17 @@ align 4
     dd 0x100000000 - (0xE85250D6 + 0 + (header_end - header_start))
 
 header_start:
+    ; Framebuffer tag（type = 5）：请求 1024x768x32 图形模式
+    align 8
+    dw 5                        ; type = framebuffer
+    dw 1                        ; flags = 1（可选：无法满足时可忽略）
+    dd 20                       ; size
+    dd 1024                     ; width
+    dd 768                      ; height
+    dd 32                       ; depth (bpp)
+
+    ; End tag（type = 0）
+    align 8
     dw 0
     dw 0
     dd 8

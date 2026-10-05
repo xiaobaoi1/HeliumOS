@@ -79,6 +79,7 @@ OBJS = $(BUILD_DIR)/start.o \
 	   $(BUILD_DIR)/net_sock.o \
 	   $(BUILD_DIR)/tcp.o \
 	   $(BUILD_DIR)/kmap.o \
+	   $(BUILD_DIR)/fb.o \
 
 	   
 
@@ -207,27 +208,18 @@ run: $(ISO)
 
 # 运行硬盘镜像（测试文件系统时使用）
 run-disk: $(DISK_IMG)
-	$(QEMU) -drive file=$(DISK_IMG),format=raw -serial stdio -m 1024 -netdev user,id=n0 -device rtl8139,netdev=n0
-
-run-net: $(DISK_IMG)
 	$(QEMU) -drive file=$(DISK_IMG),format=raw -serial stdio -m 1024 \
-	        -netdev user,id=n0 \
-	        -device rtl8139,netdev=n0 \
-	        -object filter-dump,id=f1,netdev=n0,file=/tmp/qemu-net.pcap
+	        -netdev user,id=n0 -device rtl8139,netdev=n0
 
 run-tcp: $(DISK_IMG)
 	$(QEMU) -drive file=$(DISK_IMG),format=raw -serial stdio -m 1024 \
 	        -netdev user,id=n0,hostfwd=tcp::12345-:12345 \
-	        -device rtl8139,netdev=n0 \
-	        -object filter-dump,id=f1,netdev=n0,file=/tmp/qemu-net.pcap
+	        -device rtl8139,netdev=n0
 
-# 调试（与 run 相同，只是名称更明确）
-debug: $(ISO)
-	$(QEMU) -cdrom $(ISO) -serial stdio -s -S
-
+# debug
 debug-disk: $(DISK_IMG)
-	$(QEMU) -drive file=$(DISK_IMG),format=raw -serial stdio -m 1024 -netdev user,id=n0 -device rtl8139,netdev=n0 -s -S
-
+	$(QEMU) -drive file=$(DISK_IMG),format=raw -serial stdio -m 1024 \
+	        -netdev user,id=n0 -device rtl8139,netdev=n0 -s -S
 # ==================== 清理 ====================
 clean:
 	rm -rf $(BUILD_DIR) $(ISO) $(DISK_IMG)

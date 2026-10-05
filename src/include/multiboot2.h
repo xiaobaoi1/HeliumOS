@@ -32,9 +32,24 @@ struct multiboot2_mmap_entry {
     uint32_t reserved;
 };
 
+/* framebuffer tag（type 8） */
+struct multiboot2_tag_framebuffer {
+    uint32_t type;
+    uint32_t size;
+    uint64_t framebuffer_addr;
+    uint32_t framebuffer_pitch;
+    uint32_t framebuffer_width;
+    uint32_t framebuffer_height;
+    uint8_t  framebuffer_bpp;
+    uint8_t  framebuffer_type;    /* 1 = RGB, 0 = indexed */
+    uint16_t reserved;
+    /* framebuffer_type == 1 时，后接 6 字节 RGB 掩码信息 */
+} __attribute__((packed));
+
 // 标签类型常量
 #define MULTIBOOT2_TAG_TYPE_END     0
 #define MULTIBOOT2_TAG_TYPE_MMAP    6
+#define MULTIBOOT2_TAG_TYPE_FRAMEBUFFER  8
 #define MULTIBOOT2_TAG_TYPE_ACPI_OLD  14
 #define MULTIBOOT2_TAG_TYPE_ACPI_NEW  15
 

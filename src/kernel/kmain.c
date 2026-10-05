@@ -34,6 +34,7 @@
 #include <net_sock.h>
 #include <tcp.h>
 #include <kmap.h>
+#include <fb.h>
 
 
 static const char *shell_env[] = {
@@ -138,6 +139,7 @@ void kmain(uint32_t magic, uint32_t addr) {
     idt_init();
     rtc_init();
     acpi_init(addr);
+    fb_init(addr);
 
     volume_init();
     fs_init();
