@@ -73,6 +73,23 @@ void display_clear(uint8_t attr) {
 void display_scroll(uint8_t attr) {
     if (buf_rows < 2) return;
 
+    /* 先擦旧光标——必须在 cell_buf 滚动之前。
+     * 滚动后 cell_buf[cur_y][cur_x] 已经是别的字符。 */
+    if (cur_x >= 0 && cur_y >= 0 &&
+        cur_x < buf_cols && cur_y < buf_rows &&
+        g_display && g_display->draw_char) {
+        uint16_t cell = cell_buf[cur_y][cur_x];
+        char c = cell & 0xFF;
+        uint8_t a = (cell >> 8) & 0xFF;
+        if (c == 0) c = ' ';
+        g_display->draw_char(cur_x, cur_y, c, a);
+    }
+
+    /* 光标位置失效——下次 set_cursor 会重画 */
+    cur_x = -1;
+    cur_y = -1;
+
+    /* 移动 cell_buf */
     for (int y = 1; y < buf_rows; y++)
         for (int x = 0; x < buf_cols; x++)
             cell_buf[y-1][x] = cell_buf[y][x];
@@ -81,6 +98,7 @@ void display_scroll(uint8_t attr) {
     for (int x = 0; x < buf_cols; x++)
         cell_buf[buf_rows-1][x] = cell;
 
+    /* 滚物理屏 */
     if (g_display && g_display->scroll) {
         g_display->scroll(attr);
     }

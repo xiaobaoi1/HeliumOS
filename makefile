@@ -154,7 +154,7 @@ $(DISK_IMG): $(KERNEL_ELF) $(BUILD_DIR)/SHELL.ELF $(BUILD_DIR)/IDLE.ELF $(BUILD_
 	sudo mount /dev/loop23 /mnt/build; \
 	sudo mkdir -p /mnt/build/boot/grub; \
 	sudo cp $(KERNEL_ELF) /mnt/build/boot/; \
-	sudo cp tools/unicode.hex /mnt/build/UNICODE.HEX; \
+	sudo cp tools/unifont-17.0.03.hex /mnt/build/UNICODE.HEX; \
 
 
 	sudo cp $(BUILD_DIR)/IDLE.ELF /mnt/build/IDLE; \
