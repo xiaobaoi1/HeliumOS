@@ -37,4 +37,11 @@ void display_set_cursor(int x, int y);
 void vga_text_register(void);
 const struct display_ops *fb_char_get_ops(void);
 
+/* 标记脏区（像素坐标，半开区间） */
+void display_dirty(int x0, int y0, int x1, int y1);
+
+/* 把 back 脏区刷到 framebuffer，然后重画鼠标。
+ * 无脏区时只重画鼠标（鼠标可能移动了）。 */
+void display_flush(void);
+
 #endif

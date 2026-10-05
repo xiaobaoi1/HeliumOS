@@ -6,12 +6,13 @@
 struct fb_info {
     uint32_t  width;
     uint32_t  height;
-    uint32_t  pitch;      /* 每行字节数 */
-    uint8_t   bpp;        /* 每像素位数，当前只支持 32 */
+    uint32_t  pitch;
+    uint8_t   bpp;
     uint8_t   valid;
     uint16_t  reserved;
-    uint64_t  phys;       /* framebuffer 物理地址 */
-    uint32_t *virt;       /* 内核虚拟地址（kmap） */
+    uint64_t  phys;
+    uint32_t *virt;      /* framebuffer 内核虚拟地址 */
+    uint32_t *back;      /* 后台缓冲（内核虚拟地址） */
 };
 
 /* 从 Multiboot2 info 解析 framebuffer tag。

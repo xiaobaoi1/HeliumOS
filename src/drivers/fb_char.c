@@ -18,7 +18,7 @@ static const uint32_t vga_palette[16] = {
 static inline void put_pixel(struct fb_info *fb, int x, int y, uint32_t rgb) {
     if ((uint32_t)x >= fb->width || (uint32_t)y >= fb->height) return;
     uint32_t off = (y * fb->pitch + x * 4) / 4;
-    fb->virt[off] = rgb;
+    fb->back[off] = rgb;
 }
 
 static void fill_rect(struct fb_info *fb, int x, int y, int w, int h, uint32_t rgb) {
@@ -30,12 +30,6 @@ static void fill_rect(struct fb_info *fb, int x, int y, int w, int h, uint32_t r
 }
 
 static void fbc_draw_char(int x, int y, char ch, uint8_t attr) {
-    static int first = 1;
-    if (first) {
-        first = 0;
-        kprintf("[FBC] first draw: x=%d y=%d c=%02x attr=%02x\n",
-                x, y, (uint8_t)ch, attr);
-    }
     struct fb_info *fb = fb_get();
     if (!fb || !fb->valid) return;
 
@@ -78,7 +72,7 @@ static void fbc_clear(uint8_t attr) {
     if (!fb || !fb->valid) return;
     uint32_t bg = vga_palette[(attr >> 4) & 0x0F];
     uint32_t n = (fb->pitch / 4) * fb->height;
-    for (uint32_t i = 0; i < n; i++) fb->virt[i] = bg;
+    for (uint32_t i = 0; i < n; i++) fb->back[i] = bg;
 }
 
 static void fbc_scroll(uint8_t attr) {
@@ -89,11 +83,10 @@ static void fbc_scroll(uint8_t attr) {
     uint32_t total = fb->pitch * fb->height;
     if (shift >= total) return;
 
-    /* dest < src，正向拷贝安全 */
-    memcpy((uint8_t*)fb->virt, (uint8_t*)fb->virt + shift, total - shift);
+    memcpy((uint8_t*)fb->back, (uint8_t*)fb->back + shift, total - shift);
 
     uint32_t bg = vga_palette[(attr >> 4) & 0x0F];
-    uint32_t *last = (uint32_t*)((uint8_t*)fb->virt + total - shift);
+    uint32_t *last = (uint32_t*)((uint8_t*)fb->back + total - shift);
     for (uint32_t i = 0; i < shift / 4; i++) last[i] = bg;
 }
 

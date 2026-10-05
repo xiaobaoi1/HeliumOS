@@ -4,6 +4,7 @@
 #include <printf.h>
 #include <string.h>
 #include <stddef.h>
+#include <vmm.h>
 
 static struct fb_info g_fb;
 
@@ -59,6 +60,21 @@ void fb_init(uint32_t mb_addr) {
             }
             g_fb.virt = (uint32_t*)virt;
             g_fb.valid = 1;
+            /* 分配后台缓冲——pmm 拿物理连续页，kmap 到内核虚拟 */
+            uint32_t px = fbt->framebuffer_pitch / 4 * fbt->framebuffer_height;
+            uint32_t back_bytes = px * 4;
+            uint32_t back_pages = (back_bytes + 0xFFF) / 0x1000;
+            uint32_t back_phys = pmm_alloc_pages(back_pages);
+            if (!back_phys) {
+                kprintf("[FB] cannot alloc back buffer\n");
+                return;
+            }
+            g_fb.back = (uint32_t*)kmap(back_phys, back_bytes);
+            if (!g_fb.back) {
+                kprintf("[FB] cannot kmap back buffer\n");
+                return;
+            }
+            for (uint32_t i = 0; i < px; i++) g_fb.back[i] = 0x000000;
 
             kprintf("[FB] mapped to %p\n", virt);
             return;
@@ -78,15 +94,12 @@ struct fb_info *fb_get(void) {
 void fb_put_pixel(uint32_t x, uint32_t y, uint32_t rgb) {
     if (!g_fb.valid) return;
     if (x >= g_fb.width || y >= g_fb.height) return;
-    uint32_t off = (y * g_fb.pitch + x * 4) / 4;   /* 32bpp: pitch/4 像素 */
-    g_fb.virt[off] = rgb;
+    uint32_t off = (y * g_fb.pitch + x * 4) / 4;
+    g_fb.back[off] = rgb;
 }
 
 void fb_clear(uint32_t rgb) {
     if (!g_fb.valid) return;
-    for (uint32_t y = 0; y < g_fb.height; y++) {
-        for (uint32_t x = 0; x < g_fb.width; x++) {
-            fb_put_pixel(x, y, rgb);
-        }
-    }
+    uint32_t px = (g_fb.pitch / 4) * g_fb.height;
+    for (uint32_t i = 0; i < px; i++) g_fb.back[i] = rgb;
 }

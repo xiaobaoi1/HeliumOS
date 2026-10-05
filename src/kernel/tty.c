@@ -31,6 +31,7 @@ static void put_cell(int x, int y, char c, uint8_t attr) {
 
 static void update_hw_cursor(void) {
     display_set_cursor(cursor_x, cursor_y);
+    display_flush();
 }
 
 static void scroll_up(void) {

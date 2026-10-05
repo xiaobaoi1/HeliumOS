@@ -1,0 +1,358 @@
+diff --git a/makefile b/makefile
+index 6bfa0ba..27e4fe5 100644
+--- a/makefile
++++ b/makefile
+@@ -84,6 +84,7 @@ OBJS = $(BUILD_DIR)/start.o \
+ 	   $(BUILD_DIR)/display.o \
+ 	   $(BUILD_DIR)/vga_text.o \
+ 	   $(BUILD_DIR)/fb_char.o \
++	   $(BUILD_DIR)/mouse.o \
+ 
+ 	   
+ 
+diff --git a/src/drivers/fb.c b/src/drivers/fb.c
+index 3bdd9df..34ec1b2 100644
+--- a/src/drivers/fb.c
++++ b/src/drivers/fb.c
+@@ -4,6 +4,7 @@
+ #include <printf.h>
+ #include <string.h>
+ #include <stddef.h>
++#include <vmm.h>
+ 
+ static struct fb_info g_fb;
+ 
+@@ -59,6 +60,21 @@ void fb_init(uint32_t mb_addr) {
+             }
+             g_fb.virt = (uint32_t*)virt;
+             g_fb.valid = 1;
++            /* 分配后台缓冲——pmm 拿物理连续页，kmap 到内核虚拟 */
++            uint32_t px = fbt->framebuffer_pitch / 4 * fbt->framebuffer_height;
++            uint32_t back_bytes = px * 4;
++            uint32_t back_pages = (back_bytes + 0xFFF) / 0x1000;
++            uint32_t back_phys = pmm_alloc_pages(back_pages);
++            if (!back_phys) {
++                kprintf("[FB] cannot alloc back buffer\n");
++                return;
++            }
++            g_fb.back = (uint32_t*)kmap(back_phys, back_bytes);
++            if (!g_fb.back) {
++                kprintf("[FB] cannot kmap back buffer\n");
++                return;
++            }
++            for (uint32_t i = 0; i < px; i++) g_fb.back[i] = 0x000000;
+ 
+             kprintf("[FB] mapped to %p\n", virt);
+             return;
+@@ -78,15 +94,12 @@ struct fb_info *fb_get(void) {
+ void fb_put_pixel(uint32_t x, uint32_t y, uint32_t rgb) {
+     if (!g_fb.valid) return;
+     if (x >= g_fb.width || y >= g_fb.height) return;
+-    uint32_t off = (y * g_fb.pitch + x * 4) / 4;   /* 32bpp: pitch/4 像素 */
+-    g_fb.virt[off] = rgb;
++    uint32_t off = (y * g_fb.pitch + x * 4) / 4;
++    g_fb.back[off] = rgb;
+ }
+ 
+ void fb_clear(uint32_t rgb) {
+     if (!g_fb.valid) return;
+-    for (uint32_t y = 0; y < g_fb.height; y++) {
+-        for (uint32_t x = 0; x < g_fb.width; x++) {
+-            fb_put_pixel(x, y, rgb);
+-        }
+-    }
++    uint32_t px = (g_fb.pitch / 4) * g_fb.height;
++    for (uint32_t i = 0; i < px; i++) g_fb.back[i] = rgb;
+ }
+\ No newline at end of file
+diff --git a/src/drivers/fb_char.c b/src/drivers/fb_char.c
+index 26dc19e..2d10aa5 100644
+--- a/src/drivers/fb_char.c
++++ b/src/drivers/fb_char.c
+@@ -18,7 +18,7 @@ static const uint32_t vga_palette[16] = {
+ static inline void put_pixel(struct fb_info *fb, int x, int y, uint32_t rgb) {
+     if ((uint32_t)x >= fb->width || (uint32_t)y >= fb->height) return;
+     uint32_t off = (y * fb->pitch + x * 4) / 4;
+-    fb->virt[off] = rgb;
++    fb->back[off] = rgb;
+ }
+ 
+ static void fill_rect(struct fb_info *fb, int x, int y, int w, int h, uint32_t rgb) {
+@@ -78,7 +78,7 @@ static void fbc_clear(uint8_t attr) {
+     if (!fb || !fb->valid) return;
+     uint32_t bg = vga_palette[(attr >> 4) & 0x0F];
+     uint32_t n = (fb->pitch / 4) * fb->height;
+-    for (uint32_t i = 0; i < n; i++) fb->virt[i] = bg;
++    for (uint32_t i = 0; i < n; i++) fb->back[i] = bg;
+ }
+ 
+ static void fbc_scroll(uint8_t attr) {
+@@ -89,11 +89,10 @@ static void fbc_scroll(uint8_t attr) {
+     uint32_t total = fb->pitch * fb->height;
+     if (shift >= total) return;
+ 
+-    /* dest < src，正向拷贝安全 */
+-    memcpy((uint8_t*)fb->virt, (uint8_t*)fb->virt + shift, total - shift);
++    memcpy((uint8_t*)fb->back, (uint8_t*)fb->back + shift, total - shift);
+ 
+     uint32_t bg = vga_palette[(attr >> 4) & 0x0F];
+-    uint32_t *last = (uint32_t*)((uint8_t*)fb->virt + total - shift);
++    uint32_t *last = (uint32_t*)((uint8_t*)fb->back + total - shift);
+     for (uint32_t i = 0; i < shift / 4; i++) last[i] = bg;
+ }
+ 
+diff --git a/src/include/display.h b/src/include/display.h
+index 03a3873..eb37bde 100644
+--- a/src/include/display.h
++++ b/src/include/display.h
+@@ -37,4 +37,11 @@ void display_set_cursor(int x, int y);
+ void vga_text_register(void);
+ const struct display_ops *fb_char_get_ops(void);
+ 
++/* 标记脏区（像素坐标，半开区间） */
++void display_dirty(int x0, int y0, int x1, int y1);
++
++/* 把 back 脏区刷到 framebuffer，然后重画鼠标。
++ * 无脏区时只重画鼠标（鼠标可能移动了）。 */
++void display_flush(void);
++
+ #endif
+\ No newline at end of file
+diff --git a/src/include/fb.h b/src/include/fb.h
+index 160a6b8..215e13f 100644
+--- a/src/include/fb.h
++++ b/src/include/fb.h
+@@ -6,12 +6,13 @@
+ struct fb_info {
+     uint32_t  width;
+     uint32_t  height;
+-    uint32_t  pitch;      /* 每行字节数 */
+-    uint8_t   bpp;        /* 每像素位数，当前只支持 32 */
++    uint32_t  pitch;
++    uint8_t   bpp;
+     uint8_t   valid;
+     uint16_t  reserved;
+-    uint64_t  phys;       /* framebuffer 物理地址 */
+-    uint32_t *virt;       /* 内核虚拟地址（kmap） */
++    uint64_t  phys;
++    uint32_t *virt;      /* framebuffer 内核虚拟地址 */
++    uint32_t *back;      /* 后台缓冲（内核虚拟地址） */
+ };
+ 
+ /* 从 Multiboot2 info 解析 framebuffer tag。
+diff --git a/src/kernel/display.c b/src/kernel/display.c
+index 6b01fe7..8ae1cf0 100644
+--- a/src/kernel/display.c
++++ b/src/kernel/display.c
+@@ -2,6 +2,8 @@
+ #include <printf.h>
+ #include <string.h>
+ #include <stddef.h>
++#include <fb.h>
++#include <mouse.h>
+ 
+ static const struct display_ops *g_display = NULL;
+ static uint16_t cell_buf[DISP_MAX_ROWS][DISP_MAX_COLS];
+@@ -50,6 +52,7 @@ void display_draw_char(int x, int y, char c, uint8_t attr) {
+     if (x < 0 || x >= buf_cols || y < 0 || y >= buf_rows) return;
+ 
+     cell_buf[y][x] = ((uint16_t)attr << 8) | (uint8_t)c;
++    display_dirty(x * 8, y * 16, (x + 1) * 8, (y + 1) * 16);
+ 
+     if (g_display && g_display->draw_char) {
+         g_display->draw_char(x, y, c, attr);
+@@ -61,6 +64,8 @@ void display_clear(uint8_t attr) {
+     for (int y = 0; y < buf_rows; y++)
+         for (int x = 0; x < buf_cols; x++)
+             cell_buf[y][x] = cell;
++    
++    display_dirty(0, 0, 10000, 10000);   /* 大值，被 flush 里 clamp */
+ 
+     if (g_display && g_display->clear) {
+         g_display->clear(attr);
+@@ -97,6 +102,8 @@ void display_scroll(uint8_t attr) {
+     uint16_t cell = ((uint16_t)attr << 8) | ' ';
+     for (int x = 0; x < buf_cols; x++)
+         cell_buf[buf_rows-1][x] = cell;
++    
++    display_dirty(0, 0, 10000, 10000);
+ 
+     /* 滚物理屏 */
+     if (g_display && g_display->scroll) {
+@@ -121,6 +128,10 @@ void display_set_cursor(int x, int y) {
+     cur_x = x;
+     cur_y = y;
+ 
++    /* 光标变化也要 flush */
++    display_dirty(cur_x * 8, cur_y * 16, (cur_x + 1) * 8, (cur_y + 1) * 16);
++    display_dirty(x * 8, y * 16, (x + 1) * 8, (y + 1) * 16);
++
+     if (g_display && g_display->draw_cursor) {
+         g_display->draw_cursor(x, y);
+     }
+@@ -128,4 +139,132 @@ void display_set_cursor(int x, int y) {
+ 
+ void display_init(void) {
+     vga_text_register();
++}
++
++/* ---------- 脏区 ---------- */
++
++static int dirty_x0 = 0, dirty_y0 = 0;
++static int dirty_x1 = -1, dirty_y1 = -1;   /* x1 < x0 表示空 */
++
++void display_dirty(int x0, int y0, int x1, int y1) {
++    if (x1 <= x0 || y1 <= y0) return;
++
++    if (dirty_x1 < dirty_x0) {
++        /* 空脏区 */
++        dirty_x0 = x0; dirty_y0 = y0;
++        dirty_x1 = x1; dirty_y1 = y1;
++    } else {
++        if (x0 < dirty_x0) dirty_x0 = x0;
++        if (y0 < dirty_y0) dirty_y0 = y0;
++        if (x1 > dirty_x1) dirty_x1 = x1;
++        if (y1 > dirty_y1) dirty_y1 = y1;
++    }
++}
++
++/* ---------- 鼠标合成 ---------- */
++
++#define MOUSE_W 8
++#define MOUSE_H 12
++
++static int      mouse_prev_x = -1;
++static int      mouse_prev_y = -1;
++static uint32_t mouse_save[MOUSE_W * MOUSE_H];   /* 鼠标下像素的备份 */
++
++/* 箭头图案——8x12，1 = 白，0 = 透明 */
++static const uint8_t mouse_cursor[MOUSE_H] = {
++    0x80, 0xC0, 0xE0, 0xF0, 0xF8, 0xFC,
++    0xFE, 0xFF, 0xF8, 0xD8, 0x88, 0x00
++};
++
++/* 从 back 恢复鼠标旧位置的像素到 framebuffer */
++static void mouse_restore(void) {
++    if (mouse_prev_x < 0) return;
++    struct fb_info *fb = fb_get();
++    if (!fb || !fb->valid) return;
++
++    for (int y = 0; y < MOUSE_H; y++) {
++        for (int x = 0; x < MOUSE_W; x++) {
++            int px = mouse_prev_x + x;
++            int py = mouse_prev_y + y;
++            if (px < 0 || py < 0 ||
++                px >= (int)fb->width || py >= (int)fb->height) continue;
++            uint32_t off = (py * fb->pitch + px * 4) / 4;
++            fb->virt[off] = mouse_save[y * MOUSE_W + x];
++        }
++    }
++    mouse_prev_x = -1;
++    mouse_prev_y = -1;
++}
++
++/* 把鼠标位置的 framebuffer 像素存到 mouse_save，再画箭头 */
++static void mouse_draw(int mx, int my) {
++    struct fb_info *fb = fb_get();
++    if (!fb || !fb->valid) return;
++
++    for (int y = 0; y < MOUSE_H; y++) {
++        for (int x = 0; x < MOUSE_W; x++) {
++            int px = mx + x;
++            int py = my + y;
++            if (px < 0 || py < 0 ||
++                px >= (int)fb->width || py >= (int)fb->height) {
++                mouse_save[y * MOUSE_W + x] = 0;
++                continue;
++            }
++            uint32_t off = (py * fb->pitch + px * 4) / 4;
++            mouse_save[y * MOUSE_W + x] = fb->virt[off];
++        }
++    }
++
++    for (int y = 0; y < MOUSE_H; y++) {
++        uint8_t row = mouse_cursor[y];
++        for (int x = 0; x < MOUSE_W; x++) {
++            if (row & (0x80 >> x)) {
++                int px = mx + x;
++                int py = my + y;
++                if (px < 0 || py < 0 ||
++                    px >= (int)fb->width || py >= (int)fb->height) continue;
++                uint32_t off = (py * fb->pitch + px * 4) / 4;
++                fb->virt[off] = 0xFFFFFF;
++            }
++        }
++    }
++
++    mouse_prev_x = mx;
++    mouse_prev_y = my;
++}
++
++/* ---------- flush ---------- */
++
++void display_flush(void) {
++    struct fb_info *fb = fb_get();
++    if (!fb || !fb->valid) return;
++
++    int has_dirty = (dirty_x1 > dirty_x0);
++
++    if (has_dirty) {
++        /* clamp 到屏幕范围 */
++        int x0 = dirty_x0, y0 = dirty_y0;
++        int x1 = dirty_x1, y1 = dirty_y1;
++        if (x0 < 0) x0 = 0;
++        if (y0 < 0) y0 = 0;
++        if (x1 > (int)fb->width)  x1 = (int)fb->width;
++        if (y1 > (int)fb->height) y1 = (int)fb->height;
++
++        if (x1 > x0 && y1 > y0) {
++            mouse_restore();
++
++            for (int y = y0; y < y1; y++) {
++                uint32_t *src = fb->back + (y * fb->pitch) / 4 + x0;
++                uint32_t *dst = fb->virt + (y * fb->pitch) / 4 + x0;
++                memcpy(dst, src, (x1 - x0) * 4);
++            }
++        }
++
++        dirty_x1 = -1;   /* 清空脏区 */
++    }
++
++    struct mouse_state *m = mouse_get();
++    if (m) {
++        mouse_draw(m->x, m->y);
++    }
+ }
+\ No newline at end of file
+diff --git a/src/kernel/kmain.c b/src/kernel/kmain.c
+index afe1a3c..e824bea 100644
+--- a/src/kernel/kmain.c
++++ b/src/kernel/kmain.c
+@@ -36,6 +36,7 @@
+ #include <kmap.h>
+ #include <fb.h>
+ #include <font.h>
++#include <mouse.h>
+ 
+ 
+ static const char *shell_env[] = {
+@@ -206,6 +207,7 @@ void kmain(uint32_t magic, uint32_t addr) {
+ 
+     font_init(sys_vol);
+     tty_try_upgrade();
++    mouse_init();
+ 
+     create_idle_task(sys_vol);
+     create_shell_task(sys_vol);
+diff --git a/src/kernel/tty.c b/src/kernel/tty.c
+index e4775af..df055bb 100644
+--- a/src/kernel/tty.c
++++ b/src/kernel/tty.c
+@@ -31,6 +31,7 @@ static void put_cell(int x, int y, char c, uint8_t attr) {
+ 
+ static void update_hw_cursor(void) {
+     display_set_cursor(cursor_x, cursor_y);
++    display_flush();
+ }
+ 
+ static void scroll_up(void) {

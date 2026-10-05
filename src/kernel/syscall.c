@@ -22,6 +22,8 @@
 #include <shm.h>
 #include <vma.h>
 #include <net_sock.h>
+#include <fb.h>
+#include <display.h>
 
 #define PROT_READ   0x01
 #define PROT_WRITE  0x02
@@ -640,6 +642,96 @@ static int sys_tty_set_foreground(proc_handle_t h) {
     return OK;
 }
 
+/* ---------- 图形 ---------- */
+
+struct gfx_info {
+    uint32_t width;
+    uint32_t height;
+    uint32_t bpp;
+};
+
+static int sys_gfx_get_info(struct gfx_info *user_buf) {
+    if (!user_buf) return EINVAL;
+    if (check_user_range((uint32_t)user_buf, sizeof(struct gfx_info)) < 0)
+        return EFAULT;
+
+    struct fb_info *fb = fb_get();
+    if (!fb || !fb->valid) return ENOSYS;
+
+    struct gfx_info info = {
+        .width = fb->width,
+        .height = fb->height,
+        .bpp = fb->bpp,
+    };
+    if (copy_to_user((uint32_t)user_buf, &info, sizeof(info)) < 0)
+        return EFAULT;
+    return OK;
+}
+
+static int sys_gfx_fill_rect(uint32_t x, uint32_t y,
+                              uint32_t w, uint32_t h, uint32_t rgb) {
+    struct fb_info *fb = fb_get();
+    if (!fb || !fb->valid) return ENOSYS;
+
+    if (x >= fb->width || y >= fb->height) return OK;
+    if (w == 0 || h == 0) return OK;
+    if (x + w > fb->width)  w = fb->width  - x;
+    if (y + h > fb->height) h = fb->height - y;
+
+    for (uint32_t j = 0; j < h; j++) {
+        for (uint32_t i = 0; i < w; i++) {
+            fb_put_pixel(x + i, y + j, rgb);
+        }
+    }
+
+    display_dirty((int)x, (int)y, (int)(x + w), (int)(y + h));
+    display_flush();
+    return OK;
+}
+
+static int sys_gfx_put_pixel(uint32_t x, uint32_t y, uint32_t rgb) {
+    struct fb_info *fb = fb_get();
+    if (!fb || !fb->valid) return ENOSYS;
+    if (x >= fb->width || y >= fb->height) return OK;
+
+    fb_put_pixel(x, y, rgb);
+    display_dirty((int)x, (int)y, (int)(x + 1), (int)(y + 1));
+    display_flush();
+    return OK;
+}
+
+static int sys_gfx_blit(uint32_t x, uint32_t y,
+                         uint32_t w, uint32_t h, void *user_buf) {
+    struct fb_info *fb = fb_get();
+    if (!fb || !fb->valid) return ENOSYS;
+
+    if (x >= fb->width || y >= fb->height) return OK;
+    if (w == 0 || h == 0) return OK;
+    if (x + w > fb->width)  w = fb->width  - x;
+    if (y + h > fb->height) h = fb->height - y;
+
+    uint32_t row_bytes = w * 4;
+    if (row_bytes > 2048) return EINVAL;
+
+    uint8_t row_buf[2048];
+    uint32_t u_addr = (uint32_t)user_buf;
+
+    for (uint32_t j = 0; j < h; j++) {
+        if (check_user_range(u_addr, row_bytes) < 0) return EFAULT;
+        if (copy_from_user(row_buf, u_addr, row_bytes) < 0) return EFAULT;
+
+        uint32_t *src = (uint32_t*)row_buf;
+        for (uint32_t i = 0; i < w; i++) {
+            fb_put_pixel(x + i, y + j, src[i]);
+        }
+        u_addr += row_bytes;
+    }
+
+    display_dirty((int)x, (int)y, (int)(x + w), (int)(y + h));
+    display_flush();
+    return OK;
+}
+
 /* 系统调用分发器 */
 void syscall_handler(struct registers *regs) {
     uint32_t syscall_no = regs->eax;
@@ -978,6 +1070,27 @@ void syscall_handler(struct registers *regs) {
         case SYS_ACCEPT:
             ret = sys_accept((int)arg1, (void*)arg2, (uint32_t*)arg3);
             break;
+
+
+        /* ---------- 图形 ---------- */
+        case SYS_GFX_GET_INFO:
+            ret = sys_gfx_get_info((struct gfx_info*)arg1);
+            break;
+        case SYS_GFX_FILL_RECT:
+            ret = sys_gfx_fill_rect(arg1, arg2, arg3, arg4, arg5);
+            break;
+        case SYS_GFX_PUT_PIXEL:
+            ret = sys_gfx_put_pixel(arg1, arg2, arg3);
+            break;
+        case SYS_GFX_BLIT:
+            ret = sys_gfx_blit(arg1, arg2, arg3, arg4, (void*)arg5);
+            break;
+
+
+
+
+
+
 
         default:
             kprintf("[SYSCALL] Unknown syscall %d\n", syscall_no);

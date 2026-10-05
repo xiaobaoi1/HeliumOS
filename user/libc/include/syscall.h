@@ -85,6 +85,11 @@
 #define SYS_LISTEN      106
 #define SYS_ACCEPT      107
 
+#define SYS_GFX_GET_INFO    110
+#define SYS_GFX_FILL_RECT   111
+#define SYS_GFX_PUT_PIXEL   112
+#define SYS_GFX_BLIT        113
+
 
 
 

@@ -84,6 +84,7 @@ OBJS = $(BUILD_DIR)/start.o \
 	   $(BUILD_DIR)/display.o \
 	   $(BUILD_DIR)/vga_text.o \
 	   $(BUILD_DIR)/fb_char.o \
+	   $(BUILD_DIR)/mouse.o \
 
 	   
 
@@ -142,7 +143,7 @@ $(ISO): $(KERNEL_ELF)
 	@echo "ISO 镜像生成成功: $(ISO)"
 
 # ==================== 硬盘镜像（用于测试文件系统写入） ====================
-$(DISK_IMG): $(KERNEL_ELF) $(BUILD_DIR)/SHELL.ELF $(BUILD_DIR)/IDLE.ELF $(BUILD_DIR)/TEST.ELF $(BUILD_DIR)/TESTKILL.ELF $(BUILD_DIR)/SLEEPER.ELF $(BUILD_DIR)/ARGTEST.ELF $(BUILD_DIR)/TESTWRITE.ELF $(BUILD_DIR)/TESTFAULT.ELF $(BUILD_DIR)/TESTENV.ELF $(BUILD_DIR)/COUNT.ELF $(BUILD_DIR)/CAT.ELF $(BUILD_DIR)/ECHO.ELF $(BUILD_DIR)/HEAD.ELF $(BUILD_DIR)/TAIL.ELF $(BUILD_DIR)/WC.ELF $(BUILD_DIR)/TEST_MMAP.ELF $(BUILD_DIR)/TESTSTACK.ELF $(BUILD_DIR)/PING.ELF $(BUILD_DIR)/TESTDNS.ELF $(BUILD_DIR)/NC.ELF $(BUILD_DIR)/TCPSERVER.ELF
+$(DISK_IMG): $(KERNEL_ELF) $(BUILD_DIR)/SHELL.ELF $(BUILD_DIR)/IDLE.ELF $(BUILD_DIR)/TEST.ELF $(BUILD_DIR)/TESTKILL.ELF $(BUILD_DIR)/SLEEPER.ELF $(BUILD_DIR)/ARGTEST.ELF $(BUILD_DIR)/TESTWRITE.ELF $(BUILD_DIR)/TESTFAULT.ELF $(BUILD_DIR)/TESTENV.ELF $(BUILD_DIR)/COUNT.ELF $(BUILD_DIR)/CAT.ELF $(BUILD_DIR)/ECHO.ELF $(BUILD_DIR)/HEAD.ELF $(BUILD_DIR)/TAIL.ELF $(BUILD_DIR)/WC.ELF $(BUILD_DIR)/TEST_MMAP.ELF $(BUILD_DIR)/TESTSTACK.ELF $(BUILD_DIR)/PING.ELF $(BUILD_DIR)/TESTDNS.ELF $(BUILD_DIR)/NC.ELF $(BUILD_DIR)/TCPSERVER.ELF $(BUILD_DIR)/TESTGFX.ELF
 	@echo "正在创建 FAT32 硬盘镜像 (需要 sudo 权限)..."
 	dd if=/dev/zero of=$(DISK_IMG) bs=1M count=64 status=none
 	(echo o; echo n; echo p; echo 1; echo 2048; echo; echo t; echo c; echo a; echo 1; echo w) | fdisk $(DISK_IMG) > /dev/null 2>&1
@@ -154,7 +155,7 @@ $(DISK_IMG): $(KERNEL_ELF) $(BUILD_DIR)/SHELL.ELF $(BUILD_DIR)/IDLE.ELF $(BUILD_
 	sudo mount /dev/loop23 /mnt/build; \
 	sudo mkdir -p /mnt/build/boot/grub; \
 	sudo cp $(KERNEL_ELF) /mnt/build/boot/; \
-	sudo cp tools/unifont-17.0.03.hex /mnt/build/UNICODE.HEX; \
+	sudo cp tools/unifont.hex /mnt/build/UNICODE.HEX; \
 
 
 	sudo cp $(BUILD_DIR)/IDLE.ELF /mnt/build/IDLE; \
@@ -178,6 +179,7 @@ $(DISK_IMG): $(KERNEL_ELF) $(BUILD_DIR)/SHELL.ELF $(BUILD_DIR)/IDLE.ELF $(BUILD_
 	sudo cp $(BUILD_DIR)/TESTDNS.ELF /mnt/build/TESTDNS; \
 	sudo cp $(BUILD_DIR)/NC.ELF /mnt/build/NC; \
 	sudo cp $(BUILD_DIR)/TCPSERVER.ELF /mnt/build/TCPSERVER; \
+	sudo cp $(BUILD_DIR)/TESTGFX.ELF /mnt/build/TESTGFX; \
 	
 
 	sudo cp $(SRC_DIR)/kernel/kmain.c /mnt/build/kmain.c; \
@@ -450,6 +452,21 @@ $(BUILD_DIR)/tcpserver.o: user/tcpserver.c
 
 $(BUILD_DIR)/TCPSERVER.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/tcpserver.o $(LIBC_OBJS) user/linker.ld
 	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/tcpserver.o $(LIBC_OBJS)
+
+
+$(BUILD_DIR)/test_gfx.o: user/test_gfx.c
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/TESTGFX.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/test_gfx.o $(LIBC_OBJS) user/linker.ld
+	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/test_gfx.o $(LIBC_OBJS)
+
+
+
+
+
+
+
+
 
 # 声明伪目标
 .PHONY: all run run-disk debug debug-disk clean gdb pack run-net run-tcp

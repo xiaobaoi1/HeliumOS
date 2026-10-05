@@ -36,6 +36,7 @@
 #include <kmap.h>
 #include <fb.h>
 #include <font.h>
+#include <mouse.h>
 
 
 static const char *shell_env[] = {
@@ -206,6 +207,7 @@ void kmain(uint32_t magic, uint32_t addr) {
 
     font_init(sys_vol);
     tty_try_upgrade();
+    mouse_init();
 
     create_idle_task(sys_vol);
     create_shell_task(sys_vol);
