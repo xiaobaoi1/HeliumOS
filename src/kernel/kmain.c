@@ -35,6 +35,7 @@
 #include <tcp.h>
 #include <kmap.h>
 #include <fb.h>
+#include <font.h>
 
 
 static const char *shell_env[] = {
@@ -202,6 +203,8 @@ void kmain(uint32_t magic, uint32_t addr) {
     if (!sys_vol) {
         panic("no FAT32 volume found");
     }
+
+    font_init(sys_vol);
 
     create_idle_task(sys_vol);
     create_shell_task(sys_vol);
