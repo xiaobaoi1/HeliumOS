@@ -1,6 +1,7 @@
 #include "syscall.h"
 #include <sys/socket.h>
 #include <arpa/inet.h>
+#include <netdb.h>
 #include "stdio.h"
 #include "string.h"
 
@@ -9,19 +10,33 @@
 static unsigned short csum16(const void *data, int len) {
     const unsigned char *p = data;
     unsigned int sum = 0;
-    for (int i = 0; i + 1 < len; i += 2) {
+    for (int i = 0; i + 1 < len; i += 2)
         sum += ((unsigned int)p[i] << 8) | p[i + 1];
-    }
     if (len & 1) sum += (unsigned int)p[len - 1] << 8;
     while (sum >> 16) sum = (sum & 0xFFFF) + (sum >> 16);
     return (unsigned short)(~sum);
 }
 
-int main(int argc, char **argv) {
-    if (argc < 2) { printf("usage: ping <ip>\n"); return 1; }
+/* 输入可能是 IP 也可能是域名。返回网络序 IP；失败返回 0。 */
+static uint32_t resolve(const char *host) {
+    uint32_t ip = inet_addr(host);
+    if (ip != 0) return ip;
 
-    uint32_t dst_ip = inet_addr(argv[1]);
-    if (dst_ip == 0) { printf("ping: bad ip '%s'\n", argv[1]); return 1; }
+    struct hostent *h = gethostbyname(host);
+    if (!h || !h->h_addr_list || !h->h_addr_list[0]) return 0;
+    return *(uint32_t*)h->h_addr_list[0];
+}
+
+int main(int argc, char **argv) {
+    if (argc < 2) { printf("usage: ping <host>\n"); return 1; }
+
+    uint32_t dst_ip = resolve(argv[1]);
+    if (dst_ip == 0) {
+        printf("ping: cannot resolve '%s'\n", argv[1]);
+        return 1;
+    }
+
+    printf("PING %s (%s)\n", argv[1], inet_ntoa(dst_ip));
 
     int s = socket(AF_INET, SOCK_ICMP, 0);
     if (s < 0) { printf("ping: socket error %d\n", s); return 1; }
@@ -29,10 +44,7 @@ int main(int argc, char **argv) {
     struct sockaddr_in dst;
     memset(&dst, 0, sizeof(dst));
     dst.sin_family = AF_INET;
-    dst.sin_port = 0;
     dst.sin_addr = dst_ip;
-
-    printf("PING %s\n", argv[1]);
 
     for (unsigned short seq = 1; seq <= 4; seq++) {
         unsigned char pkt[64];

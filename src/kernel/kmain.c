@@ -32,6 +32,7 @@
 #include <net_proto.h>
 #include <io.h>
 #include <net_sock.h>
+#include <tcp.h>
 
 
 static const char *shell_env[] = {
@@ -148,6 +149,7 @@ void kmain(uint32_t magic, uint32_t addr) {
     rtl8139_init();
     net_proto_init();
     net_sock_init();
+    tcp_init();
 
     /* 遍历所有 ATA 设备的所有 MBR 主分区，尝试挂载 FAT32。
      * 第一个成功的是 SYS，其余按 A/B/C... 编号。 */

@@ -234,6 +234,7 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd,
         kprintf("[TASK] ERROR: Failed to allocate PCB.\n");
         return NULL;
     }
+    memset(task, 0, PAGE_SIZE);
 
     uint32_t kernel_stack = pmm_alloc_page();
     if (!kernel_stack) {

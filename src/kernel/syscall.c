@@ -969,6 +969,15 @@ void syscall_handler(struct registers *regs) {
         case SYS_SOCKCLOSE:
             ret = sys_sockclose((int)arg1);
             break;
+        case SYS_CONNECT:
+            ret = sys_connect((int)arg1, (const void*)arg2, arg3);
+            break;
+        case SYS_LISTEN:
+            ret = sys_listen((int)arg1, (int)arg2);
+            break;
+        case SYS_ACCEPT:
+            ret = sys_accept((int)arg1, (void*)arg2, (uint32_t*)arg3);
+            break;
 
         default:
             kprintf("[SYSCALL] Unknown syscall %d\n", syscall_no);

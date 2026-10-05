@@ -6,6 +6,17 @@
 #include <printf.h>
 #include <string.h>
 #include <uaccess.h>
+#include <tcp.h>
+#include <scheduler.h>   /* block_current / schedule */
+
+/* 内核态毫秒睡眠。等价于 sys_sleep 的内部逻辑。 */
+static void ksleep(uint32_t ms) {
+    struct task *cur = get_current_task();
+    if (!cur || ms == 0) return;
+    cur->sleep_ticks = ms;
+    block_current(TASK_STATE_SLEEPING);
+    schedule();
+}
 
 static struct udp_socket g_pool[UDP_MAX_SOCKETS];
 
@@ -57,17 +68,12 @@ static int sock_handle_alloc(struct task *t, struct udp_socket *s) {
             t->sock_handles[i].used = 1;
             t->sock_handles[i].type = SOCK_DGRAM;
             t->sock_handles[i].sock = s;
+            t->sock_handles[i].tcp = NULL;
             s->refcount++;
             return i;
         }
     }
     return -1;
-}
-
-static struct udp_socket *sock_handle_deref(struct task *t, int h) {
-    if (!t || h < 0 || h >= SOCK_MAX_HANDLES) return NULL;
-    if (!t->sock_handles[h].used) return NULL;
-    return t->sock_handles[h].sock;
 }
 
 void net_sock_release_all(struct task *t) {
@@ -121,7 +127,8 @@ static int copy_sockaddr_in_to_user(void *addr_user, uint32_t *addrlen_user,
 int sys_socket(int domain, int type, int proto) {
     (void)proto;
     if (domain != AF_INET) return EINVAL;
-    if (type != SOCK_DGRAM && type != SOCK_ICMP) return EINVAL;
+    if (type != SOCK_DGRAM && type != SOCK_ICMP && type != SOCK_STREAM)
+        return EINVAL;
 
     struct task *cur = get_current_task();
     if (!cur) return EINVAL;
@@ -134,7 +141,7 @@ int sys_socket(int domain, int type, int proto) {
         udp_socket_free(s);
         return ENOSPC;
     }
-    cur->sock_handles[h].type = type;   /* 覆盖 sock_handle_alloc 里的默认 */
+    cur->sock_handles[h].type = type;
     return h;
 }
 
@@ -143,7 +150,8 @@ int sys_bind(int h, const void *addr_user, uint32_t addrlen) {
     if (!cur) return EINVAL;
     if (h < 0 || h >= SOCK_MAX_HANDLES) return EINVAL;
     if (!cur->sock_handles[h].used) return EINVAL;
-    if (cur->sock_handles[h].type != SOCK_DGRAM) return EINVAL;
+    if (cur->sock_handles[h].type != SOCK_DGRAM &&
+    cur->sock_handles[h].type != SOCK_STREAM) return EINVAL;
 
     struct sockaddr_in addr;
     int r = copy_sockaddr_in_from_user(&addr, addr_user, addrlen);
@@ -167,6 +175,20 @@ int sys_sendto(int h, const void *buf_user, uint32_t len,
     if (h < 0 || h >= SOCK_MAX_HANDLES) return EINVAL;
     if (!cur->sock_handles[h].used) return EINVAL;
     if (len > UDP_PAYLOAD_MAX) return EINVAL;
+
+    if (cur->sock_handles[h].type == SOCK_STREAM) {
+        struct tcp_socket *tcp = cur->sock_handles[h].tcp;
+        if (!tcp || tcp->state != TCP_ESTABLISHED) return EINVAL;
+        if (len > UDP_PAYLOAD_MAX) return EINVAL;
+
+        uint8_t tmp[UDP_PAYLOAD_MAX];
+        if (len > 0) {
+            if (!buf_user) return EINVAL;
+            if (check_user_range((uint32_t)buf_user, len) < 0) return EFAULT;
+            if (copy_from_user(tmp, (uint32_t)buf_user, len) < 0) return EFAULT;
+        }
+        return tcp_send(tcp, tmp, len);
+    }
 
     struct sockaddr_in dst;
     int r = copy_sockaddr_in_from_user(&dst, dst_user, addrlen);
@@ -198,6 +220,22 @@ int sys_recvfrom(int h, void *buf_user, uint32_t max,
     if (!cur) return EINVAL;
     if (h < 0 || h >= SOCK_MAX_HANDLES) return EINVAL;
     if (!cur->sock_handles[h].used) return EINVAL;
+
+    if (cur->sock_handles[h].type == SOCK_STREAM) {
+        struct tcp_socket *tcp = cur->sock_handles[h].tcp;
+        if (!tcp || tcp->state != TCP_ESTABLISHED) return EINVAL;
+        if (max == 0) return 0;
+
+        uint32_t range = max > UDP_PAYLOAD_MAX ? UDP_PAYLOAD_MAX : max;
+        if (!buf_user) return EINVAL;
+        if (check_user_range((uint32_t)buf_user, range) < 0) return EFAULT;
+
+        uint8_t tmp[UDP_PAYLOAD_MAX];
+        int ret = tcp_recv(tcp, tmp, range);
+        if (ret <= 0) return ret;
+        if (copy_to_user((uint32_t)buf_user, tmp, ret) < 0) return EFAULT;
+        return ret;
+    }
 
     struct udp_socket *s = cur->sock_handles[h].sock;
     if (!s) return EINVAL;
@@ -247,13 +285,19 @@ int sys_sockclose(int h) {
     if (h < 0 || h >= SOCK_MAX_HANDLES) return EINVAL;
     if (!cur->sock_handles[h].used) return EINVAL;
 
-    struct udp_socket *s = cur->sock_handles[h].sock;
+    struct udp_socket *s   = cur->sock_handles[h].sock;
+    struct tcp_socket *tcp = cur->sock_handles[h].tcp;
+
     cur->sock_handles[h].used = 0;
     cur->sock_handles[h].sock = NULL;
+    cur->sock_handles[h].tcp  = NULL;
 
     if (s) {
         if (s->refcount > 0) s->refcount--;
         if (s->refcount == 0) udp_socket_free(s);
+    }
+    if (tcp) {
+        tcp_close(tcp);   /* 触发 FIN；不在 CLOSED 前释放 */
     }
     return OK;
 }
@@ -330,4 +374,111 @@ void net_icmp_deliver(uint32_t src_ip, const uint8_t *p, uint32_t len) {
     s->rx_queue[s->rx_tail] = pkt;
     s->rx_tail = (s->rx_tail + 1) % UDP_RX_QUEUE_LEN;
     s->rx_count++;
+}
+
+/* ---------- TCP 存根（C.2 实现） ---------- */
+
+int sys_connect(int h, const void *addr_user, uint32_t addrlen) {
+    struct task *cur = get_current_task();
+    if (!cur) return EINVAL;
+    if (h < 0 || h >= SOCK_MAX_HANDLES) return EINVAL;
+    if (!cur->sock_handles[h].used) return EINVAL;
+    if (cur->sock_handles[h].type != SOCK_STREAM) return EINVAL;
+
+    struct sockaddr_in dst;
+    int r = copy_sockaddr_in_from_user(&dst, addr_user, addrlen);
+    if (r != OK) return r;
+
+    struct tcp_socket *tcp = cur->sock_handles[h].tcp;
+    if (!tcp) {
+        tcp = tcp_alloc();
+        if (!tcp) return ENOSPC;
+
+        struct udp_socket *s = cur->sock_handles[h].sock;
+        if (!s || s->local_port == 0) {
+            tcp_free(tcp);
+            return EINVAL;   /* 必须先 bind */
+        }
+        tcp->local_port = s->local_port;
+        cur->sock_handles[h].tcp = tcp;
+    }
+
+    if (tcp_connect(tcp, dst.sin_addr, dst.sin_port) < 0)
+        return EINVAL;
+
+    /* 轮询最多 3 秒 */
+    for (int i = 0; i < 300; i++) {
+        if (tcp->state == TCP_ESTABLISHED) return OK;
+        if (tcp->state == TCP_CLOSED) return ECONNREFUSED;
+        ksleep(10);
+    }
+    return ETIMEDOUT;
+}
+
+int sys_listen(int h, int backlog) {
+    struct task *cur = get_current_task();
+    if (!cur) return EINVAL;
+    if (h < 0 || h >= SOCK_MAX_HANDLES) return EINVAL;
+    if (!cur->sock_handles[h].used) return EINVAL;
+    if (cur->sock_handles[h].type != SOCK_STREAM) return EINVAL;
+    (void)backlog;
+
+    struct tcp_socket *tcp = tcp_alloc();
+    if (!tcp) return ENOSPC;
+
+    /* 沿用 socket 创建时占用的端口（bind 填的） */
+    struct udp_socket *s = cur->sock_handles[h].sock;
+    if (!s || s->local_port == 0) {
+        tcp_free(tcp);
+        return EINVAL;
+    }
+
+    if (tcp_listen(tcp, s->local_port) < 0) {
+        tcp_free(tcp);
+        return EINVAL;
+    }
+
+    cur->sock_handles[h].tcp = tcp;
+    return OK;
+}
+
+int sys_accept(int h, void *addr_user, uint32_t *addrlen_user) {
+    struct task *cur = get_current_task();
+    if (!cur) return EINVAL;
+    if (h < 0 || h >= SOCK_MAX_HANDLES) return EINVAL;
+    if (!cur->sock_handles[h].used) return EINVAL;
+    if (cur->sock_handles[h].type != SOCK_STREAM) return EINVAL;
+
+    struct tcp_socket *listen = cur->sock_handles[h].tcp;
+    if (!listen || listen->state != TCP_LISTEN) return EINVAL;
+
+    struct tcp_socket *conn = tcp_accept(listen);
+    if (!conn) return EAGAIN;
+
+    /* 分配新的 sock_handle 给这个连接 */
+    int new_h = -1;
+    for (int i = 0; i < SOCK_MAX_HANDLES; i++) {
+        if (!cur->sock_handles[i].used) {
+            cur->sock_handles[i].used = 1;
+            cur->sock_handles[i].type = SOCK_STREAM;
+            cur->sock_handles[i].sock = NULL;
+            cur->sock_handles[i].tcp  = conn;
+            new_h = i;
+            break;
+        }
+    }
+    if (new_h < 0) return ENOSPC;
+
+    /* 填对端地址 */
+    if (addr_user) {
+        struct sockaddr_in src;
+        memset(&src, 0, sizeof(src));
+        src.sin_family = AF_INET;
+        src.sin_port = conn->remote_port;
+        src.sin_addr = conn->remote_ip;
+        int r = copy_sockaddr_in_to_user(addr_user, addrlen_user, &src);
+        if (r != OK) { /* 忽略错误，返回 handle */ }
+    }
+
+    return new_h;
 }

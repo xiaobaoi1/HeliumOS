@@ -5,6 +5,7 @@
 #include <string.h>
 #include <stddef.h>
 #include <net_sock.h>
+#include <tcp.h>
 
 /* ---------- 本地状态 ---------- */
 
@@ -196,6 +197,8 @@ void net_ip_rx(const uint8_t *p, uint32_t len, const uint8_t *src_mac) {
             memcpy(&dp, payload + 2, 2);
             net_udp_rx(src_ip, sp, dp, payload + 8, payload_len - 8);
         }
+    } else if (proto == IP_PROTO_TCP) {
+        tcp_input(src_ip, dst_ip, payload, payload_len);
     }
     /* UDP 在 B4b */
 }
@@ -205,6 +208,33 @@ void net_ip_rx(const uint8_t *p, uint32_t len, const uint8_t *src_mac) {
 int net_ip_send(uint32_t dst_ip_be, uint8_t proto,
                 const uint8_t *payload, uint32_t len) {
     if (len > 1480) return -1;
+
+        /* Loopback：目标是自己，直接走接收路径 */
+    if (dst_ip_be == g_ip) {
+        uint8_t *pkt = (uint8_t*)kmalloc(20 + len);
+        if (!pkt) return -1;
+
+        memset(pkt, 0, 20);
+        pkt[0] = 0x45;
+        uint16_t tot = (uint16_t)(20 + len);
+        pkt[2] = (tot >> 8) & 0xFF;
+        pkt[3] = tot & 0xFF;
+        pkt[8] = 64;
+        pkt[9] = proto;
+        memcpy(pkt + 12, &g_ip, 4);
+        memcpy(pkt + 16, &dst_ip_be, 4);
+
+        uint16_t csum = ip_checksum(pkt, 20);
+        pkt[10] = (csum >> 8) & 0xFF;
+        pkt[11] = csum & 0xFF;
+
+        memcpy(pkt + 20, payload, len);
+
+        /* 直接交给接收路径。src_mac 用本机 MAC。 */
+        net_ip_rx(pkt, 20 + len, g_mac);
+        kfree(pkt);
+        return (int)len;
+    }
 
     /* 路由：同网段直连，否则走网关 */
     uint32_t next_hop = dst_ip_be;

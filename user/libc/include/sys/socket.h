@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include "syscall.h"
 
+
+#define SOCK_STREAM 1
 #define AF_INET     2
 #define SOCK_DGRAM  2
 #define SOCK_ICMP   3
@@ -43,6 +45,19 @@ static inline int recvfrom(int h, void *buf, unsigned int len,
 
 static inline int sockclose(int h) {
     return __syscall(SYS_SOCKCLOSE, h, 0, 0);
+}
+
+static inline int connect(int h, const struct sockaddr *addr,
+                          unsigned int addrlen) {
+    return __syscall(SYS_CONNECT, h, (int)addr, (int)addrlen);
+}
+
+static inline int listen(int h, int backlog) {
+    return __syscall(SYS_LISTEN, h, backlog, 0);
+}
+
+static inline int accept(int h, struct sockaddr *addr, unsigned int *addrlen) {
+    return __syscall(SYS_ACCEPT, h, (int)addr, (int)addrlen);
 }
 
 #endif

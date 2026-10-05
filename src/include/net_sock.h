@@ -3,10 +3,13 @@
 
 #include <stdint.h>
 
-struct task;   /* 前向声明 */
+/* 前向声明 */
+struct task;   
+struct tcp_socket;
 
 /* ---------- 每进程句柄 ---------- */
 #define SOCK_MAX_HANDLES 8
+#define SOCK_STREAM 1
 
 /* ---------- 全局 UDP socket 池 ---------- */
 #define UDP_MAX_SOCKETS   16
@@ -17,6 +20,7 @@ struct task;   /* 前向声明 */
 #define AF_INET     2
 #define SOCK_DGRAM  2
 #define SOCK_ICMP   3
+
 
 /* ---------- 结构 ---------- */
 
@@ -44,6 +48,7 @@ struct sock_handle {
     uint8_t  type;    /* SOCK_DGRAM */
     uint16_t reserved;
     struct udp_socket *sock;
+    struct tcp_socket *tcp;
 };
 
 /* ---------- 内核镜像：sockaddr_in ---------- */
@@ -77,5 +82,8 @@ int sys_sendto(int h, const void *buf_user, uint32_t len,
 int sys_recvfrom(int h, void *buf_user, uint32_t max,
                  void *src_user, uint32_t *addrlen_user);
 int sys_sockclose(int h);
+int sys_connect(int h, const void *addr_user, uint32_t addrlen);
+int sys_listen(int h, int backlog);
+int sys_accept(int h, void *addr_user, uint32_t *addrlen_user);
 
 #endif

@@ -81,6 +81,9 @@
 #define SYS_SENDTO      102
 #define SYS_RECVFROM    103
 #define SYS_SOCKCLOSE   104
+#define SYS_CONNECT     105
+#define SYS_LISTEN      106
+#define SYS_ACCEPT      107
 
 
 

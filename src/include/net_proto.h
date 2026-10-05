@@ -28,6 +28,7 @@ static inline uint32_t ntohl(uint32_t x) { return htonl(x); }
 
 /* ---------- IP 协议号 ---------- */
 #define IP_PROTO_ICMP 1
+#define IP_PROTO_TCP  6
 #define IP_PROTO_UDP  17
 
 /* ---------- 本地状态 ---------- */

@@ -84,6 +84,9 @@
 #define SYS_SENDTO      102
 #define SYS_RECVFROM    103
 #define SYS_SOCKCLOSE   104
+#define SYS_CONNECT     105
+#define SYS_LISTEN      106
+#define SYS_ACCEPT      107
 
 /* 系统调用处理函数声明 */
 void syscall_handler(struct registers *regs);
