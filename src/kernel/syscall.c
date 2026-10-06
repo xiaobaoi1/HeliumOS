@@ -24,6 +24,8 @@
 #include <net_sock.h>
 #include <fb.h>
 #include <display.h>
+#include <input.h>
+#include <pty.h>
 
 #define PROT_READ   0x01
 #define PROT_WRITE  0x02
@@ -49,8 +51,12 @@ struct spawn_params {
     int32_t  in_pipe;
     int32_t  out_pipe;
     int32_t  err_pipe;
+    int32_t  in_pty;
+    int32_t  out_pty;
+    int32_t  err_pty;
     uint32_t flags;
     uint32_t envp;
+    uint32_t out_pid;
 };
 
 #define SPAWN_FD_INHERIT   (-1)   /* 不重定向 */
@@ -81,6 +87,18 @@ static int sys_write(int fd, const char *buf, uint32_t count) {
             if (!cur->ipc_handles[h].used) return EINVAL;
             return pipe_write(cur->ipc_handles[h].pipe,
                               (const uint8_t*)buf, count);
+        }
+        case IO_SLOT_PTY_MASTER: {
+            int h = slot->fd;
+            if (h < 0 || h >= PTY_MAX_HANDLES) return EINVAL;
+            if (!cur->pty_handles[h].used) return EINVAL;
+            return sys_pty_write(h, buf, count);
+        }
+        case IO_SLOT_PTY_SLAVE: {
+            int h = slot->fd;
+            if (h < 0 || h >= PTY_MAX_HANDLES) return EINVAL;
+            if (!cur->pty_handles[h].used) return EINVAL;
+            return sys_pty_write(h, buf, count);
         }
         case IO_SLOT_NULL:
             return (int)count;
@@ -114,6 +132,18 @@ static int sys_read(int fd, char *buf, uint32_t count) {
             if (!cur->ipc_handles[h].used) return EINVAL;
             return pipe_read(cur->ipc_handles[h].pipe,
                              (uint8_t*)buf, count);
+        }
+        case IO_SLOT_PTY_MASTER: {
+            int h = cur->stdin_slot.fd;
+            if (h < 0 || h >= PTY_MAX_HANDLES) return EINVAL;
+            if (!cur->pty_handles[h].used) return EINVAL;
+            return sys_pty_read(h, buf, count);
+        }
+        case IO_SLOT_PTY_SLAVE: {
+            int h = cur->stdin_slot.fd;
+            if (h < 0 || h >= PTY_MAX_HANDLES) return EINVAL;
+            if (!cur->pty_handles[h].used) return EINVAL;
+            return sys_pty_read(h, buf, count);
         }
 
 
@@ -420,6 +450,9 @@ static int sys_spawn(const char *path, char *const argv[], void *params_user) {
     int redir_in_pipe = -1;
     int redir_out_pipe = -1;
     int redir_err_pipe = -1;
+    int redir_in_pty = -1;
+    int redir_out_pty = -1;
+    int redir_err_pty = -1;
     uint32_t envp_user = 0;
 
     if (params_user) {
@@ -439,6 +472,9 @@ static int sys_spawn(const char *path, char *const argv[], void *params_user) {
         redir_in_pipe  = p.in_pipe;
         redir_out_pipe = p.out_pipe;
         redir_err_pipe = p.err_pipe;
+        redir_in_pty  = p.in_pty;
+        redir_out_pty = p.out_pty;
+        redir_err_pty = p.err_pty;
         envp_user = p.envp;
     }
 
@@ -515,7 +551,8 @@ static int sys_spawn(const char *path, char *const argv[], void *params_user) {
     struct task *child = task_create(entry, pgd_child, argc, k_argv,
                                      envc, k_envp,
                                      redir_in, redir_out, redir_err,
-                                     redir_in_pipe, redir_out_pipe, redir_err_pipe);
+                                     redir_in_pipe, redir_out_pipe, redir_err_pipe,
+                                     redir_in_pty, redir_out_pty, redir_err_pty);
     if (!child) {
         vmm_free_process_address_space(pgd_child);
         ret = ENOMEM;
@@ -529,6 +566,16 @@ static int sys_spawn(const char *path, char *const argv[], void *params_user) {
         proc_unref(child);
         ret = ENOMEM;
         goto cleanup;
+    }
+
+    /* HeliumOS 特殊性：spawn 返回 handle 而非 pid。
+     * 通过 spawn_params.out_pid 回传 pid——term / shell 需要它来设置 pty 前台。 */
+    if (params_user) {
+        struct spawn_params p_out;
+        if (copy_from_user(&p_out, (uint32_t)params_user, sizeof(p_out)) == 0) {
+            p_out.out_pid = child->pid;
+            copy_to_user((uint32_t)params_user, &p_out, sizeof(p_out));
+        }
     }
 
     for (int i = 0; i < argc; i++) kfree(k_argv[i]);
@@ -729,6 +776,81 @@ static int sys_gfx_blit(uint32_t x, uint32_t y,
 
     display_dirty((int)x, (int)y, (int)(x + w), (int)(y + h));
     display_flush();
+    return OK;
+}
+
+
+static int sys_input_poll(struct input_event *user_buf) {
+    struct task *cur = get_current_task();
+    if (!cur) return EINVAL;
+    if (!user_buf) return EINVAL;
+    if (check_user_range((uint32_t)user_buf, sizeof(struct input_event)) < 0)
+        return EFAULT;
+
+    struct input_event ev;
+    if (input_poll(&ev) < 0) return EAGAIN;
+
+    if (copy_to_user((uint32_t)user_buf, &ev, sizeof(ev)) < 0)
+        return EFAULT;
+    return OK;
+}
+
+static int sys_input_claim(void) {
+    struct task *cur = get_current_task();
+    if (!cur) return EINVAL;
+
+    uint32_t owner = input_keyboard_owner();
+    if (owner != 0 && owner != cur->pid) return EBUSY;
+    input_claim_keyboard(cur->pid);
+    return OK;
+}
+
+#define FB_USER_BASE  0xB0000000u
+
+static int sys_fb_map(struct fb_user_info *user_buf) {
+    struct task *cur = get_current_task();
+    if (!cur || !cur->pgd) return EINVAL;
+    if (!user_buf) return EINVAL;
+    if (check_user_range((uint32_t)user_buf, sizeof(struct fb_user_info)) < 0)
+        return EFAULT;
+
+    struct fb_info *fb = fb_get();
+    if (!fb || !fb->valid) return ENOSYS;
+
+    uint32_t fb_phys = (uint32_t)fb->phys;
+    uint32_t fb_size = fb->pitch * fb->height;
+    uint32_t pages   = (fb_size + 0xFFF) / 0x1000;
+
+    for (uint32_t i = 0; i < pages; i++) {
+        uint32_t vaddr = FB_USER_BASE + i * 0x1000;
+        uint32_t paddr = (fb_phys & ~0xFFF) + i * 0x1000;
+
+        if (!vmm_get_phys(cur->pgd, vaddr)) {
+            vmm_map_user_page(cur->pgd, vaddr, paddr,
+                              PTE_WRITE | PTE_USER);
+        }
+    }
+
+    struct fb_user_info info = {
+        .width  = fb->width,
+        .height = fb->height,
+        .pitch  = fb->pitch,
+        .bpp    = fb->bpp,
+        .addr   = FB_USER_BASE,
+    };
+    if (copy_to_user((uint32_t)user_buf, &info, sizeof(info)) < 0)
+        return EFAULT;
+    return OK;
+}
+
+static int sys_fb_claim(void) {
+    struct task *cur = get_current_task();
+    if (!cur) return EINVAL;
+
+    uint32_t owner = display_get_owner();
+    if (owner != 0 && owner != cur->pid) return EBUSY;
+    display_set_owner(cur->pid);
+    kprintf("[FB] claimed by pid=%u\n", cur->pid);
     return OK;
 }
 
@@ -1085,6 +1207,40 @@ void syscall_handler(struct registers *regs) {
         case SYS_GFX_BLIT:
             ret = sys_gfx_blit(arg1, arg2, arg3, arg4, (void*)arg5);
             break;
+
+        case SYS_INPUT_POLL:
+            ret = sys_input_poll((struct input_event*)arg1);
+            break;
+        case SYS_INPUT_CLAIM:
+            ret = sys_input_claim();
+            break;
+        case SYS_FB_MAP:
+            ret = sys_fb_map((struct fb_user_info*)arg1);
+            break;
+        case SYS_FB_CLAIM:
+            ret = sys_fb_claim();
+            break;
+
+
+
+        
+        case SYS_PTY_OPEN:
+            ret = sys_pty_open((int*)arg1);
+            break;
+        case SYS_PTY_READ:
+            ret = sys_pty_read((int)arg1, (void*)arg2, arg3);
+            break;
+        case SYS_PTY_WRITE:
+            ret = sys_pty_write((int)arg1, (const void*)arg2, arg3);
+            break;
+        case SYS_PTY_CLOSE:
+            ret = sys_pty_close((int)arg1);
+            break;
+        case SYS_PTY_SET_FG:
+            ret = sys_pty_set_fg((int)arg1, (uint32_t)arg2);
+            break;
+
+
 
 
 

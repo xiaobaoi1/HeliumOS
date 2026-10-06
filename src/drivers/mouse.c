@@ -6,6 +6,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <stddef.h>
+#include <input.h>
 
 #define PS2_DATA    0x60
 #define PS2_STATUS  0x64
@@ -128,9 +129,27 @@ void mouse_handle_irq(void) {
         if (g_mouse.y >= (int)fb->height) g_mouse.y = fb->height - 1;
     }
 
+    uint8_t prev_buttons = g_mouse.buttons;
+
     g_mouse.buttons = flags & 0x07;
     g_mouse.irq_count++;
 
-    extern void display_flush(void);
-    display_flush();
+        struct input_event ev_move = {
+        .type = INPUT_MOUSE_MOVE,
+        .code = 0,
+        .x = g_mouse.x,
+        .y = g_mouse.y,
+    };
+    input_post(&ev_move);
+
+    /* 按钮变化时也投递 */
+    if (g_mouse.buttons != prev_buttons) {
+        struct input_event ev_btn = {
+            .type = INPUT_MOUSE_BTN,
+            .code = g_mouse.buttons,
+            .x = g_mouse.x,
+            .y = g_mouse.y,
+        };
+        input_post(&ev_btn);
+    }
 }

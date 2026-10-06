@@ -75,6 +75,19 @@ void fb_init(uint32_t mb_addr) {
                 return;
             }
             for (uint32_t i = 0; i < px; i++) g_fb.back[i] = 0x000000;
+            
+            uint32_t screen_phys = pmm_alloc_pages(back_pages);
+            if (!screen_phys) {
+                kprintf("[FB] cannot alloc screen buffer\n");
+                return;
+            }
+            g_fb.screen = (uint32_t*)kmap(screen_phys, back_bytes);
+            if (!g_fb.screen) {
+                kprintf("[FB] cannot kmap screen buffer\n");
+                return;
+            }
+            for (uint32_t i = 0; i < px; i++) g_fb.screen[i] = 0x000000;
+
 
             kprintf("[FB] mapped to %p\n", virt);
             return;

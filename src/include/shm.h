@@ -30,4 +30,7 @@ void shm_unref(struct shm *s);
 int sys_shm_open(const char *name_user, uint32_t size_bytes, int flags);
 int sys_shm_unlink(const char *name_user);
 
+/* 内核态创建 shm（不经过 syscall 参数检查） */
+struct shm *shm_create_kernel(const char *name, uint32_t num_pages);
+
 #endif

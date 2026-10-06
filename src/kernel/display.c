@@ -12,6 +12,21 @@ static int buf_rows = 0;
 static int cur_x = -1;
 static int cur_y = -1;
 
+static uint32_t g_fb_owner = 0;
+
+void display_set_owner(uint32_t pid) {
+    uint32_t old = g_fb_owner;
+    g_fb_owner = pid;
+
+    /* 用户 WM 退出——内核恢复渲染，整屏重绘。
+     * 此时 g_fb_owner 已清 0，display_flush 会真正执行。 */
+    if (old != 0 && pid == 0) {
+        display_dirty(0, 0, 10000, 10000);
+        display_flush();
+    }
+}
+uint32_t display_get_owner(void) { return g_fb_owner; }
+
 void display_register(const struct display_ops *ops) {
     if (!ops) return;
     g_display = ops;
@@ -216,7 +231,7 @@ static void mouse_draw(int mx, int my) {
                 continue;
             }
             uint32_t off = (py * fb->pitch + px * 4) / 4;
-            mouse_save[y * MOUSE_W + x] = fb->back[off];
+            mouse_save[y * MOUSE_W + x] = fb->screen[off];
         }
     }
 
@@ -241,13 +256,13 @@ static void mouse_draw(int mx, int my) {
 /* ---------- flush ---------- */
 
 void display_flush(void) {
+    if (g_fb_owner != 0) return;
     struct fb_info *fb = fb_get();
     if (!fb || !fb->valid) return;
-    /* 关中断——避免鼠标 IRQ 打断。IRQ 上下文里本来就是 IF=0，无副作用。 */
+
     uint32_t flags;
     __asm__ volatile("pushf; pop %0; cli" : "=r"(flags));
 
-    /* 永远先恢复鼠标旧位置——即使没 dirty */
     mouse_restore();
 
     int has_dirty = (dirty_x1 > dirty_x0);
@@ -260,8 +275,16 @@ void display_flush(void) {
         if (y1 > (int)fb->height) y1 = (int)fb->height;
 
         if (x1 > x0 && y1 > y0) {
+            /* 1. back(tty) 脏区 -> screen */
             for (int y = y0; y < y1; y++) {
                 uint32_t *src = fb->back + (y * fb->pitch) / 4 + x0;
+                uint32_t *dst = fb->screen + (y * fb->pitch) / 4 + x0;
+                memcpy(dst, src, (x1 - x0) * 4);
+            }
+
+            /* 3. screen 脏区 -> virt */
+            for (int y = y0; y < y1; y++) {
+                uint32_t *src = fb->screen + (y * fb->pitch) / 4 + x0;
                 uint32_t *dst = fb->virt + (y * fb->pitch) / 4 + x0;
                 memcpy(dst, src, (x1 - x0) * 4);
             }
@@ -270,9 +293,7 @@ void display_flush(void) {
     }
 
     struct mouse_state *m = mouse_get();
-    if (m) {
-        mouse_draw(m->x, m->y);
-    }
+    if (m) mouse_draw(m->x, m->y);
 
     __asm__ volatile("push %0; popf" :: "r"(flags));
 }

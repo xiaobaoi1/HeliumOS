@@ -5,6 +5,7 @@
 #include <device.h>
 #include <errno.h>
 #include <signal.h>
+#include <input.h>
 
 #define KEYBOARD_DATA_PORT   0x60
 #define KB_BUF_SIZE          128
@@ -33,10 +34,22 @@ static char scancode_to_ascii(uint8_t scancode) {
     // for test ESC
     if (scancode == 0x01) return 27;
 
-    /* Ctrl+C */
+        /* Ctrl+C */
     if (ctrl_pressed && scancode == 0x2E) {
-        extern void signal_foreground(int sig);
-        signal_foreground(SIGINT);
+        if (input_keyboard_claimed()) {
+            /* WM 模式：投递 ^C 字符，让 term 写 pty，由 pty 行规程处理 */
+            /* HeliumOS 特殊性：内核 tty 与 pty 并存期间的特殊过渡逻辑 */
+            struct input_event ev = {
+                .type = INPUT_KEY,
+                .code = 0x03,
+                .x = 0, .y = 0,
+            };
+            input_post(&ev);
+        } else {
+            /* 内核 tty 模式：直接发信号给 tty 前台 */
+            extern void signal_foreground(int sig);
+            signal_foreground(SIGINT);
+        }
         return 0;
     }
 
@@ -99,13 +112,23 @@ static char scancode_to_ascii(uint8_t scancode) {
 void keyboard_handle_irq(void) {
     uint8_t scancode = inb(KEYBOARD_DATA_PORT);
     char c = scancode_to_ascii(scancode);
-    if (c) {
+    if (!c) return;
+
+    /* 键盘被 claim 时，只投事件队列；否则两边都投 */
+    if (!input_keyboard_claimed()) {
         int next = (kb_head + 1) % KB_BUF_SIZE;
         if (next != kb_tail) {
             kb_buffer[kb_head] = c;
             kb_head = next;
         }
     }
+
+    struct input_event ev = {
+        .type = INPUT_KEY,
+        .code = (uint32_t)(unsigned char)c,
+        .x = 0, .y = 0,
+    };
+    input_post(&ev);
 }
 
 int keyboard_has_data(void) {

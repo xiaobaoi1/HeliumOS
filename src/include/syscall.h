@@ -94,6 +94,19 @@
 #define SYS_GFX_PUT_PIXEL   112
 #define SYS_GFX_BLIT        113
 
+/* ========== 输入 / 显示 (130~139) ========== */
+#define SYS_INPUT_POLL    130
+#define SYS_INPUT_CLAIM   131
+#define SYS_FB_MAP        132
+#define SYS_FB_CLAIM      133
+
+/* ========== pty (140~149) ========== */
+#define SYS_PTY_OPEN    140
+#define SYS_PTY_READ    141
+#define SYS_PTY_WRITE   142
+#define SYS_PTY_CLOSE   143
+#define SYS_PTY_SET_FG  144
+
 /* 系统调用处理函数声明 */
 void syscall_handler(struct registers *regs);
 

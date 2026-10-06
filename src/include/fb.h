@@ -13,6 +13,15 @@ struct fb_info {
     uint64_t  phys;
     uint32_t *virt;      /* framebuffer 内核虚拟地址 */
     uint32_t *back;      /* 后台缓冲（内核虚拟地址） */
+    uint32_t *screen;    /* 合成结果（tty + 窗口 + 鼠标） */
+};
+
+struct fb_user_info {
+    uint32_t width;
+    uint32_t height;
+    uint32_t pitch;
+    uint32_t bpp;
+    uint32_t addr;    /* 用户虚拟地址 */
 };
 
 /* 从 Multiboot2 info 解析 framebuffer tag。

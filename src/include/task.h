@@ -10,6 +10,7 @@
 #include <signal.h>
 #include <ipc.h>
 #include <net_sock.h>
+#include <pty.h>
 
 /* ---------- I/O slot（进程的标准流端点） ---------- */
 
@@ -18,6 +19,8 @@
 #define IO_SLOT_NULL      2   /* 丢弃 */
 #define IO_SLOT_PIPE_READ   3
 #define IO_SLOT_PIPE_WRITE  4
+#define IO_SLOT_PTY_MASTER  5
+#define IO_SLOT_PTY_SLAVE   6
 
 struct io_slot {
     uint8_t  type;
@@ -37,6 +40,7 @@ struct io_slot {
 #define TASK_STATE_SLEEPING      3   /* 睡眠中（sleep） */
 #define TASK_STATE_ZOMBIE        4   /* 已退出，等父进程回收 */
 #define TASK_STATE_WAITING_PIPE  5
+#define TASK_STATE_WAITING_PTY   6
 
 #define TIME_SLICE_TICKS 10
 
@@ -126,6 +130,7 @@ struct task {
 
     /* ---------- IPC ---------- */
     struct ipc_handle ipc_handles[IPC_MAX_HANDLES];
+    struct pty_handle pty_handles[PTY_MAX_HANDLES];
 
     struct sock_handle sock_handles[SOCK_MAX_HANDLES];
 };
@@ -143,7 +148,8 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd,
                          int argc, char *const argv[],
                          int envc, char *const envp[],
                          int redir_in_fd, int redir_out_fd, int redir_err_fd,
-                         int redir_in_pipe, int redir_out_pipe, int redir_err_pipe);
+                         int redir_in_pipe, int redir_out_pipe, int redir_err_pipe,
+                         int redir_in_pty, int redir_out_pty, int redir_err_pty);
 struct task *get_current_task(void);
 void set_current_task(struct task *task);
 void scheduler_start(void) __attribute__((noreturn));

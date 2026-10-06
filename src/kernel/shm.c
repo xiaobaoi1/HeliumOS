@@ -58,6 +58,10 @@ static struct shm *shm_create(const char *name, uint32_t num_pages) {
     return NULL;
 }
 
+struct shm *shm_create_kernel(const char *name, uint32_t num_pages) {
+    return shm_create(name, num_pages);
+}
+
 static void shm_destroy(struct shm *s) {
     if (!s) return;
     for (uint32_t i = 0; i < s->num_pages; i++) {

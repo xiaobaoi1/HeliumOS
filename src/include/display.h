@@ -44,4 +44,8 @@ void display_dirty(int x0, int y0, int x1, int y1);
  * 无脏区时只重画鼠标（鼠标可能移动了）。 */
 void display_flush(void);
 
+/* framebuffer 归属。非 0 时内核停止刷屏。 */
+void     display_set_owner(uint32_t pid);
+uint32_t display_get_owner(void);
+
 #endif

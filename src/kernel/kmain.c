@@ -37,6 +37,8 @@
 #include <fb.h>
 #include <font.h>
 #include <mouse.h>
+#include <input.h>
+#include <pty.h>
 
 
 static const char *shell_env[] = {
@@ -72,6 +74,7 @@ static struct task *create_task_from_elf(struct fat32_volume *vol,
                                     SPAWN_FD_INHERIT,
                                     SPAWN_FD_INHERIT,
                                     SPAWN_FD_INHERIT,
+                                    -1, -1, -1,
                                     -1, -1, -1);
 
     if (!task) {
@@ -125,6 +128,8 @@ void kmain(uint32_t magic, uint32_t addr) {
     screen_init();
     tty_init();
     ipc_init();
+    input_init();
+    pty_init();
 
     kprintf("========================================\n");
     kprintf(" HeliumOS Kernel Started (1GB/3GB)\n");

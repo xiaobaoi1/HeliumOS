@@ -9,6 +9,8 @@
 #include <tty.h>
 #include <vma.h>
 #include <net_sock.h>
+#include <input.h>
+#include <display.h>
 
 extern void enter_user_mode(void);
 
@@ -156,8 +158,25 @@ static void setup_slot(struct io_slot *child_slot,
                        struct task *child,
                        struct task *parent,
                        int redir_fd,
-                       int redir_pipe) {
-    /* 0. pipe 优先 */
+                       int redir_pipe,
+                       int redir_pty) {
+    
+    /* 0. pty 优先 */
+    if (redir_pty >= 0 && parent) {
+        int new_h, new_type;
+        if (pty_dup_handle(parent, redir_pty, child,
+                           &new_h, &new_type) == 0) {
+            if (new_type == PTY_MASTER) {
+                child_slot->type = IO_SLOT_PTY_MASTER;
+            } else {
+                child_slot->type = IO_SLOT_PTY_SLAVE;
+            }
+            child_slot->fd = new_h;
+            return;
+        }
+    }
+
+    /* 0b. pipe 优先 */
     if (redir_pipe >= 0 && parent) {
         int new_h, new_type;
         if (ipc_dup_handle(parent, redir_pipe, child,
@@ -227,7 +246,8 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd,
                          int argc, char *const argv[],
                          int envc, char *const envp[],
                          int redir_in_fd, int redir_out_fd, int redir_err_fd,
-                         int redir_in_pipe, int redir_out_pipe, int redir_err_pipe) {
+                         int redir_in_pipe, int redir_out_pipe, int redir_err_pipe,
+                         int redir_in_pty, int redir_out_pty, int redir_err_pty) {
     /* 1. 分配所有物理资源，任何一步失败都回滚 */
     struct task *task = (struct task*)pmm_alloc_page();
     if (!task) {
@@ -313,6 +333,11 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd,
         task->ipc_handles[i].pipe = NULL;
     }
     task->wait_pipe = NULL;
+
+    for (int i = 0; i < PTY_MAX_HANDLES; i++) {
+        task->pty_handles[i].used = 0;
+        task->pty_handles[i].pair = NULL;
+    }
 
     /* 初始化 VMA */
     task->vma_list = NULL;
@@ -451,13 +476,13 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd,
 
     setup_slot(&task->stdin_slot,
                parent ? &parent->stdin_slot : NULL,
-               task, parent, redir_in_fd, redir_in_pipe);
+               task, parent, redir_in_fd, redir_in_pipe, redir_in_pty);
     setup_slot(&task->stdout_slot,
                parent ? &parent->stdout_slot : NULL,
-               task, parent, redir_out_fd, redir_out_pipe);
+               task, parent, redir_out_fd, redir_out_pipe, redir_out_pty);
     setup_slot(&task->stderr_slot,
                parent ? &parent->stderr_slot : NULL,
-               task, parent, redir_err_fd, redir_err_pipe);
+               task, parent, redir_err_fd, redir_err_pipe, redir_err_pty);
 
 
     /* 10. 构造内核栈（iret 帧的 user esp 指向 argc 位置） */
@@ -549,6 +574,10 @@ void task_terminate(struct task *t, int status) {
     ipc_release_all(t);
     net_sock_release_all(t);
     proc_release_all_handles(t);
+    pty_release_all(t);
+    /* 释放键盘归属 */
+    input_release_keyboard(t->pid);   /* 或 t->pid */
+    if (display_get_owner() == t->pid) display_set_owner(0);
 
     /* 从任何队列移除 */
     remove_task_from_queue(&ready_queue_head, &ready_queue_tail, t);
@@ -592,7 +621,11 @@ void task_exit(struct task *task, int status) {
     dev_release_all(task);
     ipc_release_all(task);
     net_sock_release_all(task);
-    proc_release_all_handles(task);
+    proc_release_all_handles(task);    
+    pty_release_all(task);
+    /* 释放键盘归属 */
+    input_release_keyboard(task->pid);   /* 或 t->pid */
+    if (display_get_owner() == task->pid) display_set_owner(0);
 
     /* 从就绪队列移除 */
     remove_task_from_queue(&ready_queue_head, &ready_queue_tail, task);

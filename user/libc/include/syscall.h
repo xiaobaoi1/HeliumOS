@@ -90,6 +90,23 @@
 #define SYS_GFX_PUT_PIXEL   112
 #define SYS_GFX_BLIT        113
 
+#define SYS_WM_CREATE    120
+#define SYS_WM_DESTROY   121
+#define SYS_WM_MOVE      122
+#define SYS_WM_RAISE     123
+#define SYS_WM_FLUSH     124
+
+#define SYS_INPUT_POLL    130
+#define SYS_INPUT_CLAIM   131
+#define SYS_FB_MAP        132
+#define SYS_FB_CLAIM      133
+
+#define SYS_PTY_OPEN    140
+#define SYS_PTY_READ    141
+#define SYS_PTY_WRITE   142
+#define SYS_PTY_CLOSE   143
+#define SYS_PTY_SET_FG  144
+
 
 
 
@@ -147,8 +164,12 @@ struct spawn_params {
     int          in_pipe;
     int          out_pipe;
     int          err_pipe;
+    int          in_pty;
+    int          out_pty;
+    int          err_pty;
     unsigned int flags;
     unsigned int envp;
+    unsigned int out_pid;
 };
 
 #define SPAWN_FD_INHERIT   (-1)
@@ -459,5 +480,58 @@ static inline unsigned short htons(unsigned short x) {
 
 static inline unsigned int   ntohl(unsigned int x)   { return htonl(x); }
 static inline unsigned short ntohs(unsigned short x) { return htons(x); }
+
+
+struct input_event {
+    unsigned int type;
+    unsigned int code;
+    int          x, y;
+};
+
+#define INPUT_KEY        1
+#define INPUT_MOUSE_MOVE 2
+#define INPUT_MOUSE_BTN  3
+
+static inline int input_poll(struct input_event *ev) {
+    return __syscall(SYS_INPUT_POLL, (int)ev, 0, 0);
+}
+
+static inline int input_claim(void) {
+    return __syscall(SYS_INPUT_CLAIM, 0, 0, 0);
+}
+
+struct fb_user_info {
+    unsigned int width;
+    unsigned int height;
+    unsigned int pitch;
+    unsigned int bpp;
+    unsigned int addr;
+};
+
+static inline int fb_map(struct fb_user_info *info) {
+    return __syscall(SYS_FB_MAP, (int)info, 0, 0);
+}
+
+static inline int fb_claim(void) {
+    return __syscall(SYS_FB_CLAIM, 0, 0, 0);
+}
+
+
+
+static inline int pty_open(int fds[2]) {
+    return __syscall(SYS_PTY_OPEN, (int)fds, 0, 0);
+}
+static inline int pty_read(int h, void *buf, unsigned int n) {
+    return __syscall(SYS_PTY_READ, h, (int)buf, (int)n);
+}
+static inline int pty_write(int h, const void *buf, unsigned int n) {
+    return __syscall(SYS_PTY_WRITE, h, (int)buf, (int)n);
+}
+static inline int pty_close(int h) {
+    return __syscall(SYS_PTY_CLOSE, h, 0, 0);
+}
+static inline int pty_set_fg(int h, unsigned int pid) {
+    return __syscall(SYS_PTY_SET_FG, h, (int)pid, 0);
+}
 
 #endif
