@@ -106,6 +106,7 @@
 #define SYS_PTY_WRITE   142
 #define SYS_PTY_CLOSE   143
 #define SYS_PTY_SET_FG  144
+#define SYS_PTY_AVAIL   145
 
 /* 系统调用处理函数声明 */
 void syscall_handler(struct registers *regs);

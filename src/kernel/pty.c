@@ -89,7 +89,14 @@ static void wake_slave(struct pty_pair *p) {
  * 只做最基本：行缓冲、退格、回车提交、^U 清行。
  * 不做：回显、^C、^D、^Z。 */
 static void line_discipline(struct pty_pair *p, uint8_t c) {
-    /* ^D（EOF） */
+    /* 小工具：往 to_master 写数据 + 唤醒 */
+    #define ECHO(s, n) do { \
+        buf_write(p->to_master, &p->tm_head, p->tm_tail, \
+                  (const uint8_t*)(s), (n)); \
+        wake_master(p); \
+    } while (0)
+
+    /* ^D（EOF）—— 不回显 */
     if (c == 0x04) {
         if (p->line_len > 0) {
             buf_write(p->to_slave, &p->ts_head, p->ts_tail,
@@ -102,25 +109,17 @@ static void line_discipline(struct pty_pair *p, uint8_t c) {
         return;
     }
 
-    /* ^C（SIGINT）—— 标准 Unix：清行 + 回显 ^C + 给前台组发信号。
-     * HeliumOS：发给 p->fg_pid 单个进程。 */
+    /* ^C（SIGINT）—— 清行 + 回显 ^C\n */
     if (c == 0x03) {
         p->line_len = 0;
-
-        const char echo[] = "^C\n";
-        buf_write(p->to_master, &p->tm_head, p->tm_tail,
-                  (uint8_t*)echo, sizeof(echo) - 1);
-        wake_master(p);
+        ECHO("^C\n", 3);
 
         if (p->fg_pid != 0) {
             struct task *t = proc_find_by_pid(p->fg_pid);
             if (t && !t->zombie) {
                 t->pending_signals |= (1u << SIGINT);
-
-                /* 清本 pair 对它的等待指针，避免 wake 重复入队 */
                 if (p->wait_slave == t) p->wait_slave = NULL;
                 if (p->wait_master == t) p->wait_master = NULL;
-
                 if (t->state == TASK_STATE_SLEEPING ||
                     t->state == TASK_STATE_WAITING_CHILD ||
                     t->state == TASK_STATE_WAITING_PTY ||
@@ -134,19 +133,26 @@ static void line_discipline(struct pty_pair *p, uint8_t c) {
         return;
     }
 
-    /* ^U（清行） */
+    /* ^U（清行）—— 回显 \r + N 空格 + \r */
     if (c == 0x15) {
+        int n = p->line_len;
         p->line_len = 0;
+        ECHO("\r", 1);
+        for (int i = 0; i < n; i++) ECHO(" ", 1);
+        ECHO("\r", 1);
         return;
     }
 
-    /* 退格 */
+    /* 退格 —— 回显 \b \b */
     if (c == '\b' || c == 0x7F) {
-        if (p->line_len > 0) p->line_len--;
+        if (p->line_len > 0) {
+            p->line_len--;
+            ECHO("\b \b", 3);
+        }
         return;
     }
 
-    /* 回车 */
+    /* 回车 —— 提交给 slave + 回显 \n */
     if (c == '\r' || c == '\n') {
         if (p->line_len > 0) {
             buf_write(p->to_slave, &p->ts_head, p->ts_tail,
@@ -156,13 +162,18 @@ static void line_discipline(struct pty_pair *p, uint8_t c) {
         buf_write(p->to_slave, &p->ts_head, p->ts_tail, &nl, 1);
         p->line_len = 0;
         wake_slave(p);
+
+        ECHO("\n", 1);
         return;
     }
 
-    /* 普通字符 */
+    /* 普通字符 —— 存 + 回显 */
     if (p->line_len < PTY_LINE_MAX - 1) {
         p->line_buf[p->line_len++] = (char)c;
+        ECHO(&c, 1);
     }
+
+    #undef ECHO
 }
 
 /* ---------- 读写 API ---------- */
@@ -382,4 +393,19 @@ int sys_pty_set_fg(int h, uint32_t pid) {
 
     p->fg_pid = pid;
     return OK;
+}
+
+int sys_pty_avail(int h) {
+    struct task *cur = get_current_task();
+    if (!cur) return EINVAL;
+    if (h < 0 || h >= PTY_MAX_HANDLES) return EINVAL;
+    if (!cur->pty_handles[h].used) return EINVAL;
+
+    struct pty_pair *p = cur->pty_handles[h].pair;
+    if (!p) return EINVAL;
+
+    if (cur->pty_handles[h].type == PTY_MASTER)
+        return (int)buf_count(p->tm_head, p->tm_tail);
+    else
+        return (int)buf_count(p->ts_head, p->ts_tail);
 }

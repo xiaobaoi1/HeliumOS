@@ -106,6 +106,9 @@
 #define SYS_PTY_WRITE   142
 #define SYS_PTY_CLOSE   143
 #define SYS_PTY_SET_FG  144
+#define SYS_PTY_AVAIL   145
+
+
 
 
 
@@ -532,6 +535,9 @@ static inline int pty_close(int h) {
 }
 static inline int pty_set_fg(int h, unsigned int pid) {
     return __syscall(SYS_PTY_SET_FG, h, (int)pid, 0);
+}
+static inline int pty_avail(int h) {
+    return __syscall(SYS_PTY_AVAIL, h, 0, 0);
 }
 
 #endif

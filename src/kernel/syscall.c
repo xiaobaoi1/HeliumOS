@@ -1239,6 +1239,9 @@ void syscall_handler(struct registers *regs) {
         case SYS_PTY_SET_FG:
             ret = sys_pty_set_fg((int)arg1, (uint32_t)arg2);
             break;
+        case SYS_PTY_AVAIL:
+            ret = sys_pty_avail((int)arg1);
+            break;
 
 
 

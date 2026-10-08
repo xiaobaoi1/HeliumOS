@@ -35,6 +35,7 @@ int sys_pty_read(int h, void *buf_user, uint32_t n);
 int sys_pty_write(int h, const void *buf_user, uint32_t n);
 int sys_pty_close(int h);
 int sys_pty_set_fg(int h, uint32_t pid);
+int sys_pty_avail(int h);
 
 /* spawn 用：把 parent 的 handle 复制到 child */
 int pty_dup_handle(struct task *parent, int parent_h,
