@@ -3,11 +3,13 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <tty.h>
 
 /* ---------- 输出后端 ---------- */
 /* 当前绑定到串口。将来接多后端时，把 putc 改成函数指针。 */
 static void putc(char c) {
     serial_write_char(c);
+    tty_write_char(c);
 }
 
 /* ---------- 无符号整数格式化 ---------- */

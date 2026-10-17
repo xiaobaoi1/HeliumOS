@@ -12,19 +12,19 @@
 #define C_GRAY    7
 
 static void title(const char *s) {
-    tty_set_color(C_BLUE, C_BLACK);
+    // tty_set_color(C_BLUE, C_BLACK);
     printf("\n--- %s ---\n", s);
-    tty_set_color(C_GRAY, C_BLACK);
+    // tty_set_color(C_GRAY, C_BLACK);
 }
 
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
 
-    tty_set_color(C_YELLOW, C_BLACK);
+    // tty_set_color(C_YELLOW, C_BLACK);
     printf("========================================\n");
     printf("  User Fault Test\n");
     printf("========================================\n");
-    tty_set_color(C_GRAY, C_BLACK);
+    // tty_set_color(C_GRAY, C_BLACK);
 
     /* 参数模式：arg1 决定触发哪个 */
     int mode = 0;
@@ -78,8 +78,8 @@ int main(int argc, char **argv) {
     }
 
     /* 上面任何一条成功执行到这里，都说明异常没被捕获 */
-    tty_set_color(C_RED, C_BLACK);
+    // tty_set_color(C_RED, C_BLACK);
     printf("!!! NOT REACHED — fault was not caught !!!\n");
-    tty_set_color(C_GRAY, C_BLACK);
+    // tty_set_color(C_GRAY, C_BLACK);
     return 1;
 }

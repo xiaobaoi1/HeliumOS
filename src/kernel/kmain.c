@@ -17,7 +17,6 @@
 #include <errno.h>
 #include <device.h>
 #include <keyboard.h>
-#include <tty.h>
 #include <ipc.h>
 #include <rtc.h>
 #include <acpi.h>
@@ -35,7 +34,6 @@
 #include <tcp.h>
 #include <kmap.h>
 #include <fb.h>
-#include <font.h>
 #include <mouse.h>
 #include <input.h>
 #include <pty.h>
@@ -102,21 +100,12 @@ void create_idle_task(struct fat32_volume *vol) {
     kprintf("[KERNEL] IDLE task created (pid=%d)\n", task->pid);
 }
 
-/* ---------- 创建 SHELL 进程 ---------- */
-
-void create_shell_task(struct fat32_volume *vol) {
-    struct task *task = create_task_from_elf(vol, "/SHELL", 3, (char *const*)shell_env);
+void create_wm_task(struct fat32_volume *vol) {
+    struct task *task = create_task_from_elf(vol, "/WM", 0, NULL);
     if (!task) {
-        panic("cannot create shell task\n");
+        panic("cannot create wm task");
     }
-
-    /* SHELL 是交互进程，给它正常时间片
-     * 但注意：它不能太大，否则输入回显会卡
-     * 默认 10 ticks = 10ms @1000Hz，够用
-     */
-    /* task->time_slice 已在 task_create 中初始化为 TIME_SLICE_TICKS */
-
-    kprintf("[KERNEL] SHELL task created (pid=%d)\n", task->pid);
+    kprintf("[KERNEL] WM task created (pid=%d)\n", task->pid);
 }
 
 
@@ -210,12 +199,10 @@ void kmain(uint32_t magic, uint32_t addr) {
         panic("no FAT32 volume found");
     }
 
-    font_init(sys_vol);
-    tty_try_upgrade();
     mouse_init();
 
     create_idle_task(sys_vol);
-    create_shell_task(sys_vol);
+    create_wm_task(sys_vol);
 
     kprintf("[KERNEL] Processes created. Starting scheduler...\n");
 

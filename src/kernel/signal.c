@@ -258,24 +258,10 @@ int sys_sigprocmask(int how, uint32_t *set_user, uint32_t *old_user) {
 }
 
 /* ---------- 前台信号 ---------- */
+/* Ctrl+C 路径：
+ *   键盘 IRQ → input 队列 → WM → term → pty master
+ *   → pty 行规程 → SIGINT 给 pty 的 fg_pid
+ * 此函数无调用者，保留为空。 */
 void signal_foreground(int sig) {
-    struct task *fg = tty_get_foreground();
-    if (!fg) return;
-    if (fg->zombie) return;
-
-    if (sig == SIGKILL) {
-        task_terminate(fg, 128 + SIGKILL);
-        proc_unref(fg);
-        return;
-    }
-
-    fg->pending_signals |= (1u << sig);
-
-    /* 唤醒阻塞中的前台，让它尽快处理信号 */
-    if (fg->state == TASK_STATE_SLEEPING ||
-        fg->state == TASK_STATE_WAITING_CHILD) {
-        remove_task_from_queue(&blocked_list_head, &blocked_list_tail, fg);
-        fg->state = TASK_STATE_READY;
-        enqueue_task(&ready_queue_head, &ready_queue_tail, fg);
-    }
+    (void)sig;
 }

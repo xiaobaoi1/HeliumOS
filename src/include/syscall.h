@@ -19,16 +19,6 @@
 #define SYS_READ                     11
 #define SYS_WRITE                    12
 
-/* ========== tty 控制 (13~19) ========== */
-#define SYS_TTY_CLEAR                13
-#define SYS_TTY_SET_COLOR            14
-#define SYS_TTY_SET_CURSOR           15
-#define SYS_TTY_GET_CURSOR           16
-#define SYS_TTY_SAVE_CURSOR          17
-#define SYS_TTY_RESTORE_CURSOR       18
-#define SYS_TTY_DEBUG_WRITE          19
-#define SYS_TTY_SET_FOREGROUND       20
-
 /* ========== 内存管理 (21~29) ========== */
 #define SYS_BRK        21
 #define SYS_MMAP       22
@@ -88,12 +78,6 @@
 #define SYS_LISTEN      106
 #define SYS_ACCEPT      107
 
-/* ========== 图形 (110~119) ========== */
-#define SYS_GFX_GET_INFO    110
-#define SYS_GFX_FILL_RECT   111
-#define SYS_GFX_PUT_PIXEL   112
-#define SYS_GFX_BLIT        113
-
 /* ========== 输入 / 显示 (130~139) ========== */
 #define SYS_INPUT_POLL    130
 #define SYS_INPUT_CLAIM   131
@@ -107,6 +91,16 @@
 #define SYS_PTY_CLOSE   143
 #define SYS_PTY_SET_FG  144
 #define SYS_PTY_AVAIL   145
+#define SYS_FD_AVAIL    146
+
+
+
+
+/* 标准流编号（sys_read / sys_write 的参数，不是文件 fd） */
+#define STREAM_STDIN   0
+#define STREAM_STDOUT  1
+#define STREAM_STDERR  2
+
 
 /* 系统调用处理函数声明 */
 void syscall_handler(struct registers *regs);

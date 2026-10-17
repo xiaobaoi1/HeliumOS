@@ -25,6 +25,7 @@ void serial_write_char(char c);
 
 // 发送字符串
 void serial_write_string(const char *str);
+void serial_write_nstring(const char *str, int count);
 
 // 检查发送缓冲区是否为空（非阻塞发送用）
 int serial_is_transmit_empty(void);

@@ -62,7 +62,8 @@ static int tokenize(char *cmd, char **argv, int max) {
 /* ---------- 颜色辅助 ---------- */
 
 static void set_color(int fg, int bg) {
-    tty_set_color(fg, bg);
+    (void)fg; (void)bg;
+    /* 无内核 tty。将来通过 ANSI 转义输出颜色。 */
 }
 
 /* ---------- 内置命令 ---------- */
@@ -181,7 +182,7 @@ static void cmd_pwd(void) {
 }
 
 static void cmd_clear(void) {
-    tty_clear();
+    // tty_clear();
 }
 
 static void cmd_touch(int argc, char **argv) {
@@ -649,9 +650,7 @@ void main(int _argc, char **_argv) {
             } else {
                 int h = spawn(argv[1], argv + 1, &p);
                 if (h >= 0) {
-                    tty_set_foreground(h);
                     int st; wait(h, &st, 0);
-                    tty_set_foreground(-1);
                     process_close(h);
                 } else {
                     set_color(VGA_LIGHT_RED, VGA_BLACK);
@@ -681,10 +680,8 @@ void main(int _argc, char **_argv) {
                     printf("spawn '%s' failed (error %d)\n", c, h);
                     set_color(VGA_LIGHT_GRAY, VGA_BLACK);
                 } else {
-                    tty_set_foreground(h);
                     int status = 0;
                     wait(h, &status, 0);
-                    tty_set_foreground(-1);
                     if (status != 0) {
                         set_color(VGA_LIGHT_RED, VGA_BLACK);
                         printf("[shell] child exited with status %d\n", status);

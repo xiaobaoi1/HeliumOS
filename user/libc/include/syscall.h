@@ -17,16 +17,6 @@
 #define SYS_READ                     11
 #define SYS_WRITE                    12
 
-/* ========== tty 控制 (13~19) ========== */
-#define SYS_TTY_CLEAR                13
-#define SYS_TTY_SET_COLOR            14
-#define SYS_TTY_SET_CURSOR           15
-#define SYS_TTY_GET_CURSOR           16
-#define SYS_TTY_SAVE_CURSOR          17
-#define SYS_TTY_RESTORE_CURSOR       18
-#define SYS_TTY_DEBUG_WRITE          19
-#define SYS_TTY_SET_FOREGROUND       20
-
 /* ========== 内存管理 (21~29) ========== */
 #define SYS_BRK        21
 #define SYS_MMAP       22
@@ -85,11 +75,6 @@
 #define SYS_LISTEN      106
 #define SYS_ACCEPT      107
 
-#define SYS_GFX_GET_INFO    110
-#define SYS_GFX_FILL_RECT   111
-#define SYS_GFX_PUT_PIXEL   112
-#define SYS_GFX_BLIT        113
-
 #define SYS_WM_CREATE    120
 #define SYS_WM_DESTROY   121
 #define SYS_WM_MOVE      122
@@ -107,7 +92,15 @@
 #define SYS_PTY_CLOSE   143
 #define SYS_PTY_SET_FG  144
 #define SYS_PTY_AVAIL   145
+#define SYS_FD_AVAIL    146
 
+
+
+
+
+#define STREAM_STDIN   0
+#define STREAM_STDOUT  1
+#define STREAM_STDERR  2
 
 
 
@@ -270,47 +263,12 @@ static inline int sys_reboot(void) {
 }
 
 /* 控制台 I/O */
-static inline int write(int fd, const void *buf, unsigned int n) {
-    return __syscall(SYS_WRITE, fd, (int)buf, (int)n);
+static inline int write(int stream, const void *buf, unsigned int n) {
+    return __syscall(SYS_WRITE, stream, (int)buf, (int)n);
 }
 
-static inline int read(int fd, void *buf, unsigned int n) {
-    return __syscall(SYS_READ, fd, (int)buf, (int)n);
-}
-
-static inline void tty_clear(void) {
-    __syscall(SYS_TTY_CLEAR, 0, 0, 0);
-}
-
-static inline void tty_set_color(unsigned char fg, unsigned char bg) {
-    __syscall(SYS_TTY_SET_COLOR, fg, bg, 0);
-}
-
-static inline void tty_set_cursor(int x, int y) {
-    __syscall(SYS_TTY_SET_CURSOR, x, y, 0);
-}
-
-static inline void tty_get_cursor(int *x, int *y) {
-    int out[2];
-    __syscall(SYS_TTY_GET_CURSOR, (int)out, 0, 0);
-    if (x) *x = out[0];
-    if (y) *y = out[1];
-}
-
-static inline void tty_save_cursor(void) {
-    __syscall(SYS_TTY_SAVE_CURSOR, 0, 0, 0);
-}
-
-static inline void tty_restore_cursor(void) {
-    __syscall(SYS_TTY_RESTORE_CURSOR, 0, 0, 0);
-}
-
-static inline int tty_debug_write(const void *buf, unsigned int n) {
-    return __syscall(SYS_TTY_DEBUG_WRITE, (int)buf, (int)n, 0);
-}
-
-static inline int tty_set_foreground(int handle) {
-    return __syscall(SYS_TTY_SET_FOREGROUND, handle, 0, 0);
+static inline int read(int stream, void *buf, unsigned int n) {
+    return __syscall(SYS_READ, stream, (int)buf, (int)n);
 }
 
 static inline int getppid(void) {
@@ -538,6 +496,9 @@ static inline int pty_set_fg(int h, unsigned int pid) {
 }
 static inline int pty_avail(int h) {
     return __syscall(SYS_PTY_AVAIL, h, 0, 0);
+}
+static inline int fd_avail(int fd) {
+    return __syscall(SYS_FD_AVAIL, fd, 0, 0);
 }
 
 #endif

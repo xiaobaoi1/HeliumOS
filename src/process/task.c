@@ -6,7 +6,6 @@
 #include <stddef.h>
 #include <isr.h>
 #include <errno.h>
-#include <tty.h>
 #include <vma.h>
 #include <net_sock.h>
 #include <input.h>
@@ -238,6 +237,24 @@ static void setup_slot(struct io_slot *child_slot,
         parent_slot->type == IO_SLOT_PIPE_WRITE) {
         child_slot->type = IO_SLOT_DEFAULT;
         child_slot->fd = -1;
+    }
+    /* PTY 类型：和 FILE 一样需要 dup handle 到子进程 */
+    if (parent_slot->type == IO_SLOT_PTY_MASTER ||
+        parent_slot->type == IO_SLOT_PTY_SLAVE) {
+        if (parent_slot->fd < 0 || parent_slot->fd >= PTY_MAX_HANDLES) {
+            child_slot->type = IO_SLOT_DEFAULT;
+            child_slot->fd = -1;
+            return;
+        }
+        int new_h, new_type;
+        if (pty_dup_handle(parent, parent_slot->fd, child,
+                           &new_h, &new_type) == 0) {
+            child_slot->fd = new_h;
+            /* type 与 parent 一致，已拷贝 */
+        } else {
+            child_slot->type = IO_SLOT_DEFAULT;
+            child_slot->fd = -1;
+        }
     }
 }
 
@@ -588,15 +605,6 @@ void task_terminate(struct task *t, int status) {
 
     /* 唤醒所有等它的 */
     wake_up_waiters(t);
-
-    /* 如果它是键盘前台，恢复父进程为前台 */
-    if (tty_get_foreground() == t) {
-        struct task *parent = NULL;
-        if (t->creator_pid != 0) {
-            parent = proc_find_by_pid(t->creator_pid);
-        }
-        tty_set_foreground(parent);
-    }
 }
 
 /* task_exit: 进程退出。
@@ -637,15 +645,6 @@ void task_exit(struct task *task, int status) {
 
     /* 唤醒所有等它的进程 */
     wake_up_waiters(task);
-
-    /* 如果自己是键盘前台，恢复父进程为前台 */
-    if (tty_get_foreground() == task) {
-        struct task *parent = NULL;
-        if (task->creator_pid != 0) {
-            parent = proc_find_by_pid(task->creator_pid);
-        }
-        tty_set_foreground(parent);   /* 可能为 NULL */
-    }
     
     /* 释放 self 引用。如果 refcount 归零且 t == current，
      * proc_unref 会把 task 挂入 graveyard，由 irq_handler 回收。 */

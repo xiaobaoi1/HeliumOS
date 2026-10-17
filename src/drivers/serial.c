@@ -61,6 +61,12 @@ void serial_write_string(const char *str) {
         serial_write_char(str[i]);
     }
 }
+void serial_write_nstring(const char *str, int count) {
+    if (!str) return;
+    for (int i = 0; i<count; i++) {
+        serial_write_char(str[i]);
+    }
+}
 
 /* ---------- device_ops 实现 ---------- */
 

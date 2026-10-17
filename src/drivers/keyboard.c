@@ -8,12 +8,6 @@
 #include <input.h>
 
 #define KEYBOARD_DATA_PORT   0x60
-#define KB_BUF_SIZE          128
-
-/* ===== 内部状态，对外完全隐藏 ===== */
-static char kb_buffer[KB_BUF_SIZE];
-static volatile int kb_head = 0;
-static volatile int kb_tail = 0;
 
 static int shift_pressed = 0;
 static int caps_lock = 0;
@@ -114,32 +108,12 @@ void keyboard_handle_irq(void) {
     char c = scancode_to_ascii(scancode);
     if (!c) return;
 
-    /* 键盘被 claim 时，只投事件队列；否则两边都投 */
-    if (!input_keyboard_claimed()) {
-        int next = (kb_head + 1) % KB_BUF_SIZE;
-        if (next != kb_tail) {
-            kb_buffer[kb_head] = c;
-            kb_head = next;
-        }
-    }
-
     struct input_event ev = {
         .type = INPUT_KEY,
         .code = (uint32_t)(unsigned char)c,
         .x = 0, .y = 0,
     };
     input_post(&ev);
-}
-
-int keyboard_has_data(void) {
-    return kb_head != kb_tail;
-}
-
-char keyboard_getchar(void) {
-    if (kb_head == kb_tail) return 0;
-    char c = kb_buffer[kb_tail];
-    kb_tail = (kb_tail + 1) % KB_BUF_SIZE;
-    return c;
 }
 
 /* ---------- device_ops 实现 ---------- */
@@ -150,14 +124,8 @@ static int kb_dev_open(void **state, void *arg) {
 }
 
 static int kb_dev_read(void *state, void *buf, uint32_t n) {
-    (void)state;
-    if (!buf || n == 0) return EINVAL;
-    char *p = buf;
-    uint32_t got = 0;
-    while (got < n && keyboard_has_data()) {
-        p[got++] = keyboard_getchar();
-    }
-    return got;   /* 非阻塞，可能返回 0 */
+    (void)state; (void)buf; (void)n;
+    return 0;   /* 键盘事件走 input 队列，设备层不提供读 */
 }
 
 static int kb_dev_write(void *state, const void *buf, uint32_t n) {

@@ -61,31 +61,27 @@ void font_init(struct fat32_volume *vol) {
                 }
                 if (*p == ':' && cp >= 0 && cp < 128) {
                     p++;
-
-                    /* 探测 hex 长度 */
                     int hexlen = 0;
                     const char *q = p;
                     while (hexval(q[0]) >= 0 && hexval(q[1]) >= 0) {
                         hexlen += 2;
                         q += 2;
                     }
-
                     int nbytes = hexlen / 2;
                     if (nbytes != 16 && nbytes != 32) {
                         line_len = 0;
-                        continue;   /* 不支持的长度 */
+                        continue;
                     }
 
                     uint8_t raw[32];
                     int ok = 1;
-                    for (int i = 0; i < nbytes; i++) {
+                    for (int k = 0; k < nbytes; k++) {
                         int hi = hexval(p[0]);
                         int lo = hexval(p[1]);
                         if (hi < 0 || lo < 0) { ok = 0; break; }
-                        raw[i] = (uint8_t)((hi << 4) | lo);
+                        raw[k] = (uint8_t)((hi << 4) | lo);
                         p += 2;
                     }
-
                     if (ok) {
                         g_font.width[cp]  = (nbytes == 16) ? 8 : 16;
                         g_font.height[cp] = 16;
@@ -109,7 +105,6 @@ const struct font *font_get(void) { return &g_font; }
 const uint8_t *font_glyph(uint8_t c, int *out_w) {
     if (!g_font.valid) return NULL;
     if (c >= 128 || g_font.width[c] == 0) {
-        /* fallback：'?' */
         c = '?';
         if (g_font.width[c] == 0) return NULL;
     }

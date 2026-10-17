@@ -19,16 +19,16 @@ static int g_pass = 0;
 static int g_fail = 0;
 
 static void ok(const char *n) {
-    tty_set_color(C_GREEN, C_BLACK);
+    // tty_set_color(C_GREEN, C_BLACK);
     printf("  [PASS] %s\n", n);
-    tty_set_color(C_GRAY, C_BLACK);
+    // tty_set_color(C_GRAY, C_BLACK);
     g_pass++;
 }
 
 static void fail(const char *n, const char *w) {
-    tty_set_color(C_RED, C_BLACK);
+    // tty_set_color(C_RED, C_BLACK);
     printf("  [FAIL] %s: %s\n", n, w);
-    tty_set_color(C_GRAY, C_BLACK);
+    // tty_set_color(C_GRAY, C_BLACK);
     g_fail++;
 }
 
@@ -47,20 +47,20 @@ static void check_eq(int g, int e, const char *n) {
 
 static void section(const char *t) {
     printf("\n");
-    tty_set_color(C_BLUE, C_BLACK);
+    // tty_set_color(C_BLUE, C_BLACK);
     printf("--- %s ---\n", t);
-    tty_set_color(C_GRAY, C_BLACK);
+    // tty_set_color(C_GRAY, C_BLACK);
 }
 
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
 
-    tty_clear();
-    tty_set_color(C_YELLOW, C_BLACK);
+    // tty_clear();
+    // tty_set_color(C_YELLOW, C_BLACK);
     printf("========================================\n");
     printf("  FAT32 Write Test\n");
     printf("========================================\n");
-    tty_set_color(C_GRAY, C_BLACK);
+    // tty_set_color(C_GRAY, C_BLACK);
 
     /* ---------- 1. 创建 + 写 ---------- */
     section("create + write");
@@ -135,18 +135,18 @@ int main(int argc, char **argv) {
 
 done:
     printf("\n");
-    tty_set_color(C_YELLOW, C_BLACK);
+    // tty_set_color(C_YELLOW, C_BLACK);
     printf("========================================\n");
     if (g_fail == 0) {
-        tty_set_color(C_GREEN, C_BLACK);
+        // tty_set_color(C_GREEN, C_BLACK);
         printf("  ALL PASSED (%d)\n", g_pass);
     } else {
-        tty_set_color(C_RED, C_BLACK);
+        // tty_set_color(C_RED, C_BLACK);
         printf("  %d pass, %d fail\n", g_pass, g_fail);
     }
-    tty_set_color(C_YELLOW, C_BLACK);
+    // tty_set_color(C_YELLOW, C_BLACK);
     printf("========================================\n");
-    tty_set_color(C_GRAY, C_BLACK);
+    // tty_set_color(C_GRAY, C_BLACK);
 
     return g_fail;
 }

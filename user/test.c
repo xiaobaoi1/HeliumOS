@@ -29,16 +29,16 @@ static char failures[32][200];
 /* ---------- 报告辅助 ---------- */
 
 static void ok(const char *name) {
-    tty_set_color(C_GREEN, C_BLACK);
+    // tty_set_color(C_GREEN, C_BLACK);
     printf("  [PASS] %s\n", name);
-    tty_set_color(C_GRAY, C_BLACK);
+    // tty_set_color(C_GRAY, C_BLACK);
     g_pass++;
 }
 
 static void fail(const char *name, const char *why) {
-    tty_set_color(C_RED, C_BLACK);
+    // tty_set_color(C_RED, C_BLACK);
     printf("  [FAIL] %s: %s\n", name, why);
-    tty_set_color(C_GRAY, C_BLACK);
+    // tty_set_color(C_GRAY, C_BLACK);
     strcpy(failures[g_fail], name);
     g_fail++;
 }
@@ -61,9 +61,9 @@ static void check_eq(int got, int expected, const char *name) {
 /* 打印分段标题 */
 static void section(const char *title) {
     printf("\n");
-    tty_set_color(C_BLUE, C_BLACK);
+    // tty_set_color(C_BLUE, C_BLACK);
     printf("--- %s ---\n", title);
-    tty_set_color(C_GRAY, C_BLACK);
+    // tty_set_color(C_GRAY, C_BLACK);
 }
 
 /* ---------- 1. 字符串库 ---------- */
@@ -329,34 +329,7 @@ static void test_dev(void) {
 
 /* ---------- 6. 控制台 ---------- */
 
-static void test_tty(void) {
-    section("tty");
 
-    int x, y;
-    tty_get_cursor(&x, &y);
-    check(x >= 0 && x < 80 && y >= 0 && y < 25,
-          "tty_get_cursor in range");
-
-    /* save / restore 一圈 */
-    tty_save_cursor();
-
-    tty_set_cursor(0, 0);
-    /* 不写东西，纯粹移动 */
-
-    tty_restore_cursor();
-
-    int x2, y2;
-    tty_get_cursor(&x2, &y2);
-    check(x2 == x && y2 == y, "save/restore cursor");
-
-    /* 彩色输出（视觉检查） */
-    tty_set_color(C_YELLOW, C_BLACK);
-    printf("  (visual) this line should be YELLOW\n");
-    tty_set_color(C_BLUE, C_BLACK);
-    printf("  (visual) this line should be BLUE\n");
-    tty_set_color(C_GRAY, C_BLACK);
-    ok("color output");
-}
 
 /* ---------- 7. 错误码 ---------- */
 
@@ -802,18 +775,17 @@ void main(int argc, char **argv) {
     /* 清屏，保证从干净状态开始 */
     // tty_clear();
 
-    tty_set_color(C_YELLOW, C_BLACK);
+    // tty_set_color(C_YELLOW, C_BLACK);
     printf("========================================\n");
     printf("  HeliumOS Self Test\n");
     printf("========================================\n");
-    tty_set_color(C_GRAY, C_BLACK);
+    // tty_set_color(C_GRAY, C_BLACK);
 
     test_strings();
     test_printf();
     test_mem();
     test_fs();
     test_dev();
-    test_tty();
     test_errno();
     test_ptr_bounds();
     test_blocking_syscall();
@@ -829,18 +801,18 @@ void main(int argc, char **argv) {
     test_slot_null();
 
     printf("\n");
-    tty_set_color(C_YELLOW, C_BLACK);
+    // tty_set_color(C_YELLOW, C_BLACK);
     printf("========================================\n");
     if (g_fail == 0) {
-        tty_set_color(C_GREEN, C_BLACK);
+        // tty_set_color(C_GREEN, C_BLACK);
         printf("  ALL PASSED (%d tests)\n", g_pass);
     } else {
-        tty_set_color(C_RED, C_BLACK);
+        // tty_set_color(C_RED, C_BLACK);
         printf("  %d PASSED, %d FAILED\n", g_pass, g_fail);
     }
-    tty_set_color(C_YELLOW, C_BLACK);
+    // tty_set_color(C_YELLOW, C_BLACK);
     printf("========================================\n");
-    tty_set_color(C_GRAY, C_BLACK);
+    // tty_set_color(C_GRAY, C_BLACK);
 
     for(int i=0;i<g_fail;i++){
         printf("  [FAIL] %s\n", failures[i]);

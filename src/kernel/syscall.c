@@ -11,7 +11,6 @@
 #include <errno.h>
 #include <fs.h>
 #include <device.h>
-#include <tty.h>
 #include <path.h>
 #include <proc.h>
 #include <signal.h>
@@ -59,22 +58,30 @@ struct spawn_params {
     uint32_t out_pid;
 };
 
-#define SPAWN_FD_INHERIT   (-1)   /* 不重定向 */
-#define SPAWN_FD_NULL      (-2)   /* 丢弃 */
-
-static int sys_write(int fd, const char *buf, uint32_t count) {
-    if (fd != 1 && fd != 2) return EINVAL;
+/* 写标准流。stream = 1 (stdout) / 2 (stderr)。
+ *
+ * 命名空间说明：
+ *   stream         标准流编号（0=stdin, 1=stdout, 2=stderr）——非负小整数
+ *   fs fd          文件句柄（fs_handles 索引）
+ *   ipc/pty handle 管道/伪终端句柄
+ *   dev handle     设备句柄
+ *   proc handle    进程句柄
+ *   sock handle    套接字句柄
+ * 都是 int，但分属独立编号空间——不要混用。 */
+static int sys_write(int stream, const char *buf, uint32_t count) {
+    if (stream != STREAM_STDOUT && stream != STREAM_STDERR) return EINVAL;
     if (!buf || count == 0) return EINVAL;
     if (check_user_range((uint32_t)buf, count) < 0) return EFAULT;
 
     struct task *cur = get_current_task();
     if (!cur) return EINVAL;
 
-    struct io_slot *slot = (fd == 1) ? &cur->stdout_slot : &cur->stderr_slot;
+    struct io_slot *slot = (stream == STREAM_STDOUT)
+                           ? &cur->stdout_slot : &cur->stderr_slot;
 
     switch (slot->type) {
         case IO_SLOT_DEFAULT:
-            return tty_write(buf, count);
+            return EINVAL;
         case IO_SLOT_FILE: {
             int h = slot->fd;
             if (h < 0 || h >= FS_MAX_HANDLES) return EINVAL;
@@ -107,8 +114,9 @@ static int sys_write(int fd, const char *buf, uint32_t count) {
     }
 }
 
-static int sys_read(int fd, char *buf, uint32_t count) {
-    if (fd != 0) return EINVAL;
+/* 读标准输入。stream = 0 (stdin)。 */
+static int sys_read(int stream, char *buf, uint32_t count) {
+    if (stream != STREAM_STDIN) return EINVAL;
     if (!buf || count == 0) return EINVAL;
     if (check_user_range((uint32_t)buf, count) < 0) return EFAULT;
 
@@ -117,15 +125,13 @@ static int sys_read(int fd, char *buf, uint32_t count) {
 
     switch (cur->stdin_slot.type) {
         case IO_SLOT_DEFAULT:
-            return tty_read(buf, count);
-
+            return EINVAL;
         case IO_SLOT_FILE: {
             int h = cur->stdin_slot.fd;
             if (h < 0 || h >= FS_MAX_HANDLES) return EINVAL;
             if (!cur->fs_handles[h].used) return EINVAL;
             return fs_read(h, buf, count);
         }
-        
         case IO_SLOT_PIPE_READ: {
             int h = cur->stdin_slot.fd;
             if (h < 0 || h >= IPC_MAX_HANDLES) return EINVAL;
@@ -145,10 +151,8 @@ static int sys_read(int fd, char *buf, uint32_t count) {
             if (!cur->pty_handles[h].used) return EINVAL;
             return sys_pty_read(h, buf, count);
         }
-
-
         case IO_SLOT_NULL:
-            return 0;    /* EOF */
+            return 0;
         default:
             return ENOSYS;
     }
@@ -233,34 +237,6 @@ static int sys_wait(proc_handle_t h, int *status, uint32_t timeout_ms) {
     if (!target) return EINVAL;
 
     return wait_impl(cur, target, status, timeout_ms);
-}
-
-/* 注意：本函数靠"句柄只能由 spawn 分配给当前进程"这一不变式
- * 来保证 pid 一定是当前进程的子进程。将来引入句柄继承后，
- * 需要显式检查 target->creator_pid == cur->pid。 */
-/* 系统调用 waitpid */
-static int sys_waitpid(int pid, int *status) {
-    struct task *cur = get_current_task();
-    if (!cur) return EINVAL;
-
-    if (status) {
-        if (check_user_range((uint32_t)status, sizeof(int)) < 0) return EFAULT;
-    }
-
-    if (pid == -1) {
-        /* 等任意子进程 */
-        return wait_impl(cur, NULL, status, 0);
-    }
-
-    /* 找匹配 pid 的 handle */
-    for (int i = 0; i < PROC_MAX_HANDLES; i++) {
-        if (!cur->proc_handles[i].used) continue;
-        if (!(cur->proc_handles[i].access & PROC_WAIT)) continue;
-        if (cur->proc_handles[i].task->pid == (uint32_t)pid) {
-            return wait_impl(cur, cur->proc_handles[i].task, status, 0);
-        }
-    }
-    return ECHILD;
 }
 
 /* ---------- proc_list ---------- */
@@ -672,112 +648,6 @@ static int sys_sleep(uint32_t ms) {
     return 0;
 }
 
-static int sys_tty_set_foreground(proc_handle_t h) {
-    struct task *cur = get_current_task();
-    if (!cur) return EINVAL;
-
-    if (h == -1) {
-        /* 显式清空（自己拿回键盘）*/
-        tty_set_foreground(cur);
-        return OK;
-    }
-
-    struct task *target = proc_handle_deref(h, PROC_QUERY);
-    if (!target) return EINVAL;
-
-    tty_set_foreground(target);
-    return OK;
-}
-
-/* ---------- 图形 ---------- */
-
-struct gfx_info {
-    uint32_t width;
-    uint32_t height;
-    uint32_t bpp;
-};
-
-static int sys_gfx_get_info(struct gfx_info *user_buf) {
-    if (!user_buf) return EINVAL;
-    if (check_user_range((uint32_t)user_buf, sizeof(struct gfx_info)) < 0)
-        return EFAULT;
-
-    struct fb_info *fb = fb_get();
-    if (!fb || !fb->valid) return ENOSYS;
-
-    struct gfx_info info = {
-        .width = fb->width,
-        .height = fb->height,
-        .bpp = fb->bpp,
-    };
-    if (copy_to_user((uint32_t)user_buf, &info, sizeof(info)) < 0)
-        return EFAULT;
-    return OK;
-}
-
-static int sys_gfx_fill_rect(uint32_t x, uint32_t y,
-                              uint32_t w, uint32_t h, uint32_t rgb) {
-    struct fb_info *fb = fb_get();
-    if (!fb || !fb->valid) return ENOSYS;
-
-    if (x >= fb->width || y >= fb->height) return OK;
-    if (w == 0 || h == 0) return OK;
-    if (x + w > fb->width)  w = fb->width  - x;
-    if (y + h > fb->height) h = fb->height - y;
-
-    for (uint32_t j = 0; j < h; j++) {
-        for (uint32_t i = 0; i < w; i++) {
-            fb_put_pixel(x + i, y + j, rgb);
-        }
-    }
-
-    display_dirty((int)x, (int)y, (int)(x + w), (int)(y + h));
-    display_flush();
-    return OK;
-}
-
-static int sys_gfx_put_pixel(uint32_t x, uint32_t y, uint32_t rgb) {
-    struct fb_info *fb = fb_get();
-    if (!fb || !fb->valid) return ENOSYS;
-    if (x >= fb->width || y >= fb->height) return OK;
-
-    fb_put_pixel(x, y, rgb);
-    display_dirty((int)x, (int)y, (int)(x + 1), (int)(y + 1));
-    display_flush();
-    return OK;
-}
-
-static int sys_gfx_blit(uint32_t x, uint32_t y,
-                         uint32_t w, uint32_t h, void *user_buf) {
-    struct fb_info *fb = fb_get();
-    if (!fb || !fb->valid) return ENOSYS;
-
-    if (x >= fb->width || y >= fb->height) return OK;
-    if (w == 0 || h == 0) return OK;
-    if (x + w > fb->width)  w = fb->width  - x;
-    if (y + h > fb->height) h = fb->height - y;
-
-    uint32_t row_bytes = w * 4;
-    if (row_bytes > 2048) return EINVAL;
-
-    uint8_t row_buf[2048];
-    uint32_t u_addr = (uint32_t)user_buf;
-
-    for (uint32_t j = 0; j < h; j++) {
-        if (check_user_range(u_addr, row_bytes) < 0) return EFAULT;
-        if (copy_from_user(row_buf, u_addr, row_bytes) < 0) return EFAULT;
-
-        uint32_t *src = (uint32_t*)row_buf;
-        for (uint32_t i = 0; i < w; i++) {
-            fb_put_pixel(x + i, y + j, src[i]);
-        }
-        u_addr += row_bytes;
-    }
-
-    display_dirty((int)x, (int)y, (int)(x + w), (int)(y + h));
-    display_flush();
-    return OK;
-}
 
 
 static int sys_input_poll(struct input_event *user_buf) {
@@ -852,6 +722,41 @@ static int sys_fb_claim(void) {
     display_set_owner(cur->pid);
     kprintf("[FB] claimed by pid=%u\n", cur->pid);
     return OK;
+}
+
+/* 查询 fd 是否可读。当前只支持 fd = 0。
+ * 返回：> 0 可读字节数（估计），0 不可读，< 0 错误。 */
+static int sys_fd_avail(int fd) {
+    if (fd != 0) return EINVAL;
+
+    struct task *cur = get_current_task();
+    if (!cur) return EINVAL;
+
+    switch (cur->stdin_slot.type) {
+        case IO_SLOT_PIPE_READ: {
+            int h = cur->stdin_slot.fd;
+            if (h < 0 || h >= IPC_MAX_HANDLES) return EINVAL;
+            if (!cur->ipc_handles[h].used) return EINVAL;
+            struct pipe *p = cur->ipc_handles[h].pipe;
+            if (!p) return EINVAL;
+            return (int)p->count;
+        }
+        case IO_SLOT_PTY_MASTER:
+        case IO_SLOT_PTY_SLAVE: {
+            int h = cur->stdin_slot.fd;
+            if (h < 0 || h >= PTY_MAX_HANDLES) return EINVAL;
+            if (!cur->pty_handles[h].used) return EINVAL;
+            return sys_pty_avail(h);
+        }
+        case IO_SLOT_FILE:
+            return 1;   /* 文件总是可读 */
+        case IO_SLOT_NULL:
+            return 1;   /* 返回 0（EOF），但"可读" */
+        case IO_SLOT_DEFAULT:
+            return 0;
+        default:
+            return EINVAL;
+    }
 }
 
 /* 系统调用分发器 */
@@ -1078,61 +983,7 @@ void syscall_handler(struct registers *regs) {
             break;
 
 
-        /* ---------- 控制台 ---------- */
-        case SYS_TTY_CLEAR:
-            tty_clear();
-            ret = 0;
-            break;
-
-        case SYS_TTY_SET_COLOR:
-            if (arg1 > 15 || arg2 > 15) {
-                ret = EINVAL;
-            } else {
-                tty_set_color((uint8_t)arg1, (uint8_t)arg2);
-                ret = 0;
-            }
-            break;
-
-        case SYS_TTY_SET_CURSOR:
-            tty_set_cursor((int)arg1, (int)arg2);
-            ret = 0;
-            break;
-
-        case SYS_TTY_GET_CURSOR:
-            /* arg1 指向用户空间的 int[2]: out_x, out_y */
-            if (check_user_range(arg1, 8) < 0) {
-                ret = EFAULT;
-            } else {
-                int cx = 0, cy = 0;
-                tty_get_cursor(&cx, &cy);
-                ((int*)arg1)[0] = cx;
-                ((int*)arg1)[1] = cy;
-                ret = 0;
-            }
-            break;
-
-        case SYS_TTY_SAVE_CURSOR:
-            tty_save_cursor();
-            ret = 0;
-            break;
-
-        case SYS_TTY_RESTORE_CURSOR:
-            tty_restore_cursor();
-            ret = 0;
-            break;
-
-        case SYS_TTY_DEBUG_WRITE:
-            if (!arg1 || arg2 == 0) {
-                ret = EINVAL;
-            } else if (check_user_range(arg1, arg2) < 0) {
-                ret = EFAULT;
-            } else {
-                ret = tty_debug_write((const char*)arg1, arg2);
-            }
-            break;
-        case SYS_TTY_SET_FOREGROUND:
-            ret = sys_tty_set_foreground((proc_handle_t)arg1);
-            break;
+       
 
         
 
@@ -1195,18 +1046,6 @@ void syscall_handler(struct registers *regs) {
 
 
         /* ---------- 图形 ---------- */
-        case SYS_GFX_GET_INFO:
-            ret = sys_gfx_get_info((struct gfx_info*)arg1);
-            break;
-        case SYS_GFX_FILL_RECT:
-            ret = sys_gfx_fill_rect(arg1, arg2, arg3, arg4, arg5);
-            break;
-        case SYS_GFX_PUT_PIXEL:
-            ret = sys_gfx_put_pixel(arg1, arg2, arg3);
-            break;
-        case SYS_GFX_BLIT:
-            ret = sys_gfx_blit(arg1, arg2, arg3, arg4, (void*)arg5);
-            break;
 
         case SYS_INPUT_POLL:
             ret = sys_input_poll((struct input_event*)arg1);
@@ -1241,6 +1080,9 @@ void syscall_handler(struct registers *regs) {
             break;
         case SYS_PTY_AVAIL:
             ret = sys_pty_avail((int)arg1);
+            break;
+        case SYS_FD_AVAIL:
+            ret = sys_fd_avail((int)arg1);
             break;
 
 
