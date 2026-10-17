@@ -12,6 +12,10 @@
 #define IPC_PIPE_READ     1
 #define IPC_PIPE_WRITE    2
 
+/* ---------- 命名 pipe ---------- */
+#define PIPE_NAME_MAX  32
+#define IPC_MAX_NAMED  16
+
 /* ---------- pipe ---------- */
 struct pipe {
     uint8_t  buf[PIPE_BUF_SIZE];
@@ -64,5 +68,17 @@ int   sys_pipe(int *fds_user);
 int   sys_pipe_read(int h, void *buf_user, uint32_t n);
 int   sys_pipe_write(int h, const void *buf_user, uint32_t n);
 int   sys_ipc_close(int h);
+
+
+/* 创建命名 pipe。返回本进程的读、写 handle（写入 fds_user[0..1]）。
+ * 名字已存在返回 EEXIST。 */
+int sys_pipe_named(const char *name_user, int *fds_user);
+
+/* 打开已存在的命名 pipe。wr=1 打开写端，wr=0 打开读端。
+ * 返回本进程 handle；名字不存在返回 ENOENT。 */
+int sys_pipe_open(const char *name_user, int wr);
+
+/* 删除名字。已打开的句柄不受影响，最后一个句柄关闭时对象销毁。 */
+int sys_pipe_unlink(const char *name_user);
 
 #endif

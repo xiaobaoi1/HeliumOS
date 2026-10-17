@@ -61,6 +61,9 @@
 #define SYS_PIPE_READ    82
 #define SYS_PIPE_WRITE   83
 #define SYS_IPC_CLOSE    84
+#define SYS_PIPE_NAMED   85
+#define SYS_PIPE_OPEN    86
+#define SYS_PIPE_UNLINK  87
 
 /* ========== 系统控制 (91~99) ========== */
 #define SYS_RTC_GET_TIME  91
@@ -247,6 +250,15 @@ static inline int pipe_write(int h, const void *buf, unsigned int n) {
 }
 static inline int ipc_close(int h) {
     return __syscall(SYS_IPC_CLOSE, h, 0, 0);
+}
+static inline int pipe_named(const char *name, int fds[2]) {
+    return __syscall(SYS_PIPE_NAMED, (int)name, (int)fds, 0);
+}
+static inline int pipe_open(const char *name, int wr) {
+    return __syscall(SYS_PIPE_OPEN, (int)name, wr, 0);
+}
+static inline int pipe_unlink(const char *name) {
+    return __syscall(SYS_PIPE_UNLINK, (int)name, 0, 0);
 }
 
 /* 系统控制 */

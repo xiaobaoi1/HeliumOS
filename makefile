@@ -97,7 +97,30 @@ ISO        = HeliumOS.iso
 DISK_IMG   = $(BUILD_DIR)/HeliumOS.img
 
 # ==================== 默认目标 ====================
-all: $(ISO)
+all: $(DISK_IMG)
+
+
+
+
+# ==================== 用户程序变量 ====================
+
+USER_CFLAGS = -m32 -ffreestanding -fno-pic -fno-stack-protector \
+              -Iuser/ -Iuser/libc/include -MMD -MP
+
+USER_APPS = shell idle test testkill sleeper argtest test_write \
+            test_fault test_env count cat echo head tail wc \
+            test_mmap test_stack ping test_dns nc tcpserver \
+            test_input test_pty wm term test_namedpipe
+
+USER_OBJS = $(addprefix $(BUILD_DIR)/,$(addsuffix .o,$(USER_APPS)))
+USER_ELFS = $(addprefix $(BUILD_DIR)/,$(addsuffix .ELF,$(USER_APPS)))
+
+LIBC_SRCS = string printf malloc signal env assert ctype qsort \
+            abort stdlib inet netdb
+
+LIBC_OBJS = $(addprefix $(BUILD_DIR)/libc_,$(addsuffix .o,$(LIBC_SRCS))) \
+            $(BUILD_DIR)/libc_sigreturn.o
+
 
 # ==================== 编译规则 ====================
 $(BUILD_DIR)/start.o: $(BOOT_DIR)/start.asm
@@ -133,6 +156,11 @@ $(KERNEL_ELF): $(OBJS)
 	$(LD) $(LDFLAGS) $(OBJS) -o $@
 
 
+
+
+
+
+
 # ==================== ISO 镜像（默认） ====================
 $(ISO): $(KERNEL_ELF)
 	@mkdir -p $(BUILD_DIR)/iso_root/boot/grub
@@ -145,7 +173,7 @@ $(ISO): $(KERNEL_ELF)
 	@echo "ISO 镜像生成成功: $(ISO)"
 
 # ==================== 硬盘镜像（用于测试文件系统写入） ====================
-$(DISK_IMG): $(KERNEL_ELF) $(BUILD_DIR)/SHELL.ELF $(BUILD_DIR)/IDLE.ELF $(BUILD_DIR)/TEST.ELF $(BUILD_DIR)/TESTKILL.ELF $(BUILD_DIR)/SLEEPER.ELF $(BUILD_DIR)/ARGTEST.ELF $(BUILD_DIR)/TESTWRITE.ELF $(BUILD_DIR)/TESTFAULT.ELF $(BUILD_DIR)/TESTENV.ELF $(BUILD_DIR)/COUNT.ELF $(BUILD_DIR)/CAT.ELF $(BUILD_DIR)/ECHO.ELF $(BUILD_DIR)/HEAD.ELF $(BUILD_DIR)/TAIL.ELF $(BUILD_DIR)/WC.ELF $(BUILD_DIR)/TEST_MMAP.ELF $(BUILD_DIR)/TESTSTACK.ELF $(BUILD_DIR)/PING.ELF $(BUILD_DIR)/TESTDNS.ELF $(BUILD_DIR)/NC.ELF $(BUILD_DIR)/TCPSERVER.ELF $(BUILD_DIR)/TESTINPUT.ELF $(BUILD_DIR)/TESTPTY.ELF $(BUILD_DIR)/WM.ELF $(BUILD_DIR)/TERM.ELF
+$(DISK_IMG): $(KERNEL_ELF) $(USER_ELFS)
 	@echo "正在创建 FAT32 硬盘镜像 (需要 sudo 权限)..."
 	dd if=/dev/zero of=$(DISK_IMG) bs=1M count=64 status=none
 	(echo o; echo n; echo p; echo 1; echo 2048; echo; echo t; echo c; echo a; echo 1; echo w) | fdisk $(DISK_IMG) > /dev/null 2>&1
@@ -158,35 +186,9 @@ $(DISK_IMG): $(KERNEL_ELF) $(BUILD_DIR)/SHELL.ELF $(BUILD_DIR)/IDLE.ELF $(BUILD_
 	sudo mkdir -p /mnt/build/boot/grub; \
 	sudo cp $(KERNEL_ELF) /mnt/build/boot/; \
 	sudo cp tools/unifont.hex /mnt/build/UNICODE.HEX; \
-
-
-	sudo cp $(BUILD_DIR)/IDLE.ELF /mnt/build/IDLE; \
-	sudo cp $(BUILD_DIR)/SHELL.ELF /mnt/build/SHELL; \
-	sudo cp $(BUILD_DIR)/TEST.ELF /mnt/build/TEST; \
-	sudo cp $(BUILD_DIR)/TESTKILL.ELF /mnt/build/TESTKILL; \
-	sudo cp $(BUILD_DIR)/SLEEPER.ELF /mnt/build/SLEEPER; \
-	sudo cp $(BUILD_DIR)/ARGTEST.ELF /mnt/build/ARGTEST; \
-	sudo cp $(BUILD_DIR)/TESTWRITE.ELF /mnt/build/TESTWRITE; \
-	sudo cp $(BUILD_DIR)/TESTFAULT.ELF /mnt/build/TESTFAULT; \
-	sudo cp $(BUILD_DIR)/TESTENV.ELF /mnt/build/TESTENV; \
-	sudo cp $(BUILD_DIR)/COUNT.ELF /mnt/build/COUNT; \
-	sudo cp $(BUILD_DIR)/CAT.ELF /mnt/build/CAT; \
-	sudo cp $(BUILD_DIR)/ECHO.ELF /mnt/build/ECHO; \
-	sudo cp $(BUILD_DIR)/HEAD.ELF /mnt/build/HEAD; \
-	sudo cp $(BUILD_DIR)/TAIL.ELF /mnt/build/TAIL; \
-	sudo cp $(BUILD_DIR)/WC.ELF /mnt/build/WC; \
-	sudo cp $(BUILD_DIR)/TEST_MMAP.ELF /mnt/build/TEST_MMAP; \
-	sudo cp $(BUILD_DIR)/TESTSTACK.ELF /mnt/build/TESTSTACK; \
-	sudo cp $(BUILD_DIR)/PING.ELF /mnt/build/PING; \
-	sudo cp $(BUILD_DIR)/TESTDNS.ELF /mnt/build/TESTDNS; \
-	sudo cp $(BUILD_DIR)/NC.ELF /mnt/build/NC; \
-	sudo cp $(BUILD_DIR)/TCPSERVER.ELF /mnt/build/TCPSERVER; \
-	sudo cp $(BUILD_DIR)/TESTINPUT.ELF /mnt/build/TESTINPUT; \
-	sudo cp $(BUILD_DIR)/TESTPTY.ELF /mnt/build/TESTPTY; \
-	sudo cp $(BUILD_DIR)/WM.ELF /mnt/build/WM; \
-	sudo cp $(BUILD_DIR)/TERM.ELF /mnt/build/TERM; \
-	
-
+	for app in $(USER_APPS); do \
+	    sudo cp $(BUILD_DIR)/$$app.ELF /mnt/build/$$app; \
+	done; \
 	sudo cp $(SRC_DIR)/kernel/kmain.c /mnt/build/kmain.c; \
 	sudo cp user/idle.c /mnt/build/idle.c; \
 
@@ -244,250 +246,32 @@ pack:
 
 
 
+# ==================== 用户程序 ====================
 
-
-# USER BUILD
-USER_CFLAGS = -m32 -ffreestanding -fno-pic -fno-stack-protector -Iuser/ -Iuser/libc/include -MMD -MP
-LIBC_SRCS = user/libc/string.c user/libc/printf.c user/libc/malloc.c
-LIBC_OBJS = $(BUILD_DIR)/libc_string.o \
-			$(BUILD_DIR)/libc_printf.o \
-			$(BUILD_DIR)/libc_malloc.o \
-			$(BUILD_DIR)/libc_signal.o \
-            $(BUILD_DIR)/libc_sigreturn.o \
-			$(BUILD_DIR)/libc_env.o \
-			$(BUILD_DIR)/libc_assert.o \
-			$(BUILD_DIR)/libc_ctype.o \
-			$(BUILD_DIR)/libc_qsort.o \
-			$(BUILD_DIR)/libc_abort.o \
-			$(BUILD_DIR)/libc_stdlib.o \
-			$(BUILD_DIR)/libc_inet.o \
-			$(BUILD_DIR)/libc_netdb.o \
-
-$(BUILD_DIR)/libc_string.o: user/libc/string.c
-	$(CC) $(USER_CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/libc_printf.o: user/libc/printf.c
-	$(CC) $(USER_CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/libc_malloc.o: user/libc/malloc.c
-	$(CC) $(USER_CFLAGS) -c $< -o $@
+# ---------- 编译 ----------
 
 $(BUILD_DIR)/crt0.o: user/crt0.asm
 	@mkdir -p $(BUILD_DIR)
 	$(ASM) $(ASMFLAGS) $< -o $@
 
-$(BUILD_DIR)/libc_signal.o: user/libc/signal.c
-	$(CC) $(USER_CFLAGS) -c $< -o $@
-
 $(BUILD_DIR)/libc_sigreturn.o: user/libc/sigreturn.asm
 	@mkdir -p $(BUILD_DIR)
 	$(ASM) $(ASMFLAGS) $< -o $@
 
-$(BUILD_DIR)/libc_env.o: user/libc/env.c
+$(BUILD_DIR)/libc_%.o: user/libc/%.c
+	@mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/libc_assert.o: user/libc/assert.c
+$(BUILD_DIR)/%.o: user/%.c
+	@mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/libc_ctype.o: user/libc/ctype.c
-	$(CC) $(USER_CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/libc_qsort.o: user/libc/qsort.c
-	$(CC) $(USER_CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/libc_abort.o: user/libc/abort.c
-	$(CC) $(USER_CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/libc_stdlib.o: user/libc/stdlib.c
-	$(CC) $(USER_CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/libc_inet.o: user/libc/inet.c
-	$(CC) $(USER_CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/libc_netdb.o: user/libc/netdb.c
-	$(CC) $(USER_CFLAGS) -c $< -o $@
-
-
-# shell
-$(BUILD_DIR)/shell.o: user/shell.c
-	$(CC) $(USER_CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/SHELL.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/shell.o $(LIBC_OBJS) user/linker.ld
-	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/shell.o $(LIBC_OBJS)
-
-# idle
-$(BUILD_DIR)/idle.o: user/idle.c
-	$(CC) $(USER_CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/IDLE.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/idle.o $(LIBC_OBJS) user/linker.ld
-	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/idle.o $(LIBC_OBJS)
-
-
-# test
-$(BUILD_DIR)/test.o: user/test.c
-	$(CC) $(USER_CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/TEST.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/test.o $(LIBC_OBJS) user/linker.ld
-	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/test.o $(LIBC_OBJS)
-
-# testkill
-$(BUILD_DIR)/testkill.o: user/testkill.c
-	$(CC) $(USER_CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/TESTKILL.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/testkill.o $(LIBC_OBJS) user/linker.ld
-	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/testkill.o $(LIBC_OBJS)
-
-# sleeper
-$(BUILD_DIR)/sleeper.o: user/sleeper.c
-	$(CC) $(USER_CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/SLEEPER.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/sleeper.o $(LIBC_OBJS) user/linker.ld
-	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/sleeper.o $(LIBC_OBJS)
-
-# argtest
-$(BUILD_DIR)/argtest.o: user/argtest.c
-	$(CC) $(USER_CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/ARGTEST.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/argtest.o $(LIBC_OBJS) user/linker.ld
-	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/argtest.o $(LIBC_OBJS)
-
-# test_write
-$(BUILD_DIR)/test_write.o: user/test_write.c
-	$(CC) $(USER_CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/TESTWRITE.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/test_write.o $(LIBC_OBJS) user/linker.ld
-	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/test_write.o $(LIBC_OBJS)
-
-# test_fault
-$(BUILD_DIR)/test_fault.o: user/test_fault.c
-	$(CC) $(USER_CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/TESTFAULT.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/test_fault.o $(LIBC_OBJS) user/linker.ld
-	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/test_fault.o $(LIBC_OBJS)
-
-# test_env
-$(BUILD_DIR)/test_env.o: user/test_env.c
-	$(CC) $(USER_CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/TESTENV.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/test_env.o $(LIBC_OBJS) user/linker.ld
-	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/test_env.o $(LIBC_OBJS)
-
-# count
-$(BUILD_DIR)/count.o: user/count.c
-	$(CC) $(USER_CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/COUNT.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/count.o $(LIBC_OBJS) user/linker.ld
-	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/count.o $(LIBC_OBJS)
-
-# cat
-$(BUILD_DIR)/cat.o: user/cat.c
-	$(CC) $(USER_CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/CAT.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/cat.o $(LIBC_OBJS) user/linker.ld
-	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/cat.o $(LIBC_OBJS)
-
-# echo
-$(BUILD_DIR)/echo.o: user/echo.c
-	$(CC) $(USER_CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/ECHO.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/echo.o $(LIBC_OBJS) user/linker.ld
-	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/echo.o $(LIBC_OBJS)
-
-# head
-$(BUILD_DIR)/head.o: user/head.c
-	$(CC) $(USER_CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/HEAD.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/head.o $(LIBC_OBJS) user/linker.ld
-	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/head.o $(LIBC_OBJS)
-
-# tail
-$(BUILD_DIR)/tail.o: user/tail.c
-	$(CC) $(USER_CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/TAIL.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/tail.o $(LIBC_OBJS) user/linker.ld
-	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/tail.o $(LIBC_OBJS)
-
-# wc
-$(BUILD_DIR)/wc.o: user/wc.c
-	$(CC) $(USER_CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/WC.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/wc.o $(LIBC_OBJS) user/linker.ld
-	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/wc.o $(LIBC_OBJS)
-
-
-# test_mmap
-$(BUILD_DIR)/test_mmap.o: user/test_mmap.c
-	$(CC) $(USER_CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/TEST_MMAP.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/test_mmap.o $(LIBC_OBJS) user/linker.ld
-	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/test_mmap.o $(LIBC_OBJS)
-
-# test_stack
-$(BUILD_DIR)/test_stack.o: user/test_stack.c
-	$(CC) $(USER_CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/TESTSTACK.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/test_stack.o $(LIBC_OBJS) user/linker.ld
-	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/test_stack.o $(LIBC_OBJS)
-
-# ping
-$(BUILD_DIR)/ping.o: user/ping.c
-	$(CC) $(USER_CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/PING.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/ping.o $(LIBC_OBJS) user/linker.ld
-	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/ping.o $(LIBC_OBJS)
-
-# test_dns
-$(BUILD_DIR)/test_dns.o: user/test_dns.c
-	$(CC) $(USER_CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/TESTDNS.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/test_dns.o $(LIBC_OBJS) user/linker.ld
-	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/test_dns.o $(LIBC_OBJS)
-
-# nc
-
-$(BUILD_DIR)/nc.o: user/nc.c
-	$(CC) $(USER_CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/NC.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/nc.o $(LIBC_OBJS) user/linker.ld
-	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/nc.o $(LIBC_OBJS)
-
-
-$(BUILD_DIR)/tcpserver.o: user/tcpserver.c
-	$(CC) $(USER_CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/TCPSERVER.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/tcpserver.o $(LIBC_OBJS) user/linker.ld
-	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/tcpserver.o $(LIBC_OBJS)
-
-
-
-$(BUILD_DIR)/test_input.o: user/test_input.c
-	$(CC) $(USER_CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/TESTINPUT.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/test_input.o $(LIBC_OBJS) user/linker.ld
-	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/test_input.o $(LIBC_OBJS)
-
-
-$(BUILD_DIR)/test_pty.o: user/test_pty.c
-	$(CC) $(USER_CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/TESTPTY.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/test_pty.o $(LIBC_OBJS) user/linker.ld
-	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/test_pty.o $(LIBC_OBJS)
-
-
-$(BUILD_DIR)/wm.o: user/wm.c
-	$(CC) $(USER_CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/WM.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/wm.o $(LIBC_OBJS) user/linker.ld
-	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/wm.o $(LIBC_OBJS)
-
-$(BUILD_DIR)/term.o: user/term.c
-	$(CC) $(USER_CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/TERM.ELF: $(BUILD_DIR)/crt0.o $(BUILD_DIR)/term.o $(LIBC_OBJS) user/linker.ld
-	$(LD) -m elf_i386 -T user/linker.ld -o $@ $(BUILD_DIR)/crt0.o $(BUILD_DIR)/term.o $(LIBC_OBJS)
-
-
+# ---------- 链接 ----------
+
+$(BUILD_DIR)/%.ELF: $(BUILD_DIR)/%.o $(BUILD_DIR)/crt0.o $(LIBC_OBJS) user/linker.ld
+	$(LD) -m elf_i386 -T user/linker.ld -o $@ \
+		$(BUILD_DIR)/crt0.o $< $(LIBC_OBJS)
 
 # 声明伪目标
-.PHONY: all run run-disk debug debug-disk clean gdb pack run-net run-tcp
+.PHONY: all run run-disk debug debug-disk clean gdb pack run-net run-tcp $(DISK_IMG)
 -include $(wildcard $(BUILD_DIR)/*.d)

@@ -11,8 +11,17 @@
 /* ---------- 全局 pipe 池 ---------- */
 static struct pipe g_pipes[IPC_MAX_PIPES];
 
+struct named_entry {
+    uint8_t      used;
+    char         name[PIPE_NAME_MAX];
+    struct pipe *pipe;
+};
+
+static struct named_entry g_named[IPC_MAX_NAMED];
+
 void ipc_init(void) {
     memset(g_pipes, 0, sizeof(g_pipes));
+    memset(g_named, 0, sizeof(g_named));
 }
 
 /* ---------- pipe 分配/释放 ---------- */
@@ -31,6 +40,50 @@ struct pipe *pipe_alloc(void) {
 void pipe_free(struct pipe *p) {
     if (!p) return;
     p->used = 0;
+}
+
+/* ---------- 名字表 ---------- */
+
+static struct pipe *named_lookup(const char *name) {
+    for (int i = 0; i < IPC_MAX_NAMED; i++) {
+        if (g_named[i].used && strcmp(g_named[i].name, name) == 0) {
+            return g_named[i].pipe;
+        }
+    }
+    return NULL;
+}
+
+static int named_register(const char *name, struct pipe *p) {
+    for (int i = 0; i < IPC_MAX_NAMED; i++) {
+        if (!g_named[i].used) {
+            g_named[i].used = 1;
+            strncpy(g_named[i].name, name, PIPE_NAME_MAX - 1);
+            g_named[i].name[PIPE_NAME_MAX - 1] = '\0';
+            g_named[i].pipe = p;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+/* 返回被摘掉的 pipe；调用方决定是否 free。 */
+static struct pipe *named_unregister(const char *name) {
+    for (int i = 0; i < IPC_MAX_NAMED; i++) {
+        if (g_named[i].used && strcmp(g_named[i].name, name) == 0) {
+            struct pipe *p = g_named[i].pipe;
+            g_named[i].used = 0;
+            g_named[i].pipe = NULL;
+            return p;
+        }
+    }
+    return NULL;
+}
+
+static int pipe_is_named(struct pipe *p) {
+    for (int i = 0; i < IPC_MAX_NAMED; i++) {
+        if (g_named[i].used && g_named[i].pipe == p) return 1;
+    }
+    return 0;
 }
 
 /* ---------- 句柄管理 ---------- */
@@ -65,10 +118,9 @@ void ipc_handle_close(struct task *t, int h) {
         else                       p->writers--;
         p->refcount--;
 
-        /* 关闭后唤醒所有等这个 pipe 的进程 */
         pipe_wakeup_all(p);
 
-        if (p->refcount == 0) {
+        if (p->refcount == 0 && !pipe_is_named(p)) {
             pipe_free(p);
         }
     }
@@ -249,5 +301,81 @@ int sys_ipc_close(int h) {
     if (!cur->ipc_handles[h].used) return EINVAL;
 
     ipc_handle_close(cur, h);
+    return OK;
+}
+
+/* ---------- 命名 pipe ---------- */
+
+int sys_pipe_named(const char *name_user, int *fds_user) {
+    struct task *cur = get_current_task();
+    if (!cur) return EINVAL;
+
+    char name[PIPE_NAME_MAX];
+    if (strncpy_from_user(name, name_user, sizeof(name)) < 0) return EFAULT;
+    if (name[0] == '\0') return EINVAL;
+    if (check_user_range((uint32_t)fds_user, 8) < 0) return EFAULT;
+    if (named_lookup(name)) return EEXIST;
+
+    struct pipe *p = pipe_alloc();
+    if (!p) return ENOSPC;
+
+    if (named_register(name, p) < 0) {
+        pipe_free(p);
+        return ENOSPC;
+    }
+
+    int rd = ipc_handle_alloc(cur, p, IPC_PIPE_READ);
+    if (rd < 0) {
+        named_unregister(name);
+        pipe_free(p);
+        return ENOSPC;
+    }
+
+    int wr = ipc_handle_alloc(cur, p, IPC_PIPE_WRITE);
+    if (wr < 0) {
+        ipc_handle_close(cur, rd);
+        struct pipe *fp = named_unregister(name);
+        if (fp && fp->refcount == 0) pipe_free(fp);
+        return ENOSPC;
+    }
+
+    int fds[2] = { rd, wr };
+    if (copy_to_user((uint32_t)fds_user, fds, 8) < 0) {
+        ipc_handle_close(cur, rd);
+        ipc_handle_close(cur, wr);
+        struct pipe *fp = named_unregister(name);
+        if (fp && fp->refcount == 0) pipe_free(fp);
+        return EFAULT;
+    }
+    return OK;
+}
+
+int sys_pipe_open(const char *name_user, int wr) {
+    struct task *cur = get_current_task();
+    if (!cur) return EINVAL;
+
+    char name[PIPE_NAME_MAX];
+    if (strncpy_from_user(name, name_user, sizeof(name)) < 0) return EFAULT;
+
+    struct pipe *p = named_lookup(name);
+    if (!p) return ENOENT;
+
+    int type = wr ? IPC_PIPE_WRITE : IPC_PIPE_READ;
+    int h = ipc_handle_alloc(cur, p, type);
+    if (h < 0) return ENOSPC;
+    return h;
+}
+
+int sys_pipe_unlink(const char *name_user) {
+    struct task *cur = get_current_task();
+    if (!cur) return EINVAL;
+
+    char name[PIPE_NAME_MAX];
+    if (strncpy_from_user(name, name_user, sizeof(name)) < 0) return EFAULT;
+
+    struct pipe *p = named_unregister(name);
+    if (!p) return ENOENT;
+
+    if (p->refcount == 0) pipe_free(p);
     return OK;
 }

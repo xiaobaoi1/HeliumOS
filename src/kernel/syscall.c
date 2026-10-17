@@ -847,6 +847,15 @@ void syscall_handler(struct registers *regs) {
         case SYS_IPC_CLOSE:
             ret = sys_ipc_close((int)arg1);
             break;
+        case SYS_PIPE_NAMED:
+            ret = sys_pipe_named((const char*)arg1, (int*)arg2);
+            break;
+        case SYS_PIPE_OPEN:
+            ret = sys_pipe_open((const char*)arg1, (int)arg2);
+            break;
+        case SYS_PIPE_UNLINK:
+            ret = sys_pipe_unlink((const char*)arg1);
+            break;
         
 
 
