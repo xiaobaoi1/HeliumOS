@@ -11,6 +11,7 @@
 #include "stdio.h"
 #include "stdlib.h"
 #include "string.h"
+#include "wm_proto.h"
 #include "shm_layout.h"
 #include <stdint.h>
 
@@ -450,6 +451,95 @@ static void process_byte(unsigned char c) {
     else                         { render_cp('?'); }
 }
 
+static int  g_inbox_w = -1;
+static char g_my_shm_name[16];
+static char g_my_ev_name[24];
+static int  g_resize_gen = 0;
+
+/* 请求 WM 将自己的窗口 resize 到 (new_w, new_h) 客户区。
+ * 自己创建新 shm（新名字），通知 WM 切换。 */
+static int term_resize(int new_w, int new_h) {
+    if (!g_shm || g_inbox_w < 0) return -1;
+    if (new_w < 80 || new_h < 48) return -1;
+    if (new_w > 1600 || new_h > 1200) return -1;
+
+    g_resize_gen++;
+    char new_shm[16];
+    snprintf(new_shm, sizeof(new_shm), "term-%d-r%d",
+             (int)g_my_ev_name[8] - '0', g_resize_gen);
+
+    int new_shm_size = shm_total_size(new_w, new_h);
+    int new_id = shm_open(new_shm, new_shm_size, 0);
+    if (new_id < 0) return -1;
+
+    unsigned int new_addr = mmap(0, new_shm_size,
+                                 PROT_READ | PROT_WRITE,
+                                 MAP_SHARED, new_id);
+    if ((int)new_addr <= 0) return -1;
+
+    struct shm_hdr *new_hdr = (struct shm_hdr*)new_addr;
+    unsigned int *new_pixels = (unsigned int*)(new_addr + SHM_HDR_SIZE);
+    memset(new_pixels, 0, new_w * new_h * 4);
+
+    /* 保留旧内容：按 min 尺寸逐行拷贝。
+     * 旧像素左上角对齐新像素左上角——shell 提示符在左上，
+     * 放大时原内容不动，新区域填背景色。 */
+    if (g_pixels) {
+        int copy_w = (g_cw < new_w) ? g_cw : new_w;
+        int copy_h = (g_ch < new_h) ? g_ch : new_h;
+        for (int y = 0; y < copy_h; y++) {
+            memcpy(new_pixels + y * new_w,
+                   g_pixels   + y * g_cw,
+                   copy_w * 4);
+        }
+    }
+    new_hdr->counter = 0;
+    new_hdr->cur_x0 = SHM_DIRTY_EMPTY; new_hdr->cur_y0 = 0;
+    new_hdr->cur_x1 = 0; new_hdr->cur_y1 = 0;
+    new_hdr->pub_x0 = SHM_DIRTY_EMPTY; new_hdr->pub_y0 = 0;
+    new_hdr->pub_x1 = 0; new_hdr->pub_y1 = 0;
+
+    /* 发请求给 WM */
+    struct wm_resize_request req;
+    memset(&req, 0, sizeof(req));
+    req.magic = WM_MAGIC;
+    req.type = WM_REQ_RESIZE;
+    req.owner_pid = getpid();
+    strncpy(req.old_shm, g_my_shm_name, sizeof(req.old_shm) - 1);
+    strncpy(req.new_shm, new_shm, sizeof(req.new_shm) - 1);
+    req.new_w = new_w;
+    req.new_h = new_h;
+
+    if (pipe_write(g_inbox_w, &req, sizeof(req)) != sizeof(req)) {
+        return -1;
+    }
+
+    /* 切换到新 shm——旧的等 WM unlink 后自然销毁。
+     * 这里不主动 munmap——WM 处理请求时 unlink 旧名，旧对象因 WM 侧
+     * 引用计数下降 + term 侧引用计数下降 而销毁。
+     * 但 term 侧 mmap 一直映射着——需要 munmap。 */
+    munmap((unsigned int)g_shm, shm_total_size(g_cw, g_ch));
+
+    g_shm = new_hdr;
+    g_pixels = new_pixels;
+    g_cw = new_w;
+    g_ch = new_h;
+    g_cols = new_w / CELL_W;
+    g_rows = new_h / FONT_H;
+    if (g_cx >= g_cols) g_cx = g_cols - 1;
+    if (g_cy >= g_rows) g_cy = g_rows - 1;
+
+    /* 全屏脏区——首帧全绘 */
+    g_shm->cur_x0 = 0;
+    g_shm->cur_y0 = 0;
+    g_shm->cur_x1 = g_cw;
+    g_shm->cur_y1 = g_ch;
+
+    strncpy(g_my_shm_name, new_shm, sizeof(g_my_shm_name) - 1);
+
+    return 0;
+}
+
 /* ---------- main ---------- */
 
 int main(int argc, char **argv) {
@@ -463,6 +553,9 @@ int main(int argc, char **argv) {
     g_ch = atoi(argv[3]);
     const char *ev_name = argv[4];
     if (g_cw <= 0 || g_ch <= 0) return 1;
+
+    strncpy(g_my_shm_name, shm_name, sizeof(g_my_shm_name) - 1);
+    strncpy(g_my_ev_name, ev_name, sizeof(g_my_ev_name) - 1);
 
     int ev_rd = pipe_open(ev_name, /*wr=*/0);
     if (ev_rd < 0) {
@@ -493,6 +586,12 @@ int main(int argc, char **argv) {
     g_cols = g_cw / CELL_W;
     g_rows = g_ch / FONT_H;
 
+    g_inbox_w = pipe_open(WM_INBOX_NAME, 1);
+    if (g_inbox_w < 0) {
+        dprintf(2, "term: wm-inbox open failed\n");
+        return 1;
+    }
+
     load_font();
 
     /* pty + spawn shell */
@@ -514,7 +613,7 @@ int main(int argc, char **argv) {
     if (sh < 0) { dprintf(2, "term: spawn SHELL %d\n", sh); return 1; }
     pty_set_fg(master, sp.out_pid);
 
-        for (;;) {
+    for (;;) {
         if (pipe_avail(ev_rd) > 0) {
             char kbuf[64];
             int kn = pipe_read(ev_rd, kbuf, sizeof(kbuf));
