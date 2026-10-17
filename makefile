@@ -113,13 +113,13 @@ USER_APPS = shell idle test testkill sleeper argtest test_write \
             test_mmap test_stack ping test_dns nc tcpserver \
             test_input test_pty wm term test_namedpipe test_perm \
 			test_createwin test_ansi\
-			dhcpclient
+			dhcpclient desktop test_raw kilo test_malloc_loop
 
 USER_OBJS = $(addprefix $(BUILD_DIR)/,$(addsuffix .o,$(USER_APPS)))
 USER_ELFS = $(addprefix $(BUILD_DIR)/,$(addsuffix .ELF,$(USER_APPS)))
 
 LIBC_SRCS = string printf malloc signal env assert ctype qsort \
-            abort stdlib inet netdb
+            abort stdlib inet netdb termios ioctl unistd atexit
 
 LIBC_OBJS = $(addprefix $(BUILD_DIR)/libc_,$(addsuffix .o,$(LIBC_SRCS))) \
             $(BUILD_DIR)/libc_sigreturn.o
@@ -272,9 +272,15 @@ $(BUILD_DIR)/%.o: user/%.c
 
 # ---------- 链接 ----------
 
-$(BUILD_DIR)/%.ELF: $(BUILD_DIR)/%.o $(BUILD_DIR)/crt0.o $(LIBC_OBJS) user/linker.ld
+# 附加对象映射（只有两个程序需要，直接赋值最清晰）
+EXTRA_OBJS_wm      := $(BUILD_DIR)/wm_font.o
+EXTRA_OBJS_desktop := $(BUILD_DIR)/wm_font.o
+
+# 统一链接规则（二次展开拿 EXTRA_OBJS_<stem>）
+.SECONDEXPANSION:
+$(BUILD_DIR)/%.ELF: $(BUILD_DIR)/%.o $(BUILD_DIR)/crt0.o $(LIBC_OBJS) $$(EXTRA_OBJS_$$*) user/linker.ld
 	$(LD) -m elf_i386 -T user/linker.ld -o $@ \
-		$(BUILD_DIR)/crt0.o $< $(LIBC_OBJS)
+		$(BUILD_DIR)/crt0.o $< $(EXTRA_OBJS_$*) $(LIBC_OBJS)
 
 # 声明伪目标
 .PHONY: all run run-disk debug debug-disk clean gdb pack run-net run-tcp $(DISK_IMG)

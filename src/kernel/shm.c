@@ -47,7 +47,9 @@ static struct shm *shm_create(const char *name, uint32_t num_pages) {
             memset(s, 0, sizeof(*s));
             strncpy(s->name, name, SHM_NAME_MAX - 1);
             s->num_pages = num_pages;
-            s->pages = (uint32_t*)kmalloc(num_pages * sizeof(uint32_t));
+            s->pages = (uint32_t*)pmm_alloc_page();
+            if (!s->pages) return NULL;
+            memset(s->pages, 0, 4096);
             if (!s->pages) return NULL;
             memset(s->pages, 0, num_pages * sizeof(uint32_t));
             s->used = 1;
@@ -67,7 +69,7 @@ static void shm_destroy(struct shm *s) {
     for (uint32_t i = 0; i < s->num_pages; i++) {
         if (s->pages[i]) pmm_free_page(s->pages[i]);
     }
-    kfree(s->pages);
+    pmm_free_page((uint32_t)s->pages);
     s->pages = NULL;
     s->used = 0;
 }

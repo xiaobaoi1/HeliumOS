@@ -350,3 +350,18 @@ fd_t fs_dup_handle(struct task *src_task, fd_t src_fd, struct task *dst_task) {
     dst_task->fs_handles[new_fd] = src_task->fs_handles[src_fd];
     return new_fd;
 }
+
+int fs_truncate(fd_t fd) {
+    struct fs_handle *h = fs_get(fd);
+    if (!h || h->obj_type != FS_OBJ_FILE) return EINVAL;
+    switch (h->fs_type) {
+        case VOL_FS_FAT32: {
+            struct fat32_volume *fvol = (struct fat32_volume*)h->vol->fs_private;
+            if (!fvol) return EINVAL;
+            int r = fat32_truncate(fvol, &h->u.fat32_file);
+            if (r == OK) h->offset = 0;
+            return r;
+        }
+        default: return ENOSYS;
+    }
+}

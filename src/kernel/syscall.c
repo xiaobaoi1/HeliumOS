@@ -79,6 +79,10 @@ static int sys_write(int stream, const char *buf, uint32_t count) {
     struct task *cur = get_current_task();
     if (!cur) return EINVAL;
 
+    if(stream == STREAM_STDERR){ // test code
+        serial_write_nstring(buf, count);
+    }
+
     struct io_slot *slot = (stream == STREAM_STDOUT)
                            ? &cur->stdout_slot : &cur->stderr_slot;
 
@@ -1015,6 +1019,9 @@ void syscall_handler(struct registers *regs) {
                 ret = fs_rename(old_buf, new_buf);
             break;
         }
+        case SYS_FS_TRUNCATE:
+            ret = fs_truncate((fd_t)arg1);
+            break;
         case SYS_GETCWD:
             if (check_user_range(arg1, arg2) < 0) {
                 ret = EFAULT;
@@ -1164,6 +1171,17 @@ void syscall_handler(struct registers *regs) {
         case SYS_FD_AVAIL:
             ret = sys_fd_avail((int)arg1);
             break;
+        case SYS_PTY_SET_WINSIZE:
+            ret = sys_pty_set_winsize((int)arg1, (uint16_t)arg2, (uint16_t)arg3);
+            break;
+        case SYS_TERM_SET_RAW:
+            ret = sys_term_set_raw((int)arg1);
+            break;
+        case SYS_TERM_GET_WINSIZE:
+            ret = sys_term_get_winsize((uint32_t*)arg1);
+            break;
+
+
         
 
         case SYS_NET_SET_IF:

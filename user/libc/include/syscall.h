@@ -38,6 +38,7 @@
 #define SYS_FS_RMDIR      41
 #define SYS_FS_RENAME     42
 #define SYS_FS_FSTAT      43
+#define SYS_FS_TRUNCATE   44
 
 /* ========== 设备 (51~59) ========== */
 #define SYS_DEV_OPEN      51
@@ -97,6 +98,9 @@
 #define SYS_PTY_SET_FG  144
 #define SYS_PTY_AVAIL   145
 #define SYS_FD_AVAIL    146
+#define SYS_PTY_SET_WINSIZE 147
+#define SYS_TERM_SET_RAW    148
+#define SYS_TERM_GET_WINSIZE 149
 
 #define SYS_NET_SET_IF   150
 #define SYS_NET_GET_IF   151
@@ -385,6 +389,10 @@ static inline int fs_rename(const char *old_path, const char *new_path) {
     return __syscall(SYS_FS_RENAME, (int)old_path, (int)new_path, 0);
 }
 
+static inline int fs_truncate(int fd) {
+    return __syscall(SYS_FS_TRUNCATE, fd, 0, 0);
+}
+
 static inline int getcwd(char *buf, int size) {
     return __syscall(SYS_GETCWD, (int)buf, size, 0);
 }
@@ -522,6 +530,9 @@ static inline int pty_set_fg(int h, unsigned int pid) {
 static inline int pty_avail(int h) {
     return __syscall(SYS_PTY_AVAIL, h, 0, 0);
 }
+static inline int pty_set_winsize(int h, unsigned int cols, unsigned int rows) {
+    return __syscall(SYS_PTY_SET_WINSIZE, h, (int)cols, (int)rows);
+}
 static inline int fd_avail(int fd) {
     return __syscall(SYS_FD_AVAIL, fd, 0, 0);
 }
@@ -550,6 +561,13 @@ static inline int net_set_dns(unsigned int dns) {
 
 static inline unsigned int net_get_dns(void) {
     return (unsigned int)__syscall(SYS_NET_GET_DNS, 0, 0, 0);
+}
+
+static inline int term_set_raw(int raw) {
+    return __syscall(SYS_TERM_SET_RAW, raw, 0, 0);
+}
+static inline int term_get_winsize(unsigned int *out) {
+    return __syscall(SYS_TERM_GET_WINSIZE, (int)out, 0, 0);
 }
 
 #endif

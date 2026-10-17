@@ -40,6 +40,7 @@
 #define SYS_FS_RMDIR      41
 #define SYS_FS_RENAME     42
 #define SYS_FS_FSTAT      43
+#define SYS_FS_TRUNCATE   44
 
 /* ========== 设备 (51~59) ========== */
 #define SYS_DEV_OPEN      51
@@ -96,6 +97,9 @@
 #define SYS_PTY_SET_FG  144
 #define SYS_PTY_AVAIL   145
 #define SYS_FD_AVAIL    146
+#define SYS_PTY_SET_WINSIZE 147
+#define SYS_TERM_SET_RAW    148
+#define SYS_TERM_GET_WINSIZE 149
 
 /* ========== 网络配置 (150~159) ========== */
 #define SYS_NET_SET_IF   150

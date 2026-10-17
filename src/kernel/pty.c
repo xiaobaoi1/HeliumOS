@@ -21,6 +21,10 @@ struct pty_pair {
     char     line_buf[PTY_LINE_MAX];
     int      line_len;
 
+    uint16_t cols;
+    uint16_t rows;
+    uint8_t  raw;
+
     struct task *wait_master;
     struct task *wait_slave;
     struct task *wait_slave_write;
@@ -241,6 +245,18 @@ int pty_read_slave(struct pty_pair *p, uint8_t *buf, uint32_t n) {
 
 static int pty_write_master(struct pty_pair *p, const uint8_t *buf, uint32_t n) {
     if (!p || !buf || n == 0) return 0;
+
+    if (p->raw) {
+        for (uint32_t i = 0; i < n; i++) {
+            if (buf_count(p->ts_head, p->ts_tail) >= PTY_BUF_SIZE - 1)
+                break;
+            p->to_slave[p->ts_head] = buf[i];
+            p->ts_head = (p->ts_head + 1) % PTY_BUF_SIZE;
+        }
+        wake_slave(p);
+        return (int)n;
+    }
+
     for (uint32_t i = 0; i < n; i++) {
         line_discipline(p, buf[i]);
     }
@@ -461,4 +477,52 @@ int sys_pty_avail(int h) {
         return (int)buf_count(p->tm_head, p->tm_tail);
     else
         return (int)buf_count(p->ts_head, p->ts_tail);
+}
+
+int sys_pty_set_winsize(int h, uint16_t cols, uint16_t rows) {
+    struct task *cur = get_current_task();
+    if (!cur) return EINVAL;
+    if (h < 0 || h >= PTY_MAX_HANDLES) return EINVAL;
+    if (!cur->pty_handles[h].used) return EINVAL;
+    struct pty_pair *p = cur->pty_handles[h].pair;
+    if (!p) return EINVAL;
+    p->cols = cols;
+    p->rows = rows;
+    return OK;
+}
+
+int sys_term_set_raw(int raw) {
+    struct task *cur = get_current_task();
+    if (!cur) return EINVAL;
+    struct io_slot *slot = &cur->stdout_slot;
+    if (slot->type != IO_SLOT_PTY_MASTER &&
+        slot->type != IO_SLOT_PTY_SLAVE)
+        return EINVAL;
+    int h = slot->fd;
+    if (h < 0 || h >= PTY_MAX_HANDLES) return EINVAL;
+    if (!cur->pty_handles[h].used) return EINVAL;
+    struct pty_pair *p = cur->pty_handles[h].pair;
+    if (!p) return EINVAL;
+    p->raw = raw ? 1 : 0;
+    return OK;
+}
+
+int sys_term_get_winsize(uint32_t *user_out) {
+    struct task *cur = get_current_task();
+    if (!cur || !user_out) return EINVAL;
+    if (check_user_range((uint32_t)user_out, 8) < 0) return EFAULT;
+
+    struct io_slot *slot = &cur->stdout_slot;
+    if (slot->type != IO_SLOT_PTY_MASTER &&
+        slot->type != IO_SLOT_PTY_SLAVE)
+        return EINVAL;
+    int h = slot->fd;
+    if (h < 0 || h >= PTY_MAX_HANDLES) return EINVAL;
+    if (!cur->pty_handles[h].used) return EINVAL;
+    struct pty_pair *p = cur->pty_handles[h].pair;
+    if (!p) return EINVAL;
+
+    uint32_t out[2] = { p->cols, p->rows };
+    if (copy_to_user((uint32_t)user_out, out, 8) < 0) return EFAULT;
+    return OK;
 }

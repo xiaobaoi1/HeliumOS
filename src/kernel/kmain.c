@@ -121,6 +121,21 @@ void create_dhcp_task(struct fat32_volume *vol) {
     }
 }
 
+void create_desktop_task(struct fat32_volume *vol) {
+    struct fb_info *fb = fb_get();
+    char env_w[32], env_h[32];
+    snprintf(env_w, sizeof(env_w), "SCREEN_W=%u", fb ? fb->width : 1024);
+    snprintf(env_h, sizeof(env_h), "SCREEN_H=%u", fb ? fb->height : 768);
+    char *desk_env[] = { env_w, env_h, NULL };
+    struct task *desk = create_task_from_elf(
+        vol, "/DESKTOP", 2, desk_env, CLASS_USER, 0);
+    if (desk) {
+        kprintf("[DESKTOP] task created (pid=%d)\n", desk->pid);
+    } else {
+        kprintf("[DESKTOP] failed to create\n");
+    }
+}
+
 
 
 void kmain(uint32_t magic, uint32_t addr) {
@@ -224,6 +239,8 @@ void kmain(uint32_t magic, uint32_t addr) {
     create_wm_task(sys_vol);
 
     create_dhcp_task(sys_vol);
+    
+    create_desktop_task(sys_vol);
 
     kprintf("[KERNEL] Processes created. Starting scheduler...\n");
 

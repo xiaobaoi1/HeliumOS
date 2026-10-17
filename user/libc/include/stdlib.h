@@ -36,4 +36,7 @@ long  labs(long x);
 void  srand(unsigned int seed);
 int   rand(void);
 
+/* 注册退出时调用的函数。返回 0 成功，非零失败。 */
+int atexit(void (*fn)(void));
+
 #endif

@@ -108,3 +108,10 @@ char *strstr(const char *haystack, const char *needle) {
     }
     return NULL;
 }
+
+char *strdup(const char *s) {
+    size_t n = strlen(s) + 1;
+    char *p = (char*)malloc(n);
+    if (p) memcpy(p, s, n);
+    return p;
+}

@@ -85,10 +85,10 @@ int  fs_fstat(fd_t fd, struct fstat_buf *out);
 fd_t fs_opendir(const char *path);
 int  fs_readdir(fd_t fd, struct dirent *out);
 int  fs_closedir(fd_t fd);
-int fs_unlink(const char *path);
-int fs_mkdir(const char *path);
-int fs_rmdir(const char *path);
-int fs_rename(const char *old_path, const char *new_path);
+int  fs_unlink(const char *path);
+int  fs_mkdir(const char *path);
+int  fs_rmdir(const char *path);
+int  fs_rename(const char *old_path, const char *new_path);
 
 /* ---------- cwd ---------- */
 int  fs_chdir(const char *path);
@@ -97,5 +97,6 @@ int  fs_getcwd(char *buf, int size);
 /* 把 src_task 的 fs_handles[src_fd] 复制到 dst_task 的空闲槽。
  * 返回 dst_task 里的新 fd；失败返回 FD_INVALID。 */
 fd_t fs_dup_handle(struct task *src_task, fd_t src_fd, struct task *dst_task);
+int  fs_truncate(fd_t fd);
 
 #endif

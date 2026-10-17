@@ -15,6 +15,8 @@
 #include "shm_layout.h"
 #include <stdint.h>
 
+static int g_master = -1;
+
 #define FONT_H   16         /* 所有字形高度 */
 #define CELL_W   8          /* 每列像素宽度（字形可为 8 或 16 宽，占 1 或 2 列） */
 #define MAX_CP   0x10000    /* BMP 码点范围 */
@@ -136,6 +138,11 @@ static void load_font(void) {
 static int g_cw, g_ch;
 static int g_cols, g_rows;
 static int g_cx = 0, g_cy = 0;
+static int g_pending_wrap = 0;
+static int g_cursor_visible = 1;
+static int g_cursor_drawn = 0;
+static int g_cursor_drawn_x = 0, g_cursor_drawn_y = 0;
+static uint32_t g_cursor_save[CELL_W * FONT_H];
 static unsigned int *g_pixels;
 static struct shm_hdr *g_shm = NULL;
 
@@ -221,6 +228,7 @@ static void draw_char_at(int px, int py, uint32_t cp,
 }
 
 static void scroll(void) {
+    g_cursor_drawn = 0;
     for (int y = 0; y < g_ch - FONT_H; y++) {
         unsigned int *dst = g_pixels + y * g_cw;
         unsigned int *src = g_pixels + (y + FONT_H) * g_cw;
@@ -238,6 +246,7 @@ static void scroll(void) {
 }
 
 static void newline(void) {
+    g_pending_wrap = 0;
     g_cx = 0;
     g_cy++;
     while (g_cy >= g_rows) { scroll(); g_cy--; }
@@ -245,9 +254,18 @@ static void newline(void) {
 
 /* 渲染一个 Unicode 码点（含控制字符处理、宽度、自动换行、滚动） */
 static void render_cp(uint32_t cp) {
-    if (cp == '\n') { newline(); return; }
-    if (cp == '\r') { g_cx = 0; return; }
+    if (cp == '\n') {
+        g_pending_wrap = 0;
+        newline();
+        return;
+    }
+    if (cp == '\r') {
+        g_cx = 0;
+        g_pending_wrap = 0;
+        return;
+    }
     if (cp == '\b') {
+        g_pending_wrap = 0;
         if (g_cx > 0) {
             g_cx--;
             draw_char_at(g_cx * CELL_W, g_cy * FONT_H, ' ', g_fg, g_bg);
@@ -255,6 +273,7 @@ static void render_cp(uint32_t cp) {
         return;
     }
     if (cp == '\t') {
+        g_pending_wrap = 0;
         int target = (g_cx / 8 + 1) * 8;
         while (g_cx < target) {
             if (g_cx >= g_cols) newline();
@@ -264,6 +283,12 @@ static void render_cp(uint32_t cp) {
         return;
     }
     if (cp < 0x20) return;
+
+    /* 可打印字符到来时才处理 deferred wrap */
+    if (g_pending_wrap) {
+        newline();
+        g_pending_wrap = 0;
+    }
 
     int width = 8;
     uint32_t to_draw = cp;
@@ -281,7 +306,72 @@ static void render_cp(uint32_t cp) {
 
     draw_char_at(g_cx * CELL_W, g_cy * FONT_H, to_draw, g_fg, g_bg);
     g_cx += cells;
-    if (g_cx >= g_cols) newline();
+    if (g_cx >= g_cols) {
+        g_cx = g_cols - 1;
+        g_pending_wrap = 1;
+    }
+}
+
+static void cursor_restore(void) {
+    if (!g_cursor_drawn || !g_shm) return;
+    int px = g_cursor_drawn_x * CELL_W;
+    int py = g_cursor_drawn_y * FONT_H;
+    if (py + FONT_H > g_ch) { g_cursor_drawn = 0; return; }
+
+    for (int r = 0; r < FONT_H; r++) {
+        for (int c = 0; c < CELL_W; c++) {
+            int x = px + c;
+            int y = py + r;
+            if (x < g_cw && y < g_ch)
+                g_pixels[y * g_cw + x] = g_cursor_save[r * CELL_W + c];
+        }
+    }
+
+    if (g_shm->cur_x1 <= g_shm->cur_x0 || g_shm->cur_x0 == SHM_DIRTY_EMPTY) {
+        g_shm->cur_x0 = px; g_shm->cur_y0 = py;
+        g_shm->cur_x1 = px + CELL_W; g_shm->cur_y1 = py + FONT_H;
+    } else {
+        if (px < (int)g_shm->cur_x0) g_shm->cur_x0 = px;
+        if (py < (int)g_shm->cur_y0) g_shm->cur_y0 = py;
+        if (px + CELL_W > (int)g_shm->cur_x1) g_shm->cur_x1 = px + CELL_W;
+        if (py + FONT_H > (int)g_shm->cur_y1) g_shm->cur_y1 = py + FONT_H;
+    }
+    g_cursor_drawn = 0;
+}
+
+static void cursor_draw(void) {
+    if (!g_cursor_visible || !g_shm) return;
+
+    int px = g_cx * CELL_W;
+    int py = g_cy * FONT_H;
+    if (py + FONT_H > g_ch) return;
+
+    for (int r = 0; r < FONT_H; r++) {
+        for (int c = 0; c < CELL_W; c++) {
+            int x = px + c;
+            int y = py + r;
+            if (x < g_cw && y < g_ch)
+                g_cursor_save[r * CELL_W + c] = g_pixels[y * g_cw + x];
+        }
+    }
+    g_cursor_drawn_x = g_cx;
+    g_cursor_drawn_y = g_cy;
+    g_cursor_drawn = 1;
+
+    for (int i = 0; i < CELL_W; i++) {
+        g_pixels[(py + FONT_H - 1) * g_cw + px + i] = 0xFFFFFF;
+        g_pixels[(py + FONT_H - 2) * g_cw + px + i] = 0xFFFFFF;
+    }
+
+    if (g_shm->cur_x1 <= g_shm->cur_x0 || g_shm->cur_x0 == SHM_DIRTY_EMPTY) {
+        g_shm->cur_x0 = px; g_shm->cur_y0 = py + FONT_H - 2;
+        g_shm->cur_x1 = px + CELL_W; g_shm->cur_y1 = py + FONT_H;
+    } else {
+        if (px < (int)g_shm->cur_x0) g_shm->cur_x0 = px;
+        if (py + FONT_H - 2 < (int)g_shm->cur_y0) g_shm->cur_y0 = py + FONT_H - 2;
+        if (px + CELL_W > (int)g_shm->cur_x1) g_shm->cur_x1 = px + CELL_W;
+        if (py + FONT_H > (int)g_shm->cur_y1) g_shm->cur_y1 = py + FONT_H;
+    }
 }
 
 // ANSI
@@ -303,6 +393,8 @@ static void ansi_sgr(void) {
     for (int i = 0; i < ansi_np; i++) {
         int p = ansi_params[i];
         if (p == 0)                       { g_fg = 0xCCCCCC; g_bg = 0x000000; }
+        else if (p == 39)                 { g_fg = 0xCCCCCC; }
+        else if (p == 49)                 { g_bg = 0x000000; }
         else if (p == 1)                  { /* bold：暂忽略 */ }
         else if (p == 7)                  { uint32_t t = g_fg; g_fg = g_bg; g_bg = t; }
         else if (p >= 30 && p <= 37)      g_fg = ansi_palette[p - 30];
@@ -337,7 +429,10 @@ static void ansi_set_cursor(int row, int col) {
     if (col > g_cols) col = g_cols;
     g_cy = row - 1;
     g_cx = col - 1;
+    g_pending_wrap = 0;
 }
+
+static void cursor_restore(void);
 
 static void ansi_handle_final(char final) {
     if (ansi_cur >= 0) ansi_push_param();
@@ -385,6 +480,15 @@ static void ansi_handle_final(char final) {
             g_cx -= n; if (g_cx < 0) g_cx = 0;
             break;
         }
+        case 'h':
+            if (ansi_np > 0 && ansi_params[0] == 25) g_cursor_visible = 1;
+            break;
+        case 'l':
+            if (ansi_np > 0 && ansi_params[0] == 25) {
+                if (g_cursor_drawn) cursor_restore();
+                g_cursor_visible = 0;
+            }
+            break;
         default: break;
     }
 }
@@ -537,6 +641,9 @@ static int term_resize(int new_w, int new_h) {
 
     strncpy(g_my_shm_name, new_shm, sizeof(g_my_shm_name) - 1);
 
+    dprintf(2, "term: cols=%d rows=%d ch=%d\n", g_cols, g_rows, g_ch);
+    pty_set_winsize(g_master, g_cols, g_rows);
+
     return 0;
 }
 
@@ -597,7 +704,7 @@ int main(int argc, char **argv) {
     /* pty + spawn shell */
     int fds[2];
     if (pty_open(fds) < 0) return 1;
-    int master = fds[0];
+    g_master = fds[0];
     int slave  = fds[1];
 
     struct spawn_params sp = {
@@ -610,23 +717,35 @@ int main(int argc, char **argv) {
         .flags = 0, .envp = 0, .out_pid = 0,
     };
     int sh = spawn("SHELL", NULL, &sp);
+    dprintf(2, "term: cols=%d rows=%d ch=%d\n", g_cols, g_rows, g_ch);
+    pty_set_winsize(g_master, g_cols, g_rows);
     if (sh < 0) { dprintf(2, "term: spawn SHELL %d\n", sh); return 1; }
-    pty_set_fg(master, sp.out_pid);
+    pty_set_fg(g_master, sp.out_pid);
 
     for (;;) {
-        if (pipe_avail(ev_rd) > 0) {
-            char kbuf[64];
-            int kn = pipe_read(ev_rd, kbuf, sizeof(kbuf));
-            if (kn > 0) pty_write(master, kbuf, kn);
+        while (pipe_avail(ev_rd) >= (int)sizeof(struct wm_event)) {
+            struct wm_event ev;
+            int n = pipe_read(ev_rd, &ev, sizeof(ev));
+            if (n != sizeof(ev)) break;
+            if (ev.type == WM_EV_KEY) {
+                char c = (char)ev.code;
+                pty_write(g_master, &c, 1);
+            }
+            /* 其他事件（鼠标/关闭）忽略 */
         }
 
-        if (pty_avail(master) > 0) {
+        if (pty_avail(g_master) > 0) {
+            /* 先恢复旧光标，避免渲染覆盖后旧下划线残留 */
+            cursor_restore();
+
             char buf[256];
-            int n = pty_read(master, buf, sizeof(buf));
+            int n = pty_read(g_master, buf, sizeof(buf));
             if (n > 0) {
                 for (int i = 0; i < n; i++)
                     process_byte((unsigned char)buf[i]);
             }
+
+            cursor_draw();
         }
 
         /* 每轮都检查：pub 空 + cur 非空 → 发布。

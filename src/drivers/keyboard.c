@@ -59,7 +59,7 @@ static char scancode_to_ascii(uint8_t scancode) {
         [0x10] = 'q', [0x11] = 'w', [0x12] = 'e', [0x13] = 'r', [0x14] = 't',
         [0x15] = 'y', [0x16] = 'u', [0x17] = 'i', [0x18] = 'o', [0x19] = 'p',
         [0x1A] = '[', [0x1B] = ']',
-        [0x1C] = '\n',
+        [0x1C] = '\r',
         [0x1E] = 'a', [0x1F] = 's', [0x20] = 'd', [0x21] = 'f', [0x22] = 'g',
         [0x23] = 'h', [0x24] = 'j', [0x25] = 'k', [0x26] = 'l', [0x27] = ';',
         [0x28] = '\'', [0x29] = '`',
@@ -100,22 +100,52 @@ static char scancode_to_ascii(uint8_t scancode) {
 
     int use_upper = is_letter ? (shift_pressed ^ caps_lock) : shift_pressed;
 
-    return use_upper ? shifted[scancode] : normal[scancode];
+    char base = use_upper ? shifted[scancode] : normal[scancode];
+
+    /* Ctrl + 字母 → 控制字符（Ctrl+A=0x01 ... Ctrl+Z=0x1A）。
+     * Ctrl+C 已在上面单独处理（返回 0），不会走到这里。 */
+    if (ctrl_pressed && base >= 'a' && base <= 'z') {
+        return (char)(base - 'a' + 1);
+    }
+
+    return base;
 }
 
 void keyboard_handle_irq(void) {
     uint8_t scancode = inb(KEYBOARD_DATA_PORT);
     char c = scancode_to_ascii(scancode);
-    if (!c) return;
+    if (c) {
+        struct input_event ev = {
+            .type = INPUT_KEY,
+            .code = (uint32_t)(unsigned char)c,
+            .x = 0, .y = 0,
+        };
+        input_post(&ev);
+        return;
+    }
 
-    struct input_event ev = {
-        .type = INPUT_KEY,
-        .code = (uint32_t)(unsigned char)c,
-        .x = 0, .y = 0,
-    };
-    input_post(&ev);
+    /* 方向键 → VT100 ESC 序列。kilo 的 editorReadKey 依赖这个。 */
+    const char *seq = 0;
+    switch (scancode) {
+        case 0x48: seq = "\x1b[A"; break;   /* 上 */
+        case 0x50: seq = "\x1b[B"; break;   /* 下 */
+        case 0x4D: seq = "\x1b[C"; break;   /* 右 */
+        case 0x4B: seq = "\x1b[D"; break;   /* 左 */
+        case 0x47: seq = "\x1b[H"; break;   /* Home */
+        case 0x4F: seq = "\x1b[F"; break;   /* End */
+        case 0x53: seq = "\x1b[3~"; break;  /* Delete */
+    }
+    if (seq) {
+        for (int i = 0; seq[i]; i++) {
+            struct input_event ev = {
+                .type = INPUT_KEY,
+                .code = (uint32_t)(unsigned char)seq[i],
+                .x = 0, .y = 0,
+            };
+            input_post(&ev);
+        }
+    }
 }
-
 /* ---------- device_ops 实现 ---------- */
 static int kb_dev_open(void **state, void *arg) {
     (void)arg;

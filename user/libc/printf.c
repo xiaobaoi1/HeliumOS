@@ -149,6 +149,16 @@ static void vformat(putc_fn putc, void *ctx, const char *fmt, va_list ap) {
             fmt++;
         }
 
+        int precision = -1;
+        if (*fmt == '.') {
+            fmt++;
+            precision = 0;
+            while (*fmt >= '0' && *fmt <= '9') {
+                precision = precision * 10 + (*fmt - '0');
+                fmt++;
+            }
+        }
+
         int is_long = 0;
         if (*fmt == 'l') { is_long = 1; fmt++; }
 
@@ -194,9 +204,10 @@ static void vformat(putc_fn putc, void *ctx, const char *fmt, va_list ap) {
                 if (!s) s = "(null)";
                 int len = 0;
                 for (const char *p = s; *p; p++) len++;
+                if (precision >= 0 && len > precision) len = precision;
                 int pad = (width > len) ? width - len : 0;
                 if (!left_align) for (int i = 0; i < pad; i++) putc(' ', ctx);
-                while (*s) putc(*s++, ctx);
+                for (int i = 0; i < len; i++) putc(s[i], ctx);
                 if (left_align)  for (int i = 0; i < pad; i++) putc(' ', ctx);
                 break;
             }

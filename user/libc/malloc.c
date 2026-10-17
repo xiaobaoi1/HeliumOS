@@ -129,6 +129,9 @@ void *realloc(void *ptr, size_t new_size) {
     return np;
 }
 
+extern void __libc_run_atexit(void);
+
 void exit(int status) {
+    __libc_run_atexit();
     _exit(status);
 }
