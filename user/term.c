@@ -163,6 +163,30 @@ static int ansi_params[8];
 static int ansi_np = 0;
 static int ansi_cur = -1;         /* 当前累积参数，-1=空 */
 
+
+static void mark_dirty(int x0, int y0, int x1, int y1) {
+    if (!g_shm) return;
+    if (x1 <= x0 || y1 <= y0) return;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > g_cw) x1 = g_cw;
+    if (y1 > g_ch) y1 = g_ch;
+    if (x1 <= x0 || y1 <= y0) return;
+
+    uint32_t ux0 = (uint32_t)x0, uy0 = (uint32_t)y0;
+    uint32_t ux1 = (uint32_t)x1, uy1 = (uint32_t)y1;
+
+    if (g_shm->cur_x1 <= g_shm->cur_x0 || g_shm->cur_x0 == SHM_DIRTY_EMPTY) {
+        g_shm->cur_x0 = ux0; g_shm->cur_y0 = uy0;
+        g_shm->cur_x1 = ux1; g_shm->cur_y1 = uy1;
+    } else {
+        if (ux0 < g_shm->cur_x0) g_shm->cur_x0 = ux0;
+        if (uy0 < g_shm->cur_y0) g_shm->cur_y0 = uy0;
+        if (ux1 > g_shm->cur_x1) g_shm->cur_x1 = ux1;
+        if (uy1 > g_shm->cur_y1) g_shm->cur_y1 = uy1;
+    }
+}
+
 static void put_pixel(int x, int y, unsigned int rgb) {
     if (x < 0 || y < 0 || x >= g_cw || y >= g_ch) return;
     g_pixels[y * g_cw + x] = rgb;
@@ -172,6 +196,7 @@ static void fill_rect(int x, int y, int w, int h, unsigned int rgb) {
     for (int j = 0; j < h; j++)
         for (int i = 0; i < w; i++)
             put_pixel(x + i, y + j, rgb);
+    mark_dirty(x, y, x + w, y + h);
 }
 
 /* 在像素坐标处渲染单个码点。宽度从 g_glyph_width 查。 */
@@ -183,25 +208,6 @@ static void draw_char_at(int px, int py, uint32_t cp,
     if (g_glyph_ptr && g_glyph_width && cp < MAX_CP) {
         g = g_glyph_ptr[cp];
         if (g && g_glyph_width[cp]) width = g_glyph_width[cp];
-    }
-
-    /* 脏区标记——放在 fill_rect 之前，覆盖整个字符格 */
-    if (g_shm) {
-        uint32_t x0 = px;
-        uint32_t y0 = py;
-        uint32_t x1 = px + width;
-        uint32_t y1 = py + FONT_H;
-        if (g_shm->cur_x1 <= g_shm->cur_x0 || g_shm->cur_x0 == SHM_DIRTY_EMPTY) {
-            g_shm->cur_x0 = x0;
-            g_shm->cur_y0 = y0;
-            g_shm->cur_x1 = x1;
-            g_shm->cur_y1 = y1;
-        } else {
-            if (x0 < g_shm->cur_x0) g_shm->cur_x0 = x0;
-            if (y0 < g_shm->cur_y0) g_shm->cur_y0 = y0;
-            if (x1 > g_shm->cur_x1) g_shm->cur_x1 = x1;
-            if (y1 > g_shm->cur_y1) g_shm->cur_y1 = y1;
-        }
     }
 
     fill_rect(px, py, width, FONT_H, bg);
@@ -235,14 +241,7 @@ static void scroll(void) {
         memcpy(dst, src, g_cw * 4);
     }
     fill_rect(0, g_ch - FONT_H, g_cw, FONT_H, g_bg);
-
-    /* 整屏变化 */
-    if (g_shm) {
-        g_shm->cur_x0 = 0;
-        g_shm->cur_y0 = 0;
-        g_shm->cur_x1 = g_cw;
-        g_shm->cur_y1 = g_ch;
-    }
+    mark_dirty(0, 0, g_cw, g_ch);
 }
 
 static void newline(void) {
@@ -327,15 +326,7 @@ static void cursor_restore(void) {
         }
     }
 
-    if (g_shm->cur_x1 <= g_shm->cur_x0 || g_shm->cur_x0 == SHM_DIRTY_EMPTY) {
-        g_shm->cur_x0 = px; g_shm->cur_y0 = py;
-        g_shm->cur_x1 = px + CELL_W; g_shm->cur_y1 = py + FONT_H;
-    } else {
-        if (px < (int)g_shm->cur_x0) g_shm->cur_x0 = px;
-        if (py < (int)g_shm->cur_y0) g_shm->cur_y0 = py;
-        if (px + CELL_W > (int)g_shm->cur_x1) g_shm->cur_x1 = px + CELL_W;
-        if (py + FONT_H > (int)g_shm->cur_y1) g_shm->cur_y1 = py + FONT_H;
-    }
+    mark_dirty(px, py, px + CELL_W, py + FONT_H);
     g_cursor_drawn = 0;
 }
 
@@ -363,15 +354,7 @@ static void cursor_draw(void) {
         g_pixels[(py + FONT_H - 2) * g_cw + px + i] = 0xFFFFFF;
     }
 
-    if (g_shm->cur_x1 <= g_shm->cur_x0 || g_shm->cur_x0 == SHM_DIRTY_EMPTY) {
-        g_shm->cur_x0 = px; g_shm->cur_y0 = py + FONT_H - 2;
-        g_shm->cur_x1 = px + CELL_W; g_shm->cur_y1 = py + FONT_H;
-    } else {
-        if (px < (int)g_shm->cur_x0) g_shm->cur_x0 = px;
-        if (py + FONT_H - 2 < (int)g_shm->cur_y0) g_shm->cur_y0 = py + FONT_H - 2;
-        if (px + CELL_W > (int)g_shm->cur_x1) g_shm->cur_x1 = px + CELL_W;
-        if (py + FONT_H > (int)g_shm->cur_y1) g_shm->cur_y1 = py + FONT_H;
-    }
+    mark_dirty(px, py + FONT_H - 2, px + CELL_W, py + FONT_H);
 }
 
 // ANSI
