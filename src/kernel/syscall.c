@@ -25,6 +25,7 @@
 #include <display.h>
 #include <input.h>
 #include <pty.h>
+#include <net_proto.h>
 
 #define PROT_READ   0x01
 #define PROT_WRITE  0x02
@@ -698,6 +699,48 @@ static int sys_input_claim(void) {
     return OK;
 }
 
+/* ---------- 网络配置 ---------- */
+
+struct net_if_info {
+    uint32_t ip, mask, gw, broadcast;
+    uint8_t  mac[6];
+    uint8_t  reserved[2];
+};
+
+static int sys_net_set_if(uint32_t ip, uint32_t mask, uint32_t gw) {
+    struct task *cur = get_current_task();
+    if (!cur) return EINVAL;
+    net_set_if(ip, mask, gw);
+    return OK;
+}
+
+static int sys_net_get_if(struct net_if_info *out) {
+    if (!out) return EINVAL;
+    if (check_user_range((uint32_t)out, sizeof(struct net_if_info)) < 0)
+        return EFAULT;
+
+    struct net_if_info info;
+    info.ip = net_get_ip();
+    info.mask = net_get_mask();
+    info.gw = net_get_gw();
+    info.broadcast = info.ip | ~info.mask;
+
+    const uint8_t *mac = net_local_mac();
+    memcpy(info.mac, mac, 6);
+    info.reserved[0] = info.reserved[1] = 0;
+
+    if (copy_to_user((uint32_t)out, &info, sizeof(info)) < 0)
+        return EFAULT;
+    return OK;
+}
+
+static int sys_net_set_dns(uint32_t dns) {
+    struct task *cur = get_current_task();
+    if (!cur) return EINVAL;
+    net_set_dns(dns);
+    return OK;
+}
+
 #define FB_USER_BASE  0xB0000000u
 
 static int sys_fb_map(struct fb_user_info *user_buf) {
@@ -1120,6 +1163,20 @@ void syscall_handler(struct registers *regs) {
             break;
         case SYS_FD_AVAIL:
             ret = sys_fd_avail((int)arg1);
+            break;
+        
+
+        case SYS_NET_SET_IF:
+            ret = sys_net_set_if(arg1, arg2, arg3);
+            break;
+        case SYS_NET_GET_IF:
+            ret = sys_net_get_if((struct net_if_info*)arg1);
+            break;
+        case SYS_NET_SET_DNS:
+            ret = sys_net_set_dns(arg1);
+            break;
+        case SYS_NET_GET_DNS:
+            ret = (int)net_get_dns();
             break;
 
 

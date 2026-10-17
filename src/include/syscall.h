@@ -97,6 +97,12 @@
 #define SYS_PTY_AVAIL   145
 #define SYS_FD_AVAIL    146
 
+/* ========== 网络配置 (150~159) ========== */
+#define SYS_NET_SET_IF   150
+#define SYS_NET_GET_IF   151
+#define SYS_NET_SET_DNS  152
+#define SYS_NET_GET_DNS  153
+
 
 
 

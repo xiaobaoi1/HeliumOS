@@ -53,3 +53,9 @@ char *strncpy(char *dest, const char *src, size_t n) {
     for (; i < n; i++) dest[i] = '\0';
     return dest;
 }
+
+int strncmp(const char *a, const char *b, size_t n) {
+    while (n && *a && (*a == *b)) { a++; b++; n--; }
+    if (n == 0) return 0;
+    return (unsigned char)*a - (unsigned char)*b;
+}

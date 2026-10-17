@@ -14,6 +14,7 @@ static uint32_t g_ip       = 0;   /* 网络字节序 */
 static uint32_t g_netmask  = 0;
 static uint32_t g_gateway  = 0;
 static uint32_t g_broadcast = 0;
+static uint32_t g_dns = 0;
 
 /* ---------- ARP 缓存 ---------- */
 
@@ -341,6 +342,7 @@ void net_proto_init(void) {
     g_netmask   = htonl(NET_IP_NETMASK_HOST);
     g_gateway   = htonl(NET_IP_GATEWAY_HOST);
     g_broadcast = htonl(NET_IP_BROADCAST_HOST);
+    g_dns       = htonl(NET_IP_DNS_HOST);
 
     /* 从 net 子系统获取本机 MAC（由驱动注册） */
     struct net_device *nd = net_get("eth0");
@@ -351,4 +353,85 @@ void net_proto_init(void) {
 
 void net_proto_rx(const uint8_t *frame, uint32_t len) {
     net_eth_rx(frame, len);
+}
+
+/* ---------- 运行时配置 ---------- */
+
+void net_set_if(uint32_t ip_be, uint32_t mask_be, uint32_t gw_be) {
+    if (ip_be)   g_ip = ip_be;
+    if (mask_be) g_netmask = mask_be;
+    if (gw_be)   g_gateway = gw_be;
+    if (g_ip && g_netmask) {
+        g_broadcast = g_ip | ~g_netmask;
+    }
+}
+
+void net_set_dns(uint32_t dns_be) {
+    if (dns_be) g_dns = dns_be;
+}
+
+uint32_t net_get_ip(void)   { return g_ip; }
+uint32_t net_get_mask(void) { return g_netmask; }
+uint32_t net_get_gw(void)   { return g_gateway; }
+uint32_t net_get_dns(void)  { return g_dns; }
+
+/* ---------- cmdline 解析 ---------- */
+
+static int parse_ip_be(const char *s, uint32_t *out, const char **out_end) {
+    uint32_t parts[4];
+    int n = 0;
+    const char *p = s;
+
+    if (!s || !out || !out_end) return -1;
+    *out_end = s;
+
+    while (n < 4) {
+        if (*p < '0' || *p > '9') return -1;
+        uint32_t v = 0;
+        while (*p >= '0' && *p <= '9') {
+            v = v * 10 + (uint32_t)(*p - '0');
+            if (v > 255) return -1;
+            p++;
+        }
+        parts[n++] = v;
+        if (n < 4) {
+            if (*p != '.') return -1;
+            p++;
+        }
+    }
+    uint32_t host = (parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3];
+    *out = htonl(host);
+    *out_end = p;
+    return 0;
+}
+
+void net_parse_cmdline(const char *cmdline) {
+    if (!cmdline) return;
+    const char *p = cmdline;
+
+    while (*p) {
+        while (*p == ' ' || *p == '\t') p++;
+        if (!*p) break;
+
+        if (strncmp(p, "ip=", 3) == 0) {
+            uint32_t v; const char *next = p + 3;
+            if (parse_ip_be(p + 3, &v, &next) == 0) g_ip = v;
+            p = next;
+        } else if (strncmp(p, "mask=", 5) == 0) {
+            uint32_t v; const char *next = p + 5;
+            if (parse_ip_be(p + 5, &v, &next) == 0) g_netmask = v;
+            p = next;
+        } else if (strncmp(p, "gw=", 3) == 0) {
+            uint32_t v; const char *next = p + 3;
+            if (parse_ip_be(p + 3, &v, &next) == 0) g_gateway = v;
+            p = next;
+        } else if (strncmp(p, "dns=", 4) == 0) {
+            uint32_t v; const char *next = p + 4;
+            if (parse_ip_be(p + 4, &v, &next) == 0) g_dns = v;
+            p = next;
+        } else {
+            while (*p && *p != ' ' && *p != '\t') p++;
+        }
+    }
+    if (g_ip && g_netmask) g_broadcast = g_ip | ~g_netmask;
 }

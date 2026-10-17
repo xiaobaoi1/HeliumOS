@@ -98,6 +98,11 @@
 #define SYS_PTY_AVAIL   145
 #define SYS_FD_AVAIL    146
 
+#define SYS_NET_SET_IF   150
+#define SYS_NET_GET_IF   151
+#define SYS_NET_SET_DNS  152
+#define SYS_NET_GET_DNS  153
+
 
 
 
@@ -519,6 +524,32 @@ static inline int pty_avail(int h) {
 }
 static inline int fd_avail(int fd) {
     return __syscall(SYS_FD_AVAIL, fd, 0, 0);
+}
+
+
+struct net_if_info {
+    unsigned int  ip;
+    unsigned int  mask;
+    unsigned int  gw;
+    unsigned int  broadcast;
+    unsigned char mac[6];
+    unsigned char reserved[2];
+};
+
+static inline int net_set_if(unsigned int ip, unsigned int mask, unsigned int gw) {
+    return __syscall(SYS_NET_SET_IF, (int)ip, (int)mask, (int)gw);
+}
+
+static inline int net_get_if(struct net_if_info *out) {
+    return __syscall(SYS_NET_GET_IF, (int)out, 0, 0);
+}
+
+static inline int net_set_dns(unsigned int dns) {
+    return __syscall(SYS_NET_SET_DNS, (int)dns, 0, 0);
+}
+
+static inline unsigned int net_get_dns(void) {
+    return (unsigned int)__syscall(SYS_NET_GET_DNS, 0, 0, 0);
 }
 
 #endif

@@ -3,6 +3,7 @@
 #include "string.h"
 #include "signal.h"
 #include "stdlib.h"
+#include <arpa/inet.h>
 
 /* VGA 颜色常量（用户态独立定义） */
 #define VGA_BLACK        0
@@ -87,6 +88,8 @@ static void cmd_help(void) {
     printf("  reboot       restart\n");
     printf("  ps           list processes\n");
     printf("  uname        system information\n");
+    printf("  ifconfig [ip mask gw]  show or set network\n");
+    printf("  dns [ip]               show or set DNS\n");
     printf("  kill <pid>   send SIGTERM to process\n");
     printf("  sink <prog>  run program with stdout discarded\n");
     printf("  <prog>       run program\n");
@@ -274,6 +277,69 @@ static void cmd_cp(int argc, char **argv) {
         printf("cp: error %d\n", err);
         set_color(VGA_LIGHT_GRAY, VGA_BLACK);
     }
+}
+
+static void cmd_ifconfig(int argc, char **argv) {
+    if (argc == 1) {
+        struct net_if_info info;
+        if (net_get_if(&info) < 0) {
+            set_color(VGA_LIGHT_RED, VGA_BLACK);
+            printf("ifconfig: read failed\n");
+            set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+            return;
+        }
+        printf("eth0  inet %s\n", inet_ntoa(info.ip));
+        printf("      mask %s\n", inet_ntoa(info.mask));
+        printf("      gw   %s\n", inet_ntoa(info.gw));
+        printf("      mac  %02x:%02x:%02x:%02x:%02x:%02x\n",
+               info.mac[0], info.mac[1], info.mac[2],
+               info.mac[3], info.mac[4], info.mac[5]);
+        return;
+    }
+    if (argc == 4) {
+        uint32_t ip = inet_addr(argv[1]);
+        uint32_t mask = inet_addr(argv[2]);
+        uint32_t gw = inet_addr(argv[3]);
+        if (ip == 0 || mask == 0) {
+            set_color(VGA_LIGHT_RED, VGA_BLACK);
+            printf("ifconfig: invalid ip/mask\n");
+            set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+            return;
+        }
+        if (net_set_if(ip, mask, gw) < 0) {
+            set_color(VGA_LIGHT_RED, VGA_BLACK);
+            printf("ifconfig: set failed\n");
+            set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+            return;
+        }
+        printf("ifconfig: ip=%s mask=%s gw=%s\n",
+               argv[1], argv[2], argv[3]);
+        return;
+    }
+    printf("usage: ifconfig                     show\n");
+    printf("       ifconfig <ip> <mask> <gw>    set\n");
+}
+
+static void cmd_dns(int argc, char **argv) {
+    if (argc == 1) {
+        uint32_t d = net_get_dns();
+        if (d == 0) printf("dns: not set\n");
+        else printf("dns: %s\n", inet_ntoa(d));
+        return;
+    }
+    if (argc == 2) {
+        uint32_t d = inet_addr(argv[1]);
+        if (d == 0) {
+            set_color(VGA_LIGHT_RED, VGA_BLACK);
+            printf("dns: invalid ip\n");
+            set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+            return;
+        }
+        net_set_dns(d);
+        printf("dns: set to %s\n", argv[1]);
+        return;
+    }
+    printf("usage: dns [ip]\n");
 }
 
 static void cmd_kill(int argc, char **argv) {
@@ -634,6 +700,10 @@ void main(int _argc, char **_argv) {
             cmd_ps();
         } else if (strcmp(c, "uname") == 0) {
             cmd_uname();
+        } else if (strcmp(c, "ifconfig") == 0) {
+            cmd_ifconfig(argc, argv);
+        } else if (strcmp(c, "dns") == 0) {
+            cmd_dns(argc, argv);
         } else if (strcmp(c, "kill") == 0) {
             cmd_kill(argc, argv);
         } else if (strcmp(c, "sink") == 0) {

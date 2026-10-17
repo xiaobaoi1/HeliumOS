@@ -103,11 +103,17 @@ struct hostent *gethostbyname(const char *name) {
     query[qlen++] = 0x00; query[qlen++] = 0x01;
     query[qlen++] = 0x00; query[qlen++] = 0x01;
 
+    uint32_t dns = net_get_dns();
+    if (dns == 0) {
+        sockclose(s);
+        return NULL;
+    }
+
     struct sockaddr_in dst;
     memset(&dst, 0, sizeof(dst));
     dst.sin_family = AF_INET;
     dst.sin_port = htons(DNS_PORT);
-    dst.sin_addr = DNS_SERVER_IP;
+    dst.sin_addr = dns;
 
     /* 发送（ARP 可能 miss，重试几次） */
         int sent = 0;

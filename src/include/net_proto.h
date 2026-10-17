@@ -66,4 +66,21 @@ int net_icmp_send(uint32_t dst_ip_be, const uint8_t *icmp_payload, uint32_t len)
 uint16_t ip_checksum(const uint8_t *data, uint32_t len);
 
 
+/* ---------- 运行时配置 ---------- */
+
+/* 设置接口。ip/mask/gw 都是网络字节序。传 0 表示保持当前值。 */
+void net_set_if(uint32_t ip_be, uint32_t mask_be, uint32_t gw_be);
+
+/* 设置 DNS。网络字节序。 */
+void net_set_dns(uint32_t dns_be);
+
+uint32_t net_get_ip(void);
+uint32_t net_get_mask(void);
+uint32_t net_get_gw(void);
+uint32_t net_get_dns(void);
+
+/* 解析 cmdline（"ip=... gw=... dns=... mask=..."）。
+ * 未提到的项保持当前值。 */
+void net_parse_cmdline(const char *cmdline);
+
 #endif
