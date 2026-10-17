@@ -15,6 +15,7 @@ static uint32_t g_netmask  = 0;
 static uint32_t g_gateway  = 0;
 static uint32_t g_broadcast = 0;
 static uint32_t g_dns = 0;
+static int g_ip_valid = 0;
 
 /* ---------- ARP 缓存 ---------- */
 
@@ -183,7 +184,10 @@ void net_ip_rx(const uint8_t *p, uint32_t len, const uint8_t *src_mac) {
     /* 从 IP 包学到 ARP 映射 */
     net_arp_learn(src_ip, src_mac);
 
-    if (dst_ip != g_ip && dst_ip != g_broadcast) return;
+    /* 接受：本机 IP、子网广播、受限广播 255.255.255.255。
+    * DHCP 阶段 g_ip=0，OFFER/ACK 走受限广播。 */
+    if (dst_ip != g_ip && dst_ip != g_broadcast && dst_ip != 0xFFFFFFFF)
+        return;
 
     uint8_t proto = p[9];
     const uint8_t *payload = p + ihl;
@@ -210,8 +214,10 @@ int net_ip_send(uint32_t dst_ip_be, uint8_t proto,
                 const uint8_t *payload, uint32_t len) {
     if (len > 1480) return -1;
 
-        /* Loopback：目标是自己，直接走接收路径 */
-    if (dst_ip_be == g_ip) {
+    uint32_t src_ip = g_ip_valid ? g_ip : 0;
+
+    /* Loopback：目标是自己，直接走接收路径 */
+    if (g_ip_valid && dst_ip_be == g_ip) {
         uint8_t *pkt = (uint8_t*)kmalloc(20 + len);
         if (!pkt) return -1;
 
@@ -222,64 +228,64 @@ int net_ip_send(uint32_t dst_ip_be, uint8_t proto,
         pkt[3] = tot & 0xFF;
         pkt[8] = 64;
         pkt[9] = proto;
-        memcpy(pkt + 12, &g_ip, 4);
+        memcpy(pkt + 12, &src_ip, 4);
         memcpy(pkt + 16, &dst_ip_be, 4);
 
         uint16_t csum = ip_checksum(pkt, 20);
         pkt[10] = (csum >> 8) & 0xFF;
         pkt[11] = csum & 0xFF;
-
         memcpy(pkt + 20, payload, len);
 
-        /* 直接交给接收路径。src_mac 用本机 MAC。 */
         net_ip_rx(pkt, 20 + len, g_mac);
         kfree(pkt);
         return (int)len;
     }
 
-    /* 路由：同网段直连，否则走网关 */
-    uint32_t next_hop = dst_ip_be;
-    if ((dst_ip_be & g_netmask) != (g_ip & g_netmask)) {
-        next_hop = g_gateway;
-    }
-
+    /* 决定目的 MAC */
     uint8_t dst_mac[6];
-    if (net_arp_resolve(next_hop, dst_mac) < 0) {
-        /* ARP 缓存未命中：发请求，返回 EAGAIN */
-        uint8_t req[28];
-        memset(req, 0, sizeof(req));
-        req[0] = 0; req[1] = 1;
-        req[2] = 0x08; req[3] = 0x00;
-        req[4] = 6; req[5] = 4;
-        req[6] = 0; req[7] = 1;
-        memcpy(req + 8, g_mac, 6);
-        memcpy(req + 14, &g_ip, 4);
-        memcpy(req + 24, &next_hop, 4);
+    if (dst_ip_be == 0xFFFFFFFF) {
+        /* 受限广播：不走 ARP，不走网关 */
+        memset(dst_mac, 0xFF, 6);
+    } else {
+        uint32_t next_hop = dst_ip_be;
+        if (g_ip_valid && g_netmask &&
+            (dst_ip_be & g_netmask) != (g_ip & g_netmask)) {
+            next_hop = g_gateway;
+        }
+        if (net_arp_resolve(next_hop, dst_mac) < 0) {
+            uint8_t req[28];
+            memset(req, 0, sizeof(req));
+            req[0] = 0; req[1] = 1;
+            req[2] = 0x08; req[3] = 0x00;
+            req[4] = 6; req[5] = 4;
+            req[6] = 0; req[7] = 1;
+            memcpy(req + 8, g_mac, 6);
+            memcpy(req + 14, &src_ip, 4);
+            memcpy(req + 24, &next_hop, 4);
 
-        uint8_t bcast[6] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
-        net_eth_send(bcast, ETH_TYPE_ARP, req, 28);
-        KLOG_DBG("[IP] ARP miss for next hop\n");
-        return -1;
+            uint8_t bcast[6] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
+            net_eth_send(bcast, ETH_TYPE_ARP, req, 28);
+            return -1;
+        }
     }
 
     uint8_t *pkt = (uint8_t*)kmalloc(20 + len);
     if (!pkt) return -1;
 
     memset(pkt, 0, 20);
-    pkt[0] = 0x45;                  /* version=4, IHL=5 */
+    pkt[0] = 0x45;
     uint16_t tot = (uint16_t)(20 + len);
     pkt[2] = (tot >> 8) & 0xFF;
     pkt[3] = tot & 0xFF;
-    pkt[6] = 0x40;                  /* flags = DF */
-    pkt[8] = 64;                    /* TTL */
+    pkt[6] = 0x40;
+    pkt[8] = 64;
     pkt[9] = proto;
-    memcpy(pkt + 12, &g_ip, 4);
+    memcpy(pkt + 12, &src_ip, 4);
     memcpy(pkt + 16, &dst_ip_be, 4);
 
     uint16_t csum = ip_checksum(pkt, 20);
     pkt[10] = (csum >> 8) & 0xFF;
     pkt[11] = csum & 0xFF;
-
     memcpy(pkt + 20, payload, len);
 
     int r = net_eth_send(dst_mac, ETH_TYPE_IP, pkt, 20 + len);
@@ -338,17 +344,18 @@ void net_icmp_rx(uint32_t src_ip_be, const uint8_t *p, uint32_t len) {
 void net_proto_init(void) {
     net_arp_init();
 
-    g_ip        = htonl(NET_IP_LOCAL_HOST);
-    g_netmask   = htonl(NET_IP_NETMASK_HOST);
-    g_gateway   = htonl(NET_IP_GATEWAY_HOST);
-    g_broadcast = htonl(NET_IP_BROADCAST_HOST);
-    g_dns       = htonl(NET_IP_DNS_HOST);
+    /* 全 0：等待 DHCP 或手动 ifconfig */
+    g_ip        = 0;
+    g_netmask   = 0;
+    g_gateway   = 0;
+    g_broadcast = 0;
+    g_dns       = 0;
+    g_ip_valid  = 0;
 
-    /* 从 net 子系统获取本机 MAC（由驱动注册） */
     struct net_device *nd = net_get("eth0");
-    if (nd) net_set_local(nd->mac, g_ip);
+    if (nd) net_set_local(nd->mac, 0);
 
-    kprintf("[NET] Protocol stack ready: ip=10.0.2.15\n");
+    kprintf("[NET] Protocol stack ready (awaiting DHCP)\n");
 }
 
 void net_proto_rx(const uint8_t *frame, uint32_t len) {
@@ -364,6 +371,7 @@ void net_set_if(uint32_t ip_be, uint32_t mask_be, uint32_t gw_be) {
     if (g_ip && g_netmask) {
         g_broadcast = g_ip | ~g_netmask;
     }
+    if (g_ip) g_ip_valid = 1;
 }
 
 void net_set_dns(uint32_t dns_be) {

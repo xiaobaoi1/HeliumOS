@@ -37,6 +37,7 @@
 #include <mouse.h>
 #include <input.h>
 #include <pty.h>
+#include <e1000.h>
 
 
 static const char *shell_env[] = {
@@ -110,6 +111,16 @@ void create_wm_task(struct fat32_volume *vol) {
     kprintf("[KERNEL] WM task created (pid=%d)\n", task->pid);
 }
 
+void create_dhcp_task(struct fat32_volume *vol) {
+    struct task *dhcp_task = create_task_from_elf(
+        vol, "/DHCPCLIENT", 0, NULL, CLASS_USER, 0);
+    if (dhcp_task) {
+        kprintf("[DHCP] client task created (pid=%d)\n", dhcp_task->pid);
+    } else {
+        kprintf("[DHCP] failed to create client task\n");
+    }
+}
+
 
 
 void kmain(uint32_t magic, uint32_t addr) {
@@ -148,7 +159,13 @@ void kmain(uint32_t magic, uint32_t addr) {
     pci_init();
     ata_init();
     net_init();
-    rtl8139_init();
+
+    /* 优先 e1000（VMware / 现代 QEMU），失败再试 rtl8139（QEMU 默认） */
+    e1000_init();
+    if (!net_get("eth0")) {
+        rtl8139_init();
+    }
+
     net_proto_init();
     net_sock_init();
     tcp_init();
@@ -205,6 +222,8 @@ void kmain(uint32_t magic, uint32_t addr) {
 
     create_idle_task(sys_vol);
     create_wm_task(sys_vol);
+
+    create_dhcp_task(sys_vol);
 
     kprintf("[KERNEL] Processes created. Starting scheduler...\n");
 

@@ -75,6 +75,7 @@ OBJS = $(BUILD_DIR)/start.o \
 	   $(BUILD_DIR)/shm.o \
 	   $(BUILD_DIR)/net.o \
 	   $(BUILD_DIR)/rtl8139.o \
+	   $(BUILD_DIR)/e1000.o \
 	   $(BUILD_DIR)/net_proto.o \
 	   $(BUILD_DIR)/net_sock.o \
 	   $(BUILD_DIR)/tcp.o \
@@ -111,7 +112,8 @@ USER_APPS = shell idle test testkill sleeper argtest test_write \
             test_fault test_env count cat echo head tail wc \
             test_mmap test_stack ping test_dns nc tcpserver \
             test_input test_pty wm term test_namedpipe test_perm \
-			test_createwin test_ansi
+			test_createwin test_ansi\
+			dhcpclient
 
 USER_OBJS = $(addprefix $(BUILD_DIR)/,$(addsuffix .o,$(USER_APPS)))
 USER_ELFS = $(addprefix $(BUILD_DIR)/,$(addsuffix .ELF,$(USER_APPS)))
