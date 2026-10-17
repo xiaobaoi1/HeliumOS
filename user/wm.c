@@ -490,26 +490,35 @@ int main(int argc, char **argv) {
                         mouse_draw();
                     }
                 } else {
+                    /* 释放 */
                     if (drag_win) {
                         mouse_restore();
+                        int was_ghost = ghost_valid;
                         ghost_erase();
 
-                        int old_x = drag_win->x, old_y = drag_win->y;
-                        drag_win->x = ghost_x;
-                        drag_win->y = ghost_y;
+                        if (was_ghost) {
+                            int old_x = drag_win->x, old_y = drag_win->y;
+                            drag_win->x = ghost_x;
+                            drag_win->y = ghost_y;
 
-                        int ox0 = old_x, oy0 = old_y;
-                        int ox1 = old_x + drag_win->w + 4;
-                        int oy1 = old_y + drag_win->h + 4;
-                        int nx0 = drag_win->x, ny0 = drag_win->y;
-                        int nx1 = drag_win->x + drag_win->w + 4;
-                        int ny1 = drag_win->y + drag_win->h + 4;
-                        int ux0 = ox0 < nx0 ? ox0 : nx0;
-                        int uy0 = oy0 < ny0 ? oy0 : ny0;
-                        int ux1 = ox1 > nx1 ? ox1 : nx1;
-                        int uy1 = oy1 > ny1 ? oy1 : ny1;
+                            int ox0 = old_x, oy0 = old_y;
+                            int ox1 = old_x + drag_win->w + 4;
+                            int oy1 = old_y + drag_win->h + 4;
+                            int nx0 = drag_win->x, ny0 = drag_win->y;
+                            int nx1 = drag_win->x + drag_win->w + 4;
+                            int ny1 = drag_win->y + drag_win->h + 4;
+                            int ux0 = ox0 < nx0 ? ox0 : nx0;
+                            int uy0 = oy0 < ny0 ? oy0 : ny0;
+                            int ux1 = ox1 > nx1 ? ox1 : nx1;
+                            int uy1 = oy1 > ny1 ? oy1 : ny1;
 
-                        redraw_region(ux0, uy0, ux1, uy1);
+                            redraw_region(ux0, uy0, ux1, uy1);
+                        } else {
+                            /* 拖动从未发生（按下即释放）——重绘窗口原位置 */
+                            redraw_region(drag_win->x, drag_win->y,
+                                          drag_win->x + drag_win->w + 4,
+                                          drag_win->y + drag_win->h + 4);
+                        }
                         mouse_draw();
                         drag_win = NULL;
                     }
@@ -528,21 +537,17 @@ int main(int argc, char **argv) {
         for (int i = 0; i < MAX_WINDOWS; i++) {
             struct window *w = &g_wins[i];
             if (!w->used) continue;
-            if (*w->counter == w->last_seen) {
-                g_fb[0] = (*w->counter & 1) ? 0xFF0000 : 0x00FF00;
-                continue;
-            }
+            if (*w->counter == w->last_seen) continue;
 
             w->last_seen = *w->counter;
             mouse_restore();
-            blit_shm_to_back(w);
-            blit_back_to_fb(cli_x(w), cli_y(w),
-                            cli_x(w) + cli_w(w),
-                            cli_y(w) + cli_h(w));
+            redraw_region(cli_x(w), cli_y(w),
+                          cli_x(w) + cli_w(w),
+                          cli_y(w) + cli_h(w));
             mouse_draw();
         }
 
-        sleep_ms(10);
+        sleep_ms(2);
     }
 
     return 0;

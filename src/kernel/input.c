@@ -35,12 +35,14 @@ int input_poll(struct input_event *out) {
 
 void input_claim_keyboard(uint32_t pid) {
     g_owner_pid = pid;
+    g_head = g_tail = 0;
     kprintf("[INPUT] keyboard claimed by pid=%u\n", pid);
 }
 
 void input_release_keyboard(uint32_t pid) {
     if (g_owner_pid == pid) {
         g_owner_pid = 0;
+        g_head = g_tail = 0;
         kprintf("[INPUT] keyboard released by pid=%u\n", pid);
     }
 }

@@ -459,6 +459,9 @@ static void run_pipeline(char **argv) {
             .in_pipe = in_pipe,
             .out_pipe = out_pipe,
             .err_pipe = -1,
+            .in_pty = -1,
+            .out_pty = -1,
+            .err_pty = -1,
             .flags = 0,
             .envp = (uint32_t)environ,
         };
@@ -642,6 +645,9 @@ void main(int _argc, char **_argv) {
                 .in_pipe  = -1,
                 .out_pipe = -1,
                 .err_pipe = -1,
+                .in_pty = -1,
+                .out_pty = -1,
+                .err_pty = -1,
                 .flags  = 0,
                 .envp   = (unsigned int)environ,
             };

@@ -23,6 +23,7 @@ struct pty_pair {
 
     struct task *wait_master;
     struct task *wait_slave;
+    struct task *wait_slave_write;
 
     uint32_t fg_pid;    /* HeliumOS：用 pid 而非 pgid */
 
@@ -72,6 +73,15 @@ static void wake_master(struct pty_pair *p) {
         struct task *t = p->wait_master;
         p->wait_master = NULL;
         unblock_task(t, TASK_STATE_READY);
+    }
+    /* 顺带唤醒等写 master 的 slave */
+    if (p->wait_slave_write) {
+        uint32_t used = buf_count(p->tm_head, p->tm_tail);
+        if (used < PTY_BUF_SIZE - 1) {
+            struct task *t = p->wait_slave_write;
+            p->wait_slave_write = NULL;
+            unblock_task(t, TASK_STATE_READY);
+        }
     }
 }
 
@@ -180,9 +190,29 @@ static void line_discipline(struct pty_pair *p, uint8_t c) {
 
 int pty_write_slave(struct pty_pair *p, const uint8_t *buf, uint32_t n) {
     if (!p || !buf || n == 0) return 0;
-    int wrote = buf_write(p->to_master, &p->tm_head, p->tm_tail, buf, n);
-    wake_master(p);
-    return wrote;
+
+    uint32_t written = 0;
+    while (written < n) {
+        int w = buf_write(p->to_master, &p->tm_head, p->tm_tail,
+                          buf + written, n - written);
+        if (w > 0) {
+            written += w;
+            wake_master(p);
+            if (written == n) break;
+        }
+
+        /* 缓冲满——阻塞等 master 读走 */
+        struct task *cur = get_current_task();
+        if (!cur) return written > 0 ? (int)written : EINVAL;
+        if (cur->pending_signals & ~cur->blocked_signals)
+            return written > 0 ? (int)written : EINTR;
+
+        p->wait_slave_write = cur;
+        block_current(TASK_STATE_WAITING_PTY);
+        schedule();
+        p->wait_slave_write = NULL;
+    }
+    return (int)written;
 }
 
 int pty_read_slave(struct pty_pair *p, uint8_t *buf, uint32_t n) {
@@ -191,7 +221,7 @@ int pty_read_slave(struct pty_pair *p, uint8_t *buf, uint32_t n) {
 
     while (1) {
         int got = buf_read(p->to_slave, p->ts_head, &p->ts_tail, buf, n);
-        if (got > 0) return got;
+        if (got > 0) return got; /* 唤醒等写 to_slave 的 master（暂时没有，占位） */
 
         if (p->eof_pending) {
             p->eof_pending = 0;
@@ -223,7 +253,15 @@ static int pty_read_master(struct pty_pair *p, uint8_t *buf, uint32_t n) {
 
     while (1) {
         int got = buf_read(p->to_master, p->tm_head, &p->tm_tail, buf, n);
-        if (got > 0) return got;
+        if (got > 0) {
+            /* 唤醒等写 to_master 的 slave */
+            if (p->wait_slave_write) {
+                struct task *t = p->wait_slave_write;
+                p->wait_slave_write = NULL;
+                unblock_task(t, TASK_STATE_READY);
+            }
+            return got;
+        }
 
         struct task *cur = get_current_task();
         if (!cur) return EINVAL;
@@ -273,10 +311,14 @@ static void handle_close(struct task *t, int h) {
     if (p) {
         wake_master(p);
         wake_slave(p);
-        if (p->refcount > 0) p->refcount--;
-        if (p->refcount == 0) {
-            p->used = 0;
+        /* 唤醒等写的 */
+        if (p->wait_slave_write) {
+            struct task *w = p->wait_slave_write;
+            p->wait_slave_write = NULL;
+            unblock_task(w, TASK_STATE_READY);
         }
+        if (p->refcount > 0) p->refcount--;
+        if (p->refcount == 0) p->used = 0;
     }
 }
 
@@ -346,13 +388,24 @@ int sys_pty_write(int h, const void *buf_user, uint32_t n) {
     struct pty_pair *p = cur->pty_handles[h].pair;
     if (!p) return EINVAL;
 
-    uint8_t tmp[512];
-    uint32_t chunk = n < sizeof(tmp) ? n : sizeof(tmp);
-    if (copy_from_user(tmp, (uint32_t)buf_user, chunk) < 0) return EFAULT;
+    int is_master = (cur->pty_handles[h].type == PTY_MASTER);
 
-    return (cur->pty_handles[h].type == PTY_MASTER)
-           ? pty_write_master(p, tmp, chunk)
-           : pty_write_slave(p, tmp, chunk);
+    uint32_t done = 0;
+    uint8_t tmp[512];
+    while (done < n) {
+        uint32_t chunk = n - done;
+        if (chunk > sizeof(tmp)) chunk = sizeof(tmp);
+        if (copy_from_user(tmp, (uint32_t)buf_user + done, chunk) < 0)
+            return EFAULT;
+
+        int w = is_master
+                ? pty_write_master(p, tmp, chunk)
+                : pty_write_slave(p, tmp, chunk);
+        if (w < 0) return done > 0 ? (int)done : w;
+        if (w == 0) break;
+        done += w;
+    }
+    return (int)done;
 }
 
 int sys_pty_close(int h) {

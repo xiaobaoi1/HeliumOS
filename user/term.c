@@ -183,14 +183,7 @@ int main(int argc, char **argv) {
     int rows = g_ch / FONT_H;
     int cx = 0, cy = 0;
 
-    for (;;) {
-        // static int dbg_n = 0;
-        // if (dbg_n++ < 20) {
-            // dprintf(-1, "term loop: fd_avail=%d pty_avail=%d\n",
-            //         fd_avail(0), pty_avail(master));
-        // }
-
-
+        for (;;) {
         int dirty = 0;
 
         /* 1. 只在 stdin 有数据时读——避免阻塞 */
@@ -200,31 +193,30 @@ int main(int argc, char **argv) {
             if (kn > 0) pty_write(master, kbuf, kn);
         }
 
-        /* 2. pty master → 渲染 */
-        while (pty_avail(master) > 0) {
-            char buf[128];
+        /* 2. pty master → 渲染（每轮最多读一次）*/
+        if (pty_avail(master) > 0) {
+            char buf[256];
             int n = pty_read(master, buf, sizeof(buf));
-            if (n <= 0) break;
-            for (int i = 0; i < n; i++) {
-                char c = buf[i];
-                if (c == '\n') { cx = 0; cy++; }
-                else if (c == '\r') { cx = 0; }
-                else if (c == '\b') {
-                    if (cx > 0) { cx--; draw_char(cx, cy, ' '); }
-                } else if ((unsigned char)c >= 0x20) {
-                    if (cx < cols) draw_char(cx, cy, c);
-                    cx++;
-                    if (cx >= cols) { cx = 0; cy++; }
+            if (n > 0) {
+                for (int i = 0; i < n; i++) {
+                    char c = buf[i];
+                    if (c == '\n') { cx = 0; cy++; }
+                    else if (c == '\r') { cx = 0; }
+                    else if (c == '\b') {
+                        if (cx > 0) { cx--; draw_char(cx, cy, ' '); }
+                    } else if ((unsigned char)c >= 0x20) {
+                        if (cx < cols) draw_char(cx, cy, c);
+                        cx++;
+                        if (cx >= cols) { cx = 0; cy++; }
+                    }
+                    while (cy >= rows) { scroll(); cy--; }
                 }
-                while (cy >= rows) { scroll(); cy--; }
+                dirty = 1;
             }
-            dirty = 1;
         }
 
-        /* 3. 通知 WM */
         if (dirty) (*counter)++;
-
-        sleep_ms(5);
+        sleep_ms(1);
     }
 
     return 0;
