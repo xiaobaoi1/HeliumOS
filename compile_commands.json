@@ -1738,5 +1738,23 @@
     "directory": "/home/user/桌面/HeliumOS",
     "file": "/home/user/桌面/HeliumOS/user/test_createwin.c",
     "output": "/home/user/桌面/HeliumOS/build/test_createwin.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-m32",
+      "-ffreestanding",
+      "-fno-pic",
+      "-fno-stack-protector",
+      "-Iuser/",
+      "-Iuser/libc/include",
+      "-c",
+      "-o",
+      "build/test_ansi.o",
+      "user/test_ansi.c"
+    ],
+    "directory": "/home/user/桌面/HeliumOS",
+    "file": "/home/user/桌面/HeliumOS/user/test_ansi.c",
+    "output": "/home/user/桌面/HeliumOS/build/test_ansi.o"
   }
 ]

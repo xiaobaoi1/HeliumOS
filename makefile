@@ -111,7 +111,7 @@ USER_APPS = shell idle test testkill sleeper argtest test_write \
             test_fault test_env count cat echo head tail wc \
             test_mmap test_stack ping test_dns nc tcpserver \
             test_input test_pty wm term test_namedpipe test_perm \
-			test_createwin
+			test_createwin test_ansi
 
 USER_OBJS = $(addprefix $(BUILD_DIR)/,$(addsuffix .o,$(USER_APPS)))
 USER_ELFS = $(addprefix $(BUILD_DIR)/,$(addsuffix .ELF,$(USER_APPS)))
@@ -187,6 +187,7 @@ $(DISK_IMG): $(KERNEL_ELF) $(USER_ELFS)
 	sudo mkdir -p /mnt/build/boot/grub; \
 	sudo cp $(KERNEL_ELF) /mnt/build/boot/; \
 	sudo cp tools/unifont.hex /mnt/build/UNICODE.HEX; \
+	sudo cp tools/unifont-17.0.03.hex /mnt/build/UNICODE-17.HEX; \
 	for app in $(USER_APPS); do \
 	    sudo cp $(BUILD_DIR)/$$app.ELF /mnt/build/$$app; \
 	done; \

@@ -24,17 +24,17 @@ static int read_line(char *buf, int max) {
         char c;
         if (read(0, &c, 1) == 1) {
             if (c == '\n') {
-                putchar('\n');
+                // putchar('\n');
                 break;
             }
             if (c == '\b' && i > 0) {
                 i--;
-                printf("\b \b");
+                // printf("\b \b");
                 continue;
             }
             if (c != '\b' && i < max - 1) {
                 buf[i++] = c;
-                putchar(c);
+                // putchar(c);
             }
         }
         __asm__ volatile("pause");

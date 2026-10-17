@@ -1,6 +1,6 @@
-/* term — 终端模拟器
+/* term — 终端模拟器（支持完整 unifont.hex）
  *
- * 用法: TERM <shm_name> <client_w> <client_h>
+ * 用法: TERM <shm_name> <client_w> <client_h> <event_pipe>
  *
  * - shm 布局：[8B counter][w*h*4 pixels]
  * - stdin 是 WM 的事件 pipe，读键盘字节 → 写 pty master
@@ -11,15 +11,22 @@
 #include "stdio.h"
 #include "stdlib.h"
 #include "string.h"
+#include "shm_layout.h"
 #include <stdint.h>
 
-#define FONT_W 8
-#define FONT_H 16
+#define FONT_H   16         /* 所有字形高度 */
+#define CELL_W   8          /* 每列像素宽度（字形可为 8 或 16 宽，占 1 或 2 列） */
+#define MAX_CP   0x10000    /* BMP 码点范围 */
+
+/* 字形数据池：unifont 约 1MB，留 2MB 富余 */
+#define GLYPH_DATA_MAX (2 * 1024 * 1024)
 
 /* ---------- 字体 ---------- */
 
-static unsigned char g_glyph[128][16];
-static int g_font_ok = 0;
+static unsigned char **g_glyph_ptr  = NULL;   /* 索引 → 数据池内偏移 */
+static unsigned char  *g_glyph_width = NULL;  /* 索引 → 8 或 16（0 表示未加载） */
+static unsigned char  *g_glyph_data  = NULL;
+static unsigned int    g_glyph_data_used = 0;
 
 static int hexval(char c) {
     if (c >= '0' && c <= '9') return c - '0';
@@ -30,45 +37,83 @@ static int hexval(char c) {
 
 static void load_font(void) {
     int fd = fs_open("SYS:/UNICODE.HEX", FS_O_RDONLY);
-    if (fd < 0) { dprintf(2, "term: font open failed %d\n", fd); return; }
+    if (fd < 0) {
+        dprintf(2, "term: font open failed %d\n", fd);
+        return;
+    }
 
-    char buf[512], line[128];
-    int line_len = 0, loaded = 0;
+    /* 三个懒分配零页 mmap。指针表 256KB，宽度表 64KB，数据池 2MB。 */
+    g_glyph_ptr   = (unsigned char**)malloc(MAX_CP * sizeof(unsigned char*));
+    g_glyph_width = (unsigned char*)malloc(MAX_CP);
+    g_glyph_data  = (unsigned char*)malloc(GLYPH_DATA_MAX);
+    if (!g_glyph_ptr || !g_glyph_width || !g_glyph_data) {
+        dprintf(2, "term: font alloc failed\n");
+        fs_close(fd);
+        return;
+    }
+    g_glyph_data_used = 0;
+
+    char buf[4096];
+    char line[128];
+    int line_len = 0;
+    int loaded = 0, skipped = 0;
 
     for (;;) {
         int n = fs_read(fd, buf, sizeof(buf));
         if (n <= 0) break;
+
         for (int i = 0; i < n; i++) {
             char c = buf[i];
             if (c == '\n' || c == '\r') {
                 if (line_len == 0) continue;
                 line[line_len] = '\0';
+
+                /* 解析 "<HEX_CODEPOINT>:<HEX_GLYPH>" */
                 const char *p = line;
-                int cp = 0;
+                uint32_t cp = 0;
+                int ok = 1;
                 while (*p && *p != ':') {
                     int v = hexval(*p);
-                    if (v < 0) break;
+                    if (v < 0) { ok = 0; break; }
                     cp = cp * 16 + v;
                     p++;
                 }
-                if (*p == ':' && cp >= 0 && cp < 128) {
-                    p++;
-                    int hl = 0;
-                    const char *q = p;
-                    while (hexval(q[0]) >= 0 && hexval(q[1]) >= 0) { hl += 2; q += 2; }
-                    if (hl == 32) {
-                        for (int k = 0; k < 16; k++) {
-                            g_glyph[cp][k] = (hexval(p[0]) << 4) | hexval(p[1]);
-                            p += 2;
-                        }
-                        loaded++;
-                    } else if (hl == 64) {
-                        for (int k = 0; k < 16; k++) {
-                            g_glyph[cp][k] = hexval(p[0]) << 4;
-                            p += 4;
-                        }
-                        loaded++;
-                    }
+                if (!ok || *p != ':') { line_len = 0; continue; }
+                p++;  /* 跳过 ':' */
+
+                int hl = 0;
+                const char *q = p;
+                while (hexval(q[0]) >= 0 && hexval(q[1]) >= 0) { hl += 2; q += 2; }
+
+                int width;
+                if (hl == 32)      width = 8;
+                else if (hl == 64) width = 16;
+                else { line_len = 0; skipped++; continue; }
+
+                if (cp >= MAX_CP) { line_len = 0; skipped++; continue; }
+
+                int data_size = hl / 2;   /* 16 或 32 */
+                if (g_glyph_data_used + data_size > GLYPH_DATA_MAX) {
+                    line_len = 0; skipped++; continue;
+                }
+
+                unsigned char *dst = g_glyph_data + g_glyph_data_used;
+                int decode_ok = 1;
+                for (int k = 0; k < data_size; k++) {
+                    int hi = hexval(p[0]);
+                    int lo = hexval(p[1]);
+                    if (hi < 0 || lo < 0) { decode_ok = 0; break; }
+                    dst[k] = (unsigned char)((hi << 4) | lo);
+                    p += 2;
+                }
+
+                if (decode_ok) {
+                    g_glyph_ptr[cp]   = dst;
+                    g_glyph_width[cp] = (unsigned char)width;
+                    g_glyph_data_used += data_size;
+                    loaded++;
+                } else {
+                    skipped++;
                 }
                 line_len = 0;
             } else if (line_len < (int)sizeof(line) - 1) {
@@ -76,9 +121,10 @@ static void load_font(void) {
             }
         }
     }
+
     fs_close(fd);
-    g_font_ok = (loaded > 0);
-    dprintf(2, "term: font %d glyphs\n", loaded);
+    dprintf(2, "term: font loaded %d glyphs (%u bytes), skipped %d\n",
+            loaded, g_glyph_data_used, skipped);
 }
 
 /* ---------- 渲染 ---------- */
@@ -87,7 +133,27 @@ static void load_font(void) {
 #define COL_FG 0xCCCCCC
 
 static int g_cw, g_ch;
+static int g_cols, g_rows;
+static int g_cx = 0, g_cy = 0;
 static unsigned int *g_pixels;
+static struct shm_hdr *g_shm = NULL;
+
+/* ---------- ANSI 颜色 / 状态 ---------- */
+
+static const uint32_t ansi_palette[16] = {
+    0x000000, 0xAA0000, 0x00AA00, 0xAA5500,
+    0x0000AA, 0xAA00AA, 0x00AAAA, 0xAAAAAA,
+    0x555555, 0xFF5555, 0x55FF55, 0xFFFF55,
+    0x5555FF, 0xFF55FF, 0x55FFFF, 0xFFFFFF,
+};
+
+static uint32_t g_fg = 0xCCCCCC;
+static uint32_t g_bg = 0x000000;
+
+static int ansi_state = 0;        /* 0=普通 1=ESC 2=CSI */
+static int ansi_params[8];
+static int ansi_np = 0;
+static int ansi_cur = -1;         /* 当前累积参数，-1=空 */
 
 static void put_pixel(int x, int y, unsigned int rgb) {
     if (x < 0 || y < 0 || x >= g_cw || y >= g_ch) return;
@@ -100,20 +166,55 @@ static void fill_rect(int x, int y, int w, int h, unsigned int rgb) {
             put_pixel(x + i, y + j, rgb);
 }
 
-static void draw_char(int col, int row, char c) {
-    int px = col * FONT_W;
-    int py = row * FONT_H;
+/* 在像素坐标处渲染单个码点。宽度从 g_glyph_width 查。 */
+static void draw_char_at(int px, int py, uint32_t cp,
+                         uint32_t fg, uint32_t bg) {
+    int width = 8;
+    unsigned char *g = NULL;
 
-    fill_rect(px, py, FONT_W, FONT_H, COL_BG);
+    if (g_glyph_ptr && g_glyph_width && cp < MAX_CP) {
+        g = g_glyph_ptr[cp];
+        if (g && g_glyph_width[cp]) width = g_glyph_width[cp];
+    }
 
-    if (!g_font_ok) return;
-    if ((unsigned char)c >= 128) c = '?';
+    /* 脏区标记——放在 fill_rect 之前，覆盖整个字符格 */
+    if (g_shm) {
+        uint32_t x0 = px;
+        uint32_t y0 = py;
+        uint32_t x1 = px + width;
+        uint32_t y1 = py + FONT_H;
+        if (g_shm->cur_x1 <= g_shm->cur_x0 || g_shm->cur_x0 == SHM_DIRTY_EMPTY) {
+            g_shm->cur_x0 = x0;
+            g_shm->cur_y0 = y0;
+            g_shm->cur_x1 = x1;
+            g_shm->cur_y1 = y1;
+        } else {
+            if (x0 < g_shm->cur_x0) g_shm->cur_x0 = x0;
+            if (y0 < g_shm->cur_y0) g_shm->cur_y0 = y0;
+            if (x1 > g_shm->cur_x1) g_shm->cur_x1 = x1;
+            if (y1 > g_shm->cur_y1) g_shm->cur_y1 = y1;
+        }
+    }
 
-    const unsigned char *g = g_glyph[(unsigned char)c];
-    for (int r = 0; r < FONT_H; r++) {
-        unsigned char bits = g[r];
-        for (int j = 0; j < FONT_W; j++) {
-            if (bits & (0x80 >> j)) put_pixel(px + j, py + r, COL_FG);
+    fill_rect(px, py, width, FONT_H, bg);
+
+    if (!g) return;
+
+    if (width == 8) {
+        for (int r = 0; r < FONT_H; r++) {
+            unsigned char bits = g[r];
+            for (int j = 0; j < 8; j++) {
+                if (bits & (0x80 >> j)) put_pixel(px + j, py + r, fg);
+            }
+        }
+    } else {
+        for (int r = 0; r < FONT_H; r++) {
+            unsigned char hi = g[r * 2];
+            unsigned char lo = g[r * 2 + 1];
+            for (int j = 0; j < 8; j++) {
+                if (hi & (0x80 >> j)) put_pixel(px + j,     py + r, fg);
+                if (lo & (0x80 >> j)) put_pixel(px + 8 + j, py + r, fg);
+            }
         }
     }
 }
@@ -124,7 +225,229 @@ static void scroll(void) {
         unsigned int *src = g_pixels + (y + FONT_H) * g_cw;
         memcpy(dst, src, g_cw * 4);
     }
-    fill_rect(0, g_ch - FONT_H, g_cw, FONT_H, COL_BG);
+    fill_rect(0, g_ch - FONT_H, g_cw, FONT_H, g_bg);
+
+    /* 整屏变化 */
+    if (g_shm) {
+        g_shm->cur_x0 = 0;
+        g_shm->cur_y0 = 0;
+        g_shm->cur_x1 = g_cw;
+        g_shm->cur_y1 = g_ch;
+    }
+}
+
+static void newline(void) {
+    g_cx = 0;
+    g_cy++;
+    while (g_cy >= g_rows) { scroll(); g_cy--; }
+}
+
+/* 渲染一个 Unicode 码点（含控制字符处理、宽度、自动换行、滚动） */
+static void render_cp(uint32_t cp) {
+    if (cp == '\n') { newline(); return; }
+    if (cp == '\r') { g_cx = 0; return; }
+    if (cp == '\b') {
+        if (g_cx > 0) {
+            g_cx--;
+            draw_char_at(g_cx * CELL_W, g_cy * FONT_H, ' ', g_fg, g_bg);
+        }
+        return;
+    }
+    if (cp == '\t') {
+        int target = (g_cx / 8 + 1) * 8;
+        while (g_cx < target) {
+            if (g_cx >= g_cols) newline();
+            draw_char_at(g_cx * CELL_W, g_cy * FONT_H, ' ', g_fg, g_bg);
+            g_cx++;
+        }
+        return;
+    }
+    if (cp < 0x20) return;
+
+    int width = 8;
+    uint32_t to_draw = cp;
+    if (g_glyph_ptr && g_glyph_width) {
+        if (cp < MAX_CP && g_glyph_width[cp] != 0) {
+            width = g_glyph_width[cp];
+        } else if (cp != ' ') {
+            to_draw = '?';
+            if (g_glyph_width['?'] != 0) width = g_glyph_width['?'];
+        }
+    }
+
+    int cells = (width + CELL_W - 1) / CELL_W;
+    if (g_cx + cells > g_cols) newline();
+
+    draw_char_at(g_cx * CELL_W, g_cy * FONT_H, to_draw, g_fg, g_bg);
+    g_cx += cells;
+    if (g_cx >= g_cols) newline();
+}
+
+// ANSI
+
+static void ansi_reset_params(void) {
+    ansi_np = 0;
+    ansi_cur = -1;
+}
+
+static void ansi_push_param(void) {
+    if (ansi_np < 8) {
+        ansi_params[ansi_np++] = (ansi_cur >= 0) ? ansi_cur : 0;
+    }
+    ansi_cur = -1;
+}
+
+static void ansi_sgr(void) {
+    if (ansi_np == 0) { g_fg = 0xCCCCCC; g_bg = 0x000000; return; }
+    for (int i = 0; i < ansi_np; i++) {
+        int p = ansi_params[i];
+        if (p == 0)                       { g_fg = 0xCCCCCC; g_bg = 0x000000; }
+        else if (p == 1)                  { /* bold：暂忽略 */ }
+        else if (p == 7)                  { uint32_t t = g_fg; g_fg = g_bg; g_bg = t; }
+        else if (p >= 30 && p <= 37)      g_fg = ansi_palette[p - 30];
+        else if (p >= 40 && p <= 47)      g_bg = ansi_palette[p - 40];
+        else if (p >= 90 && p <= 97)      g_fg = ansi_palette[p - 90 + 8];
+        else if (p >= 100 && p <= 107)    g_bg = ansi_palette[p - 100 + 8];
+    }
+}
+
+static void ansi_clear_screen(void) {
+    fill_rect(0, 0, g_cw, g_ch, g_bg);
+}
+
+static void ansi_erase_line(int mode) {
+    int py = g_cy * FONT_H;
+    if (py >= g_ch) return;
+    if (mode == 0) {
+        int px = g_cx * CELL_W;
+        fill_rect(px, py, g_cw - px, FONT_H, g_bg);
+    } else if (mode == 1) {
+        int px = g_cx * CELL_W + CELL_W;
+        fill_rect(0, py, px, FONT_H, g_bg);
+    } else if (mode == 2) {
+        fill_rect(0, py, g_cw, FONT_H, g_bg);
+    }
+}
+
+static void ansi_set_cursor(int row, int col) {
+    if (row < 1) row = 1;
+    if (col < 1) col = 1;
+    if (row > g_rows) row = g_rows;
+    if (col > g_cols) col = g_cols;
+    g_cy = row - 1;
+    g_cx = col - 1;
+}
+
+static void ansi_handle_final(char final) {
+    if (ansi_cur >= 0) ansi_push_param();
+
+    switch (final) {
+        case 'm': ansi_sgr(); break;
+        case 'J': {
+            int p = (ansi_np > 0) ? ansi_params[0] : 0;
+            if (p == 2 || p == 3) ansi_clear_screen();
+            break;
+        }
+        case 'H':
+        case 'f': {
+            int r = (ansi_np > 0) ? ansi_params[0] : 1;
+            int c = (ansi_np > 1) ? ansi_params[1] : 1;
+            ansi_set_cursor(r, c);
+            break;
+        }
+        case 'K': {
+            int p = (ansi_np > 0) ? ansi_params[0] : 0;
+            ansi_erase_line(p);
+            break;
+        }
+        case 'A': {
+            int n = (ansi_np > 0) ? ansi_params[0] : 1;
+            if (n < 1) n = 1;
+            g_cy -= n; if (g_cy < 0) g_cy = 0;
+            break;
+        }
+        case 'B': {
+            int n = (ansi_np > 0) ? ansi_params[0] : 1;
+            if (n < 1) n = 1;
+            g_cy += n; if (g_cy >= g_rows) g_cy = g_rows - 1;
+            break;
+        }
+        case 'C': {
+            int n = (ansi_np > 0) ? ansi_params[0] : 1;
+            if (n < 1) n = 1;
+            g_cx += n; if (g_cx >= g_cols) g_cx = g_cols - 1;
+            break;
+        }
+        case 'D': {
+            int n = (ansi_np > 0) ? ansi_params[0] : 1;
+            if (n < 1) n = 1;
+            g_cx -= n; if (g_cx < 0) g_cx = 0;
+            break;
+        }
+        default: break;
+    }
+}
+
+/* ---------- UTF-8 解码 ---------- */
+
+static unsigned char g_utf8_buf[4];
+static int g_utf8_len  = 0;
+static int g_utf8_need = 0;
+
+static void process_byte(unsigned char c) {
+    /* ANSI 状态机优先 */
+    if (ansi_state == 1) {
+        if (c == '[') { ansi_state = 2; ansi_reset_params(); return; }
+        ansi_state = 0;
+        return;
+    }
+    if (ansi_state == 2) {
+        if (c >= '0' && c <= '9') {
+            if (ansi_cur < 0) ansi_cur = 0;
+            ansi_cur = ansi_cur * 10 + (c - '0');
+            return;
+        }
+        if (c == ';') { ansi_push_param(); return; }
+        if (c == '?') { return; }     /* 私有修饰符，忽略 */
+        if (c >= 0x40 && c <= 0x7E) {
+            ansi_handle_final((char)c);
+            ansi_state = 0;
+            return;
+        }
+        return;
+    }
+    if (c == 0x1B) { ansi_state = 1; return; }
+
+    /* 普通 UTF-8 解码——原逻辑不变 */
+    if (g_utf8_need > 0) {
+        if ((c & 0xC0) != 0x80) {
+            render_cp('?');
+            g_utf8_need = 0;
+            g_utf8_len  = 0;
+            process_byte(c);
+            return;
+        }
+        g_utf8_buf[g_utf8_len++] = c;
+        if (g_utf8_len < g_utf8_need) return;
+
+        uint32_t cp;
+        if      (g_utf8_need == 2) cp = g_utf8_buf[0] & 0x1F;
+        else if (g_utf8_need == 3) cp = g_utf8_buf[0] & 0x0F;
+        else                       cp = g_utf8_buf[0] & 0x07;
+        for (int k = 1; k < g_utf8_need; k++)
+            cp = (cp << 6) | (g_utf8_buf[k] & 0x3F);
+
+        render_cp(cp);
+        g_utf8_need = 0;
+        g_utf8_len  = 0;
+        return;
+    }
+
+    if (c < 0x80)                       { render_cp(c); return; }
+    if ((c & 0xE0) == 0xC0) { g_utf8_need = 2; g_utf8_buf[0] = c; g_utf8_len = 1; }
+    else if ((c & 0xF0) == 0xE0) { g_utf8_need = 3; g_utf8_buf[0] = c; g_utf8_len = 1; }
+    else if ((c & 0xF8) == 0xF0) { g_utf8_need = 4; g_utf8_buf[0] = c; g_utf8_len = 1; }
+    else                         { render_cp('?'); }
 }
 
 /* ---------- main ---------- */
@@ -141,28 +464,34 @@ int main(int argc, char **argv) {
     const char *ev_name = argv[4];
     if (g_cw <= 0 || g_ch <= 0) return 1;
 
-    /* 打开事件 pipe 读端 */
     int ev_rd = pipe_open(ev_name, /*wr=*/0);
     if (ev_rd < 0) {
         dprintf(2, "term: pipe_open('%s') = %d\n", ev_name, ev_rd);
         return 1;
     }
 
-    /* mmap shm */
-    int shm_size = 8 + g_cw * g_ch * 4;
+    int shm_size = shm_total_size(g_cw, g_ch);
     int shm_id = shm_open(shm_name, shm_size, 0);
     if (shm_id < 0) { dprintf(2, "term: shm_open %d\n", shm_id); return 1; }
 
     unsigned int addr = mmap(0, shm_size,
-                             PROT_READ | PROT_WRITE,
-                             MAP_SHARED, shm_id);
+                             PROT_READ | PROT_WRITE, MAP_SHARED, shm_id);
     if ((int)addr <= 0) { dprintf(2, "term: mmap %d\n", (int)addr); return 1; }
 
-    uint64_t *counter = (uint64_t*)addr;
-    g_pixels = (unsigned int*)(addr + 8);
+    g_shm = (struct shm_hdr*)addr;
+    g_pixels = (unsigned int*)(addr + SHM_HDR_SIZE);
 
     memset(g_pixels, 0, g_cw * g_ch * 4);
-    *counter = 1;
+
+    /* 初始：pub 空，cur 空，counter=0 */
+    g_shm->counter = 0;
+    g_shm->cur_x0 = SHM_DIRTY_EMPTY; g_shm->cur_y0 = 0;
+    g_shm->cur_x1 = 0; g_shm->cur_y1 = 0;
+    g_shm->pub_x0 = SHM_DIRTY_EMPTY; g_shm->pub_y0 = 0;
+    g_shm->pub_x1 = 0; g_shm->pub_y1 = 0;
+
+    g_cols = g_cw / CELL_W;
+    g_rows = g_ch / FONT_H;
 
     load_font();
 
@@ -185,44 +514,41 @@ int main(int argc, char **argv) {
     if (sh < 0) { dprintf(2, "term: spawn SHELL %d\n", sh); return 1; }
     pty_set_fg(master, sp.out_pid);
 
-    /* VT 状态 */
-    int cols = g_cw / FONT_W;
-    int rows = g_ch / FONT_H;
-    int cx = 0, cy = 0;
-
-    for (;;) {
-        int dirty = 0;
-
-        /* 1. 事件 pipe → pty master */
+        for (;;) {
         if (pipe_avail(ev_rd) > 0) {
             char kbuf[64];
             int kn = pipe_read(ev_rd, kbuf, sizeof(kbuf));
             if (kn > 0) pty_write(master, kbuf, kn);
         }
 
-        /* 2. pty master → 渲染（每轮最多读一次）*/
         if (pty_avail(master) > 0) {
             char buf[256];
             int n = pty_read(master, buf, sizeof(buf));
             if (n > 0) {
-                for (int i = 0; i < n; i++) {
-                    char c = buf[i];
-                    if (c == '\n') { cx = 0; cy++; }
-                    else if (c == '\r') { cx = 0; }
-                    else if (c == '\b') {
-                        if (cx > 0) { cx--; draw_char(cx, cy, ' '); }
-                    } else if ((unsigned char)c >= 0x20) {
-                        if (cx < cols) draw_char(cx, cy, c);
-                        cx++;
-                        if (cx >= cols) { cx = 0; cy++; }
-                    }
-                    while (cy >= rows) { scroll(); cy--; }
-                }
-                dirty = 1;
+                for (int i = 0; i < n; i++)
+                    process_byte((unsigned char)buf[i]);
             }
         }
 
-        if (dirty) (*counter)++;
+        /* 每轮都检查：pub 空 + cur 非空 → 发布。
+         * 不依赖 had_output——避免"上一轮 cur 累积但 pub 被占用，
+         * 这一轮 pty 空，永远不发布"的尾数据丢失。 */
+        if (g_shm && (g_shm->pub_x0 == SHM_DIRTY_EMPTY ||
+                      g_shm->pub_x1 <= g_shm->pub_x0)) {
+            if (g_shm->cur_x0 != SHM_DIRTY_EMPTY &&
+                g_shm->cur_x1 > g_shm->cur_x0) {
+                g_shm->pub_x0 = g_shm->cur_x0;
+                g_shm->pub_y0 = g_shm->cur_y0;
+                g_shm->pub_x1 = g_shm->cur_x1;
+                g_shm->pub_y1 = g_shm->cur_y1;
+                g_shm->counter++;
+                g_shm->cur_x0 = SHM_DIRTY_EMPTY;
+                g_shm->cur_y0 = 0;
+                g_shm->cur_x1 = 0;
+                g_shm->cur_y1 = 0;
+            }
+        }
+
         sleep_ms(1);
     }
 

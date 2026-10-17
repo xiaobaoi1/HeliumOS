@@ -14,10 +14,75 @@
 #include <stdint.h>
 #include "signal.h"
 #include "wm_proto.h"
+#include "shm_layout.h"
 
 /* 前向声明 */
 static void mouse_restore(void);
 static void mouse_draw(void);
+
+/* ==================== 标题字体 ==================== */
+
+static unsigned char g_title_glyph[128][16];
+static int g_title_font_ok = 0;
+
+static int hexval(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+static void load_title_font(void) {
+    int fd = fs_open("SYS:/UNICODE.HEX", FS_O_RDONLY);
+    if (fd < 0) return;
+
+    char buf[512], line[128];
+    int line_len = 0, loaded = 0;
+
+    for (;;) {
+        int n = fs_read(fd, buf, sizeof(buf));
+        if (n <= 0) break;
+        for (int i = 0; i < n; i++) {
+            char c = buf[i];
+            if (c == '\n' || c == '\r') {
+                if (line_len == 0) continue;
+                line[line_len] = '\0';
+                const char *p = line;
+                int cp = 0;
+                while (*p && *p != ':') {
+                    int v = hexval(*p);
+                    if (v < 0) break;
+                    cp = cp * 16 + v;
+                    p++;
+                }
+                if (*p == ':' && cp >= 0 && cp < 128) {
+                    p++;
+                    int hl = 0;
+                    const char *q = p;
+                    while (hexval(q[0]) >= 0 && hexval(q[1]) >= 0) { hl += 2; q += 2; }
+                    if (hl == 32) {
+                        for (int k = 0; k < 16; k++) {
+                            g_title_glyph[cp][k] = (hexval(p[0]) << 4) | hexval(p[1]);
+                            p += 2;
+                        }
+                        loaded++;
+                    } else if (hl == 64) {
+                        for (int k = 0; k < 16; k++) {
+                            g_title_glyph[cp][k] = hexval(p[0]) << 4;
+                            p += 4;
+                        }
+                        loaded++;
+                    }
+                }
+                line_len = 0;
+            } else if (line_len < (int)sizeof(line) - 1) {
+                line[line_len++] = c;
+            }
+        }
+    }
+    fs_close(fd);
+    g_title_font_ok = (loaded > 0);
+}
 
 /* ==================== 屏幕 ==================== */
 
@@ -100,6 +165,7 @@ struct window {
     unsigned int *pixels;    /* WM 侧 shm 映射（像素部分） */
     uint64_t *counter;       /* shm 头部 */
     uint64_t last_seen;
+    struct shm_hdr *shm;     /* 新 */
 
     int event_w;             /* WM 保留的事件 pipe 写端 */
 };
@@ -166,18 +232,30 @@ static void render_win_frame(struct window *w) {
     }
 }
 
-/* 简单画字——WM 只画标题。用内嵌最小 8x16 字模（只支持 A-Z 0-9）。 */
-static const unsigned char g_title_glyph[] = {
-    /* 空白留待将来。当前标题文字先不画。 */
-};
-
 static void draw_title_text(struct window *w) {
-    (void)w;
-    /* TODO：WM 需要画标题文字。选项：
-     *  A) 内嵌一份最小字模
-     *  B) 从 shm 读字体（term 写字体到某个共享区）
-     *  C) 不画标题文字
-     * 当前选 C——先跑通架构，标题文字后加。 */
+    if (!g_title_font_ok) return;
+
+    int tx = w->x + 8;
+    int ty = w->y + (TITLE_H - FONT_H) / 2;
+
+    for (const char *p = w->title; *p; p++) {
+        int cp = (unsigned char)*p;
+        if (cp >= 128) cp = '?';
+
+        const unsigned char *g = g_title_glyph[cp];
+        for (int r = 0; r < FONT_H; r++) {
+            unsigned char bits = g[r];
+            for (int j = 0; j < FONT_W; j++) {
+                if (bits & (0x80 >> j)) {
+                    put_pixel_buf(g_back, tx + j, ty + r, COL_TITLE_FG);
+                }
+            }
+        }
+        tx += FONT_W;
+
+        /* 超出标题栏（预留关闭按钮 24px）停止 */
+        if (tx + FONT_W > w->x + w->w - 28) break;
+    }
 }
 
 /* 区域重绘 */
@@ -302,7 +380,7 @@ static struct window *make_window(int x, int y, int w, int h,
     char shm_name[16];
     snprintf(shm_name, sizeof(shm_name), "term-%d", slot);
 
-    int shm_size = 8 + cw * ch * 4;
+    int shm_size = shm_total_size(cw, ch);
     int shm_id = shm_open(shm_name, shm_size, 0);
     if (shm_id < 0) { win->used = 0; return NULL; }
 
@@ -312,9 +390,9 @@ static struct window *make_window(int x, int y, int w, int h,
     if ((int)addr <= 0) { win->used = 0; return NULL; }
 
     win->shm_idx = shm_id;
-    win->counter = (uint64_t*)addr;
-    win->pixels = (unsigned int*)(addr + 8);
-    *win->counter = 0;
+    win->shm = (struct shm_hdr*)addr;
+    win->counter = &win->shm->counter;
+    win->pixels = (unsigned int*)(addr + SHM_HDR_SIZE);
     win->last_seen = 0;
     memset(win->pixels, 0, cw * ch * 4);
 
@@ -386,7 +464,7 @@ static struct window *make_app_window(struct wm_request *req) {
     strncpy(w->shm_name, req->shm_name, sizeof(w->shm_name) - 1);
 
     /* 打开应用 shm */
-    int shm_size = 8 + req->w * req->h * 4;
+    int shm_size = shm_total_size(req->w, req->h);
     int shm_id = shm_open(req->shm_name, shm_size, 0);
     if (shm_id < 0) { w->used = 0; return NULL; }
 
@@ -396,9 +474,10 @@ static struct window *make_app_window(struct wm_request *req) {
     if ((int)addr <= 0) { w->used = 0; return NULL; }
 
     w->shm_idx = shm_id;
-    w->counter = (uint64_t*)addr;
-    w->pixels = (unsigned int*)(addr + 8);
-    w->last_seen = 0;
+    w->shm = (struct shm_hdr*)addr;
+    w->counter = &w->shm->counter;
+    w->pixels = (unsigned int*)(addr + SHM_HDR_SIZE);
+    w->last_seen = *w->counter;   /* 跳过首帧，等应用主动 counter++ */
 
     /* 打开应用 ev pipe 写端 */
     int ev_w = pipe_open(req->ev_name, 1);
@@ -508,6 +587,10 @@ int main(int argc, char **argv) {
     }
     g_inbox_rd = inbox_fds[0];
     ipc_close(inbox_fds[1]);   /* WM 只保留读端 */
+
+
+    load_title_font();
+
 
     struct window *w1 = make_window(80, 60, 600, 400, "Shell 1", 0);
     struct window *w2 = make_window(360, 300, 600, 400, "Shell 2", 1);
@@ -647,18 +730,78 @@ int main(int argc, char **argv) {
             }
         }
 
-        /* 检查 term 更新——counter 变化才重绘 */
+        /* 检查窗口更新——counter 变化，按脏区 blit */
         for (int i = 0; i < MAX_WINDOWS; i++) {
             struct window *w = &g_wins[i];
             if (!w->used) continue;
-            if (*w->counter == w->last_seen) continue;
 
-            w->last_seen = *w->counter;
+            uint64_t c = *w->counter;
+            if (c == w->last_seen) continue;
+            w->last_seen = c;
+
+            if (!w->shm) continue;
+
+            /* 读 pub 脏区 */
+            uint32_t dx0 = w->shm->pub_x0;
+            uint32_t dy0 = w->shm->pub_y0;
+            uint32_t dx1 = w->shm->pub_x1;
+            uint32_t dy1 = w->shm->pub_y1;
+
+            int cw = cli_w(w);
+            int ch = cli_h(w);
+
+            /* 校验 */
+            if (dx0 == SHM_DIRTY_EMPTY || dx1 <= dx0 || dy1 <= dy0) {
+                /* 空 dirty——但可能有内容变化（比如 term 初始化）。
+                 * 保守处理：全客户区 blit 一次。 */
+                dx0 = 0; dy0 = 0; dx1 = cw; dy1 = ch;
+            }
+            if (dx0 >= (uint32_t)cw || dy0 >= (uint32_t)ch) continue;
+            if (dx1 > (uint32_t)cw) dx1 = cw;
+            if (dy1 > (uint32_t)ch) dy1 = ch;
+            if (dx1 <= dx0 || dy1 <= dy0) continue;
+
+            /* 转换为屏幕坐标 */
+            int sx0 = cli_x(w) + dx0;
+            int sy0 = cli_y(w) + dy0;
+            int sx1 = cli_x(w) + dx1;
+            int sy1 = cli_y(w) + dy1;
+
+            /* 检查是否被 z 更高的窗口遮挡 */
+            int occluded = 0;
+            for (int j = 0; j < MAX_WINDOWS; j++) {
+                struct window *o = &g_wins[j];
+                if (!o->used || o == w) continue;
+                if (o->z <= w->z) continue;
+                if (o->x >= sx1 || o->x + o->w <= sx0) continue;
+                if (o->y >= sy1 || o->y + o->h <= sy0) continue;
+                occluded = 1;
+                break;
+            }
+
             mouse_restore();
-            redraw_region(cli_x(w), cli_y(w),
-                          cli_x(w) + cli_w(w),
-                          cli_y(w) + cli_h(w));
+
+            if (occluded) {
+                /* 慢路径：走 redraw_region 保证 z-order */
+                redraw_region(sx0, sy0, sx1, sy1);
+            } else {
+                /* 快路径：直接 blit 脏区 */
+                for (uint32_t y = dy0; y < dy1; y++) {
+                    unsigned int *dst = g_back + (cli_y(w) + y) * g_pitch_px
+                                       + cli_x(w) + dx0;
+                    unsigned int *src = w->pixels + y * cw + dx0;
+                    memcpy(dst, src, (dx1 - dx0) * 4);
+                }
+                blit_back_to_fb(sx0, sy0, sx1, sy1);
+            }
+
             mouse_draw();
+
+            /* 通知 term：pub 已消费，清空 */
+            w->shm->pub_x0 = SHM_DIRTY_EMPTY;
+            w->shm->pub_y0 = 0;
+            w->shm->pub_x1 = 0;
+            w->shm->pub_y1 = 0;
         }
 
         /* 每 50 轮检查一次死窗口 */
