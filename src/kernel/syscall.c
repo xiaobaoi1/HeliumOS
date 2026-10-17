@@ -56,6 +56,8 @@ struct spawn_params {
     uint32_t flags;
     uint32_t envp;
     uint32_t out_pid;
+    uint32_t child_class;
+    uint32_t child_caps;
 };
 
 /* 写标准流。stream = 1 (stdout) / 2 (stderr)。
@@ -430,6 +432,8 @@ static int sys_spawn(const char *path, char *const argv[], void *params_user) {
     int redir_out_pty = -1;
     int redir_err_pty = -1;
     uint32_t envp_user = 0;
+    uint32_t child_class = 0;
+    uint32_t child_caps  = 0;
 
     if (params_user) {
         struct spawn_params p = {0};
@@ -442,6 +446,7 @@ static int sys_spawn(const char *path, char *const argv[], void *params_user) {
         uint32_t to_copy = user_size < sizeof(p) ? user_size : sizeof(p);
         if (copy_from_user(&p, (uint32_t)params_user, to_copy) < 0)
             return EFAULT;
+
         redir_in  = p.in_fd;
         redir_out = p.out_fd;
         redir_err = p.err_fd;
@@ -452,6 +457,20 @@ static int sys_spawn(const char *path, char *const argv[], void *params_user) {
         redir_out_pty = p.out_pty;
         redir_err_pty = p.err_pty;
         envp_user = p.envp;
+
+        /* child_class / child_caps 只在新版本结构体里 */
+        if (to_copy >= (uint32_t)(offsetof(struct spawn_params, child_class) + 4)) {
+            child_class = p.child_class;
+            child_caps  = p.child_caps;
+        }
+        if (child_class > CLASS_SERVICE) child_class = CLASS_USER;
+        if (child_class == CLASS_KERNEL) child_class = CLASS_USER;   /* 用户不能创建 KERNEL */
+    }
+
+    /* 权限检查：特权子进程需要 CAP_SPAWN_SYS */
+    if ((child_class != CLASS_USER || child_caps != 0) &&
+        !(parent->caps & CAP_SPAWN_SYS)) {
+        return EPERM;
     }
 
     /* 拷贝 argv */
@@ -524,11 +543,12 @@ static int sys_spawn(const char *path, char *const argv[], void *params_user) {
         goto cleanup;
     }
 
-    struct task *child = task_create(entry, pgd_child, argc, k_argv,
+        struct task *child = task_create(entry, pgd_child, argc, k_argv,
                                      envc, k_envp,
                                      redir_in, redir_out, redir_err,
                                      redir_in_pipe, redir_out_pipe, redir_err_pipe,
-                                     redir_in_pty, redir_out_pty, redir_err_pty);
+                                     redir_in_pty, redir_out_pty, redir_err_pty,
+                                     (uint8_t)child_class, child_caps);
     if (!child) {
         vmm_free_process_address_space(pgd_child);
         ret = ENOMEM;
@@ -657,9 +677,11 @@ static int sys_input_poll(struct input_event *user_buf) {
     if (check_user_range((uint32_t)user_buf, sizeof(struct input_event)) < 0)
         return EFAULT;
 
+    uint32_t owner = input_keyboard_owner();
+    if (owner != 0 && owner != cur->pid) return EPERM;
+
     struct input_event ev;
     if (input_poll(&ev) < 0) return EAGAIN;
-
     if (copy_to_user((uint32_t)user_buf, &ev, sizeof(ev)) < 0)
         return EFAULT;
     return OK;
@@ -668,6 +690,7 @@ static int sys_input_poll(struct input_event *user_buf) {
 static int sys_input_claim(void) {
     struct task *cur = get_current_task();
     if (!cur) return EINVAL;
+    if (!(cur->caps & CAP_DISPLAY)) return EPERM;
 
     uint32_t owner = input_keyboard_owner();
     if (owner != 0 && owner != cur->pid) return EBUSY;
@@ -680,6 +703,7 @@ static int sys_input_claim(void) {
 static int sys_fb_map(struct fb_user_info *user_buf) {
     struct task *cur = get_current_task();
     if (!cur || !cur->pgd) return EINVAL;
+    if (!(cur->caps & CAP_MMIO)) return EPERM;
     if (!user_buf) return EINVAL;
     if (check_user_range((uint32_t)user_buf, sizeof(struct fb_user_info)) < 0)
         return EFAULT;
@@ -716,6 +740,7 @@ static int sys_fb_map(struct fb_user_info *user_buf) {
 static int sys_fb_claim(void) {
     struct task *cur = get_current_task();
     if (!cur) return EINVAL;
+    if (!(cur->caps & CAP_DISPLAY)) return EPERM;
 
     uint32_t owner = display_get_owner();
     if (owner != 0 && owner != cur->pid) return EBUSY;
@@ -855,6 +880,9 @@ void syscall_handler(struct registers *regs) {
             break;
         case SYS_PIPE_UNLINK:
             ret = sys_pipe_unlink((const char*)arg1);
+            break;
+        case SYS_PIPE_AVAIL:
+            ret = sys_pipe_avail((int)arg1);
             break;
         
 

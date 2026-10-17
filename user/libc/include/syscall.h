@@ -64,6 +64,7 @@
 #define SYS_PIPE_NAMED   85
 #define SYS_PIPE_OPEN    86
 #define SYS_PIPE_UNLINK  87
+#define SYS_PIPE_AVAIL  88
 
 /* ========== 系统控制 (91~99) ========== */
 #define SYS_RTC_GET_TIME  91
@@ -105,7 +106,9 @@
 #define STREAM_STDOUT  1
 #define STREAM_STDERR  2
 
-
+#define CLASS_USER     0
+#define CLASS_SERVICE  1
+#define CLASS_KERNEL   2
 
 
 
@@ -169,6 +172,8 @@ struct spawn_params {
     unsigned int flags;
     unsigned int envp;
     unsigned int out_pid;
+    unsigned int child_class;
+    unsigned int child_caps;
 };
 
 #define SPAWN_FD_INHERIT   (-1)
@@ -259,6 +264,9 @@ static inline int pipe_open(const char *name, int wr) {
 }
 static inline int pipe_unlink(const char *name) {
     return __syscall(SYS_PIPE_UNLINK, (int)name, 0, 0);
+}
+static inline int pipe_avail(int h) {
+    return __syscall(SYS_PIPE_AVAIL, h, 0, 0);
 }
 
 /* 系统控制 */

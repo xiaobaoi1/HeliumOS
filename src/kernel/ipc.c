@@ -379,3 +379,14 @@ int sys_pipe_unlink(const char *name_user) {
     if (p->refcount == 0) pipe_free(p);
     return OK;
 }
+
+int sys_pipe_avail(int h) {
+    struct task *cur = get_current_task();
+    if (!cur) return EINVAL;
+    if (h < 0 || h >= IPC_MAX_HANDLES) return EINVAL;
+    if (!cur->ipc_handles[h].used) return EINVAL;
+
+    struct pipe *p = cur->ipc_handles[h].pipe;
+    if (!p) return EINVAL;
+    return (int)p->count;
+}

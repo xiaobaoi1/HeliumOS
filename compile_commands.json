@@ -32,166 +32,6 @@
       "src/include",
       "-c",
       "-o",
-      "build/screen.o",
-      "src/drivers/screen.c"
-    ],
-    "directory": "/home/user/桌面/HeliumOS",
-    "file": "/home/user/桌面/HeliumOS/src/drivers/screen.c",
-    "output": "/home/user/桌面/HeliumOS/build/screen.o"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-m32",
-      "-ffreestanding",
-      "-fno-pie",
-      "-Wall",
-      "-Wextra",
-      "-g",
-      "-I",
-      "src/include",
-      "-c",
-      "-o",
-      "build/serial.o",
-      "src/drivers/serial.c"
-    ],
-    "directory": "/home/user/桌面/HeliumOS",
-    "file": "/home/user/桌面/HeliumOS/src/drivers/serial.c",
-    "output": "/home/user/桌面/HeliumOS/build/serial.o"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-m32",
-      "-ffreestanding",
-      "-fno-pie",
-      "-Wall",
-      "-Wextra",
-      "-g",
-      "-I",
-      "src/include",
-      "-c",
-      "-o",
-      "build/tty.o",
-      "src/kernel/tty.c"
-    ],
-    "directory": "/home/user/桌面/HeliumOS",
-    "file": "/home/user/桌面/HeliumOS/src/kernel/tty.c",
-    "output": "/home/user/桌面/HeliumOS/build/tty.o"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-m32",
-      "-ffreestanding",
-      "-fno-pie",
-      "-Wall",
-      "-Wextra",
-      "-g",
-      "-I",
-      "src/include",
-      "-c",
-      "-o",
-      "build/pmm.o",
-      "src/memory/pmm.c"
-    ],
-    "directory": "/home/user/桌面/HeliumOS",
-    "file": "/home/user/桌面/HeliumOS/src/memory/pmm.c",
-    "output": "/home/user/桌面/HeliumOS/build/pmm.o"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-m32",
-      "-ffreestanding",
-      "-fno-pie",
-      "-Wall",
-      "-Wextra",
-      "-g",
-      "-I",
-      "src/include",
-      "-c",
-      "-o",
-      "build/vmm.o",
-      "src/memory/vmm.c"
-    ],
-    "directory": "/home/user/桌面/HeliumOS",
-    "file": "/home/user/桌面/HeliumOS/src/memory/vmm.c",
-    "output": "/home/user/桌面/HeliumOS/build/vmm.o"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-m32",
-      "-ffreestanding",
-      "-fno-pie",
-      "-Wall",
-      "-Wextra",
-      "-g",
-      "-I",
-      "src/include",
-      "-c",
-      "-o",
-      "build/heap.o",
-      "src/memory/heap.c"
-    ],
-    "directory": "/home/user/桌面/HeliumOS",
-    "file": "/home/user/桌面/HeliumOS/src/memory/heap.c",
-    "output": "/home/user/桌面/HeliumOS/build/heap.o"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-m32",
-      "-ffreestanding",
-      "-fno-pie",
-      "-Wall",
-      "-Wextra",
-      "-g",
-      "-I",
-      "src/include",
-      "-c",
-      "-o",
-      "build/gdt.o",
-      "src/kernel/gdt.c"
-    ],
-    "directory": "/home/user/桌面/HeliumOS",
-    "file": "/home/user/桌面/HeliumOS/src/kernel/gdt.c",
-    "output": "/home/user/桌面/HeliumOS/build/gdt.o"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-m32",
-      "-ffreestanding",
-      "-fno-pie",
-      "-Wall",
-      "-Wextra",
-      "-g",
-      "-I",
-      "src/include",
-      "-c",
-      "-o",
-      "build/tss.o",
-      "src/kernel/tss.c"
-    ],
-    "directory": "/home/user/桌面/HeliumOS",
-    "file": "/home/user/桌面/HeliumOS/src/kernel/tss.c",
-    "output": "/home/user/桌面/HeliumOS/build/tss.o"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-m32",
-      "-ffreestanding",
-      "-fno-pie",
-      "-Wall",
-      "-Wextra",
-      "-g",
-      "-I",
-      "src/include",
-      "-c",
-      "-o",
       "build/task.o",
       "src/process/task.c"
     ],
@@ -252,66 +92,6 @@
       "src/include",
       "-c",
       "-o",
-      "build/printf.o",
-      "src/kernel/printf.c"
-    ],
-    "directory": "/home/user/桌面/HeliumOS",
-    "file": "/home/user/桌面/HeliumOS/src/kernel/printf.c",
-    "output": "/home/user/桌面/HeliumOS/build/printf.o"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-m32",
-      "-ffreestanding",
-      "-fno-pie",
-      "-Wall",
-      "-Wextra",
-      "-g",
-      "-I",
-      "src/include",
-      "-c",
-      "-o",
-      "build/string.o",
-      "src/kernel/string.c"
-    ],
-    "directory": "/home/user/桌面/HeliumOS",
-    "file": "/home/user/桌面/HeliumOS/src/kernel/string.c",
-    "output": "/home/user/桌面/HeliumOS/build/string.o"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-m32",
-      "-ffreestanding",
-      "-fno-pie",
-      "-Wall",
-      "-Wextra",
-      "-g",
-      "-I",
-      "src/include",
-      "-c",
-      "-o",
-      "build/idt.o",
-      "src/kernel/idt.c"
-    ],
-    "directory": "/home/user/桌面/HeliumOS",
-    "file": "/home/user/桌面/HeliumOS/src/kernel/idt.c",
-    "output": "/home/user/桌面/HeliumOS/build/idt.o"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-m32",
-      "-ffreestanding",
-      "-fno-pie",
-      "-Wall",
-      "-Wextra",
-      "-g",
-      "-I",
-      "src/include",
-      "-c",
-      "-o",
       "build/isr.o",
       "src/kernel/isr.c"
     ],
@@ -332,92 +112,12 @@
       "src/include",
       "-c",
       "-o",
-      "build/volume.o",
-      "src/fs/volume.c"
-    ],
-    "directory": "/home/user/桌面/HeliumOS",
-    "file": "/home/user/桌面/HeliumOS/src/fs/volume.c",
-    "output": "/home/user/桌面/HeliumOS/build/volume.o"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-m32",
-      "-ffreestanding",
-      "-fno-pie",
-      "-Wall",
-      "-Wextra",
-      "-g",
-      "-I",
-      "src/include",
-      "-c",
-      "-o",
       "build/path.o",
       "src/fs/path.c"
     ],
     "directory": "/home/user/桌面/HeliumOS",
     "file": "/home/user/桌面/HeliumOS/src/fs/path.c",
     "output": "/home/user/桌面/HeliumOS/build/path.o"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-m32",
-      "-ffreestanding",
-      "-fno-pie",
-      "-Wall",
-      "-Wextra",
-      "-g",
-      "-I",
-      "src/include",
-      "-c",
-      "-o",
-      "build/ata.o",
-      "src/drivers/ata.c"
-    ],
-    "directory": "/home/user/桌面/HeliumOS",
-    "file": "/home/user/桌面/HeliumOS/src/drivers/ata.c",
-    "output": "/home/user/桌面/HeliumOS/build/ata.o"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-m32",
-      "-ffreestanding",
-      "-fno-pie",
-      "-Wall",
-      "-Wextra",
-      "-g",
-      "-I",
-      "src/include",
-      "-c",
-      "-o",
-      "build/fat32.o",
-      "src/drivers/fat32.c"
-    ],
-    "directory": "/home/user/桌面/HeliumOS",
-    "file": "/home/user/桌面/HeliumOS/src/drivers/fat32.c",
-    "output": "/home/user/桌面/HeliumOS/build/fat32.o"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-m32",
-      "-ffreestanding",
-      "-fno-pie",
-      "-Wall",
-      "-Wextra",
-      "-g",
-      "-I",
-      "src/include",
-      "-c",
-      "-o",
-      "build/elf_loader.o",
-      "src/kernel/elf_loader.c"
-    ],
-    "directory": "/home/user/桌面/HeliumOS",
-    "file": "/home/user/桌面/HeliumOS/src/kernel/elf_loader.c",
-    "output": "/home/user/桌面/HeliumOS/build/elf_loader.o"
   },
   {
     "arguments": [
@@ -492,26 +192,6 @@
       "src/include",
       "-c",
       "-o",
-      "build/keyboard.o",
-      "src/drivers/keyboard.c"
-    ],
-    "directory": "/home/user/桌面/HeliumOS",
-    "file": "/home/user/桌面/HeliumOS/src/drivers/keyboard.c",
-    "output": "/home/user/桌面/HeliumOS/build/keyboard.o"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-m32",
-      "-ffreestanding",
-      "-fno-pie",
-      "-Wall",
-      "-Wextra",
-      "-g",
-      "-I",
-      "src/include",
-      "-c",
-      "-o",
       "build/device.o",
       "src/kernel/device.c"
     ],
@@ -552,152 +232,12 @@
       "src/include",
       "-c",
       "-o",
-      "build/pci.o",
-      "src/kernel/pci.c"
-    ],
-    "directory": "/home/user/桌面/HeliumOS",
-    "file": "/home/user/桌面/HeliumOS/src/kernel/pci.c",
-    "output": "/home/user/桌面/HeliumOS/build/pci.o"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-m32",
-      "-ffreestanding",
-      "-fno-pie",
-      "-Wall",
-      "-Wextra",
-      "-g",
-      "-I",
-      "src/include",
-      "-c",
-      "-o",
-      "build/partition.o",
-      "src/kernel/partition.c"
-    ],
-    "directory": "/home/user/桌面/HeliumOS",
-    "file": "/home/user/桌面/HeliumOS/src/kernel/partition.c",
-    "output": "/home/user/桌面/HeliumOS/build/partition.o"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-m32",
-      "-ffreestanding",
-      "-fno-pie",
-      "-Wall",
-      "-Wextra",
-      "-g",
-      "-I",
-      "src/include",
-      "-c",
-      "-o",
       "build/uaccess.o",
       "src/kernel/uaccess.c"
     ],
     "directory": "/home/user/桌面/HeliumOS",
     "file": "/home/user/桌面/HeliumOS/src/kernel/uaccess.c",
     "output": "/home/user/桌面/HeliumOS/build/uaccess.o"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-m32",
-      "-ffreestanding",
-      "-fno-pie",
-      "-Wall",
-      "-Wextra",
-      "-g",
-      "-I",
-      "src/include",
-      "-c",
-      "-o",
-      "build/rtc.o",
-      "src/kernel/rtc.c"
-    ],
-    "directory": "/home/user/桌面/HeliumOS",
-    "file": "/home/user/桌面/HeliumOS/src/kernel/rtc.c",
-    "output": "/home/user/桌面/HeliumOS/build/rtc.o"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-m32",
-      "-ffreestanding",
-      "-fno-pie",
-      "-Wall",
-      "-Wextra",
-      "-g",
-      "-I",
-      "src/include",
-      "-c",
-      "-o",
-      "build/acpi.o",
-      "src/kernel/acpi.c"
-    ],
-    "directory": "/home/user/桌面/HeliumOS",
-    "file": "/home/user/桌面/HeliumOS/src/kernel/acpi.c",
-    "output": "/home/user/桌面/HeliumOS/build/acpi.o"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-m32",
-      "-ffreestanding",
-      "-fno-pie",
-      "-Wall",
-      "-Wextra",
-      "-g",
-      "-I",
-      "src/include",
-      "-c",
-      "-o",
-      "build/panic.o",
-      "src/kernel/panic.c"
-    ],
-    "directory": "/home/user/桌面/HeliumOS",
-    "file": "/home/user/桌面/HeliumOS/src/kernel/panic.c",
-    "output": "/home/user/桌面/HeliumOS/build/panic.o"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-m32",
-      "-ffreestanding",
-      "-fno-pie",
-      "-Wall",
-      "-Wextra",
-      "-g",
-      "-I",
-      "src/include",
-      "-c",
-      "-o",
-      "build/irq.o",
-      "src/kernel/irq.c"
-    ],
-    "directory": "/home/user/桌面/HeliumOS",
-    "file": "/home/user/桌面/HeliumOS/src/kernel/irq.c",
-    "output": "/home/user/桌面/HeliumOS/build/irq.o"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-m32",
-      "-ffreestanding",
-      "-fno-pie",
-      "-Wall",
-      "-Wextra",
-      "-g",
-      "-I",
-      "src/include",
-      "-c",
-      "-o",
-      "build/extable.o",
-      "src/kernel/extable.c"
-    ],
-    "directory": "/home/user/桌面/HeliumOS",
-    "file": "/home/user/桌面/HeliumOS/src/kernel/extable.c",
-    "output": "/home/user/桌面/HeliumOS/build/extable.o"
   },
   {
     "arguments": [
@@ -752,232 +292,12 @@
       "src/include",
       "-c",
       "-o",
-      "build/net.o",
-      "src/kernel/net.c"
-    ],
-    "directory": "/home/user/桌面/HeliumOS",
-    "file": "/home/user/桌面/HeliumOS/src/kernel/net.c",
-    "output": "/home/user/桌面/HeliumOS/build/net.o"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-m32",
-      "-ffreestanding",
-      "-fno-pie",
-      "-Wall",
-      "-Wextra",
-      "-g",
-      "-I",
-      "src/include",
-      "-c",
-      "-o",
-      "build/rtl8139.o",
-      "src/drivers/rtl8139.c"
-    ],
-    "directory": "/home/user/桌面/HeliumOS",
-    "file": "/home/user/桌面/HeliumOS/src/drivers/rtl8139.c",
-    "output": "/home/user/桌面/HeliumOS/build/rtl8139.o"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-m32",
-      "-ffreestanding",
-      "-fno-pie",
-      "-Wall",
-      "-Wextra",
-      "-g",
-      "-I",
-      "src/include",
-      "-c",
-      "-o",
-      "build/net_proto.o",
-      "src/kernel/net_proto.c"
-    ],
-    "directory": "/home/user/桌面/HeliumOS",
-    "file": "/home/user/桌面/HeliumOS/src/kernel/net_proto.c",
-    "output": "/home/user/桌面/HeliumOS/build/net_proto.o"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-m32",
-      "-ffreestanding",
-      "-fno-pie",
-      "-Wall",
-      "-Wextra",
-      "-g",
-      "-I",
-      "src/include",
-      "-c",
-      "-o",
       "build/net_sock.o",
       "src/kernel/net_sock.c"
     ],
     "directory": "/home/user/桌面/HeliumOS",
     "file": "/home/user/桌面/HeliumOS/src/kernel/net_sock.c",
     "output": "/home/user/桌面/HeliumOS/build/net_sock.o"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-m32",
-      "-ffreestanding",
-      "-fno-pie",
-      "-Wall",
-      "-Wextra",
-      "-g",
-      "-I",
-      "src/include",
-      "-c",
-      "-o",
-      "build/tcp.o",
-      "src/kernel/tcp.c"
-    ],
-    "directory": "/home/user/桌面/HeliumOS",
-    "file": "/home/user/桌面/HeliumOS/src/kernel/tcp.c",
-    "output": "/home/user/桌面/HeliumOS/build/tcp.o"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-m32",
-      "-ffreestanding",
-      "-fno-pie",
-      "-Wall",
-      "-Wextra",
-      "-g",
-      "-I",
-      "src/include",
-      "-c",
-      "-o",
-      "build/kmap.o",
-      "src/kernel/kmap.c"
-    ],
-    "directory": "/home/user/桌面/HeliumOS",
-    "file": "/home/user/桌面/HeliumOS/src/kernel/kmap.c",
-    "output": "/home/user/桌面/HeliumOS/build/kmap.o"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-m32",
-      "-ffreestanding",
-      "-fno-pie",
-      "-Wall",
-      "-Wextra",
-      "-g",
-      "-I",
-      "src/include",
-      "-c",
-      "-o",
-      "build/fb.o",
-      "src/drivers/fb.c"
-    ],
-    "directory": "/home/user/桌面/HeliumOS",
-    "file": "/home/user/桌面/HeliumOS/src/drivers/fb.c",
-    "output": "/home/user/桌面/HeliumOS/build/fb.o"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-m32",
-      "-ffreestanding",
-      "-fno-pie",
-      "-Wall",
-      "-Wextra",
-      "-g",
-      "-I",
-      "src/include",
-      "-c",
-      "-o",
-      "build/font.o",
-      "src/kernel/font.c"
-    ],
-    "directory": "/home/user/桌面/HeliumOS",
-    "file": "/home/user/桌面/HeliumOS/src/kernel/font.c",
-    "output": "/home/user/桌面/HeliumOS/build/font.o"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-m32",
-      "-ffreestanding",
-      "-fno-pie",
-      "-Wall",
-      "-Wextra",
-      "-g",
-      "-I",
-      "src/include",
-      "-c",
-      "-o",
-      "build/display.o",
-      "src/kernel/display.c"
-    ],
-    "directory": "/home/user/桌面/HeliumOS",
-    "file": "/home/user/桌面/HeliumOS/src/kernel/display.c",
-    "output": "/home/user/桌面/HeliumOS/build/display.o"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-m32",
-      "-ffreestanding",
-      "-fno-pie",
-      "-Wall",
-      "-Wextra",
-      "-g",
-      "-I",
-      "src/include",
-      "-c",
-      "-o",
-      "build/vga_text.o",
-      "src/kernel/vga_text.c"
-    ],
-    "directory": "/home/user/桌面/HeliumOS",
-    "file": "/home/user/桌面/HeliumOS/src/kernel/vga_text.c",
-    "output": "/home/user/桌面/HeliumOS/build/vga_text.o"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-m32",
-      "-ffreestanding",
-      "-fno-pie",
-      "-Wall",
-      "-Wextra",
-      "-g",
-      "-I",
-      "src/include",
-      "-c",
-      "-o",
-      "build/fb_char.o",
-      "src/drivers/fb_char.c"
-    ],
-    "directory": "/home/user/桌面/HeliumOS",
-    "file": "/home/user/桌面/HeliumOS/src/drivers/fb_char.c",
-    "output": "/home/user/桌面/HeliumOS/build/fb_char.o"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-m32",
-      "-ffreestanding",
-      "-fno-pie",
-      "-Wall",
-      "-Wextra",
-      "-g",
-      "-I",
-      "src/include",
-      "-c",
-      "-o",
-      "build/mouse.o",
-      "src/drivers/mouse.c"
-    ],
-    "directory": "/home/user/桌面/HeliumOS",
-    "file": "/home/user/桌面/HeliumOS/src/drivers/mouse.c",
-    "output": "/home/user/桌面/HeliumOS/build/mouse.o"
   },
   {
     "arguments": [
@@ -1048,24 +368,6 @@
       "-Iuser/libc/include",
       "-c",
       "-o",
-      "build/libc_string.o",
-      "user/libc/string.c"
-    ],
-    "directory": "/home/user/桌面/HeliumOS",
-    "file": "/home/user/桌面/HeliumOS/user/libc/string.c",
-    "output": "/home/user/桌面/HeliumOS/build/libc_string.o"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-m32",
-      "-ffreestanding",
-      "-fno-pic",
-      "-fno-stack-protector",
-      "-Iuser/",
-      "-Iuser/libc/include",
-      "-c",
-      "-o",
       "build/libc_printf.o",
       "user/libc/printf.c"
     ],
@@ -1120,102 +422,12 @@
       "-Iuser/libc/include",
       "-c",
       "-o",
-      "build/libc_env.o",
-      "user/libc/env.c"
-    ],
-    "directory": "/home/user/桌面/HeliumOS",
-    "file": "/home/user/桌面/HeliumOS/user/libc/env.c",
-    "output": "/home/user/桌面/HeliumOS/build/libc_env.o"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-m32",
-      "-ffreestanding",
-      "-fno-pic",
-      "-fno-stack-protector",
-      "-Iuser/",
-      "-Iuser/libc/include",
-      "-c",
-      "-o",
-      "build/libc_assert.o",
-      "user/libc/assert.c"
-    ],
-    "directory": "/home/user/桌面/HeliumOS",
-    "file": "/home/user/桌面/HeliumOS/user/libc/assert.c",
-    "output": "/home/user/桌面/HeliumOS/build/libc_assert.o"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-m32",
-      "-ffreestanding",
-      "-fno-pic",
-      "-fno-stack-protector",
-      "-Iuser/",
-      "-Iuser/libc/include",
-      "-c",
-      "-o",
-      "build/libc_ctype.o",
-      "user/libc/ctype.c"
-    ],
-    "directory": "/home/user/桌面/HeliumOS",
-    "file": "/home/user/桌面/HeliumOS/user/libc/ctype.c",
-    "output": "/home/user/桌面/HeliumOS/build/libc_ctype.o"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-m32",
-      "-ffreestanding",
-      "-fno-pic",
-      "-fno-stack-protector",
-      "-Iuser/",
-      "-Iuser/libc/include",
-      "-c",
-      "-o",
-      "build/libc_qsort.o",
-      "user/libc/qsort.c"
-    ],
-    "directory": "/home/user/桌面/HeliumOS",
-    "file": "/home/user/桌面/HeliumOS/user/libc/qsort.c",
-    "output": "/home/user/桌面/HeliumOS/build/libc_qsort.o"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-m32",
-      "-ffreestanding",
-      "-fno-pic",
-      "-fno-stack-protector",
-      "-Iuser/",
-      "-Iuser/libc/include",
-      "-c",
-      "-o",
       "build/libc_abort.o",
       "user/libc/abort.c"
     ],
     "directory": "/home/user/桌面/HeliumOS",
     "file": "/home/user/桌面/HeliumOS/user/libc/abort.c",
     "output": "/home/user/桌面/HeliumOS/build/libc_abort.o"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-m32",
-      "-ffreestanding",
-      "-fno-pic",
-      "-fno-stack-protector",
-      "-Iuser/",
-      "-Iuser/libc/include",
-      "-c",
-      "-o",
-      "build/libc_stdlib.o",
-      "user/libc/stdlib.c"
-    ],
-    "directory": "/home/user/桌面/HeliumOS",
-    "file": "/home/user/桌面/HeliumOS/user/libc/stdlib.c",
-    "output": "/home/user/桌面/HeliumOS/build/libc_stdlib.o"
   },
   {
     "arguments": [
@@ -1252,24 +464,6 @@
     "directory": "/home/user/桌面/HeliumOS",
     "file": "/home/user/桌面/HeliumOS/user/libc/netdb.c",
     "output": "/home/user/桌面/HeliumOS/build/libc_netdb.o"
-  },
-  {
-    "arguments": [
-      "/usr/bin/gcc",
-      "-m32",
-      "-ffreestanding",
-      "-fno-pic",
-      "-fno-stack-protector",
-      "-Iuser/",
-      "-Iuser/libc/include",
-      "-c",
-      "-o",
-      "build/idle.o",
-      "user/idle.c"
-    ],
-    "directory": "/home/user/桌面/HeliumOS",
-    "file": "/home/user/桌面/HeliumOS/user/idle.c",
-    "output": "/home/user/桌面/HeliumOS/build/idle.o"
   },
   {
     "arguments": [
@@ -1684,5 +878,41 @@
     "directory": "/home/user/桌面/HeliumOS",
     "file": "/home/user/桌面/HeliumOS/user/term.c",
     "output": "/home/user/桌面/HeliumOS/build/term.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-m32",
+      "-ffreestanding",
+      "-fno-pic",
+      "-fno-stack-protector",
+      "-Iuser/",
+      "-Iuser/libc/include",
+      "-c",
+      "-o",
+      "build/test_namedpipe.o",
+      "user/test_namedpipe.c"
+    ],
+    "directory": "/home/user/桌面/HeliumOS",
+    "file": "/home/user/桌面/HeliumOS/user/test_namedpipe.c",
+    "output": "/home/user/桌面/HeliumOS/build/test_namedpipe.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-m32",
+      "-ffreestanding",
+      "-fno-pic",
+      "-fno-stack-protector",
+      "-Iuser/",
+      "-Iuser/libc/include",
+      "-c",
+      "-o",
+      "build/test_perm.o",
+      "user/test_perm.c"
+    ],
+    "directory": "/home/user/桌面/HeliumOS",
+    "file": "/home/user/桌面/HeliumOS/user/test_perm.c",
+    "output": "/home/user/桌面/HeliumOS/build/test_perm.o"
   }
 ]

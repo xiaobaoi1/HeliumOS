@@ -81,4 +81,7 @@ int sys_pipe_open(const char *name_user, int wr);
 /* 删除名字。已打开的句柄不受影响，最后一个句柄关闭时对象销毁。 */
 int sys_pipe_unlink(const char *name_user);
 
+/* 查询 pipe 可读字节数。 */
+int sys_pipe_avail(int h);
+
 #endif

@@ -292,7 +292,7 @@ static struct window *make_window(int x, int y, int w, int h,
     int cw = cli_w(win);
     int ch = cli_h(win);
 
-    /* 创建 shm */
+    /* 创建窗口 shm */
     char shm_name[16];
     snprintf(shm_name, sizeof(shm_name), "term-%d", slot);
 
@@ -312,41 +312,44 @@ static struct window *make_window(int x, int y, int w, int h,
     win->last_seen = 0;
     memset(win->pixels, 0, cw * ch * 4);
 
-    /* 事件 pipe（WM 保留写端） */
-    int fds[2];
-    if (pipe(fds) < 0) { win->used = 0; return NULL; }
-    win->event_w = fds[1];
+    /* 事件 pipe——命名 pipe。
+     * 先 unlink 防止上次残留（比如 WM 异常退出）。 */
+    char ev_name[24];
+    snprintf(ev_name, sizeof(ev_name), "wm-term-%d", slot);
+    pipe_unlink(ev_name);   /* 忽略 ENOENT */
 
-    /* spawn TERM */
+    int fds[2];
+    if (pipe_named(ev_name, fds) < 0) { win->used = 0; return NULL; }
+    win->event_w = fds[1];
+    ipc_close(fds[0]);   /* WM 保留写端，读端留给 term */
+
+    /* spawn TERM——事件 pipe 名字作为参数传 */
     char arg_w[8], arg_h[8];
     snprintf(arg_w, sizeof(arg_w), "%d", cw);
     snprintf(arg_h, sizeof(arg_h), "%d", ch);
 
-    char *argv[] = { "TERM", shm_name, arg_w, arg_h, NULL };
+    char *argv[] = { "TERM", shm_name, arg_w, arg_h, ev_name, NULL };
 
     struct spawn_params sp = {
         .size = sizeof(sp),
         .in_fd = SPAWN_FD_INHERIT,
         .out_fd = SPAWN_FD_INHERIT,
         .err_fd = SPAWN_FD_INHERIT,
-        .in_pipe = fds[0],           /* term 的 stdin = 事件 pipe 读端 */
-        .out_pipe = -1,
-        .err_pipe = -1,
+        .in_pipe = -1, .out_pipe = -1, .err_pipe = -1,
         .in_pty = -1, .out_pty = -1, .err_pty = -1,
         .flags = 0, .envp = 0, .out_pid = 0,
+        .child_class = CLASS_SERVICE,      /* 新增 */
+        .child_caps  = 0,                  /* TERM 不需要特权 */
     };
 
     win->term_h = spawn("TERM", argv, &sp);
     if (win->term_h < 0) {
-        ipc_close(fds[0]);
-        ipc_close(fds[1]);
+        ipc_close(win->event_w);
+        pipe_unlink(ev_name);
         win->used = 0;
         return NULL;
     }
     win->term_pid = sp.out_pid;
-
-    /* WM 关掉自己那份读端——只保留写端 */
-    ipc_close(fds[0]);
 
     return win;
 }
@@ -362,9 +365,13 @@ static void destroy_window(struct window *w) {
     }
     if (w->event_w >= 0) ipc_close(w->event_w);
 
-    /* shm 引用释放——term 退出后由 shm_unlink 清 */
+    /* 删名字——term 已退出，读端已关闭 */
+    char ev_name[24];
+    snprintf(ev_name, sizeof(ev_name), "wm-term-%d", (int)(w - g_wins));
+    pipe_unlink(ev_name);
+
     char shm_name[16];
-    snprintf(shm_name, sizeof(shm_name), "term-%d", w - g_wins);
+    snprintf(shm_name, sizeof(shm_name), "term-%d", (int)(w - g_wins));
     shm_unlink(shm_name);
 
     w->used = 0;

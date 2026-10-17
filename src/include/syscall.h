@@ -66,6 +66,7 @@
 #define SYS_PIPE_NAMED   85
 #define SYS_PIPE_OPEN    86
 #define SYS_PIPE_UNLINK  87
+#define SYS_PIPE_AVAIL  88
 
 /* ========== 系统控制 (91~99) ========== */
 #define SYS_RTC_GET_TIME  91

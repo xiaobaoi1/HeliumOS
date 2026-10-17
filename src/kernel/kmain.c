@@ -50,7 +50,8 @@ static const char *shell_env[] = {
 
 static struct task *create_task_from_elf(struct fat32_volume *vol,
                                           const char *path,
-                                          int envc, char *const envp[]) {
+                                          int envc, char *const envp[],
+                                          uint8_t class_, uint32_t caps) {
     /* 1. 创建页目录 */
     uint32_t *pgd = vmm_create_process_page_directory();
     if (!pgd) {
@@ -73,7 +74,8 @@ static struct task *create_task_from_elf(struct fat32_volume *vol,
                                     SPAWN_FD_INHERIT,
                                     SPAWN_FD_INHERIT,
                                     -1, -1, -1,
-                                    -1, -1, -1);
+                                    -1, -1, -1,
+                                    class_, caps);
 
     if (!task) {
         kprintf("[KERNEL] Failed to create task for %s\n", path);
@@ -86,7 +88,7 @@ static struct task *create_task_from_elf(struct fat32_volume *vol,
 /* ---------- 创建 IDLE 进程 ---------- */
 
 void create_idle_task(struct fat32_volume *vol) {
-    struct task *task = create_task_from_elf(vol, "/IDLE", 0, NULL);
+    struct task *task = create_task_from_elf(vol, "/IDLE", 0, NULL, CLASS_KERNEL, 0);
     if (!task) {
         panic("cannot create idle task");
     }
@@ -101,7 +103,7 @@ void create_idle_task(struct fat32_volume *vol) {
 }
 
 void create_wm_task(struct fat32_volume *vol) {
-    struct task *task = create_task_from_elf(vol, "/WM", 0, NULL);
+    struct task *task = create_task_from_elf(vol, "/WM", 0, NULL, CLASS_KERNEL, CAP_ALL);
     if (!task) {
         panic("cannot create wm task");
     }

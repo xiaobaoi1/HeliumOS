@@ -130,15 +130,23 @@ static void scroll(void) {
 /* ---------- main ---------- */
 
 int main(int argc, char **argv) {
-    if (argc < 4) {
-        dprintf(2, "usage: TERM <shm_name> <w> <h>\n");
+    if (argc < 5) {
+        dprintf(2, "usage: TERM <shm_name> <w> <h> <event_pipe>\n");
         return 1;
     }
 
     const char *shm_name = argv[1];
     g_cw = atoi(argv[2]);
     g_ch = atoi(argv[3]);
+    const char *ev_name = argv[4];
     if (g_cw <= 0 || g_ch <= 0) return 1;
+
+    /* 打开事件 pipe 读端 */
+    int ev_rd = pipe_open(ev_name, /*wr=*/0);
+    if (ev_rd < 0) {
+        dprintf(2, "term: pipe_open('%s') = %d\n", ev_name, ev_rd);
+        return 1;
+    }
 
     /* mmap shm */
     int shm_size = 8 + g_cw * g_ch * 4;
@@ -153,7 +161,6 @@ int main(int argc, char **argv) {
     uint64_t *counter = (uint64_t*)addr;
     g_pixels = (unsigned int*)(addr + 8);
 
-    /* 初始化 shm */
     memset(g_pixels, 0, g_cw * g_ch * 4);
     *counter = 1;
 
@@ -183,13 +190,13 @@ int main(int argc, char **argv) {
     int rows = g_ch / FONT_H;
     int cx = 0, cy = 0;
 
-        for (;;) {
+    for (;;) {
         int dirty = 0;
 
-        /* 1. 只在 stdin 有数据时读——避免阻塞 */
-        if (fd_avail(0) > 0) {
+        /* 1. 事件 pipe → pty master */
+        if (pipe_avail(ev_rd) > 0) {
             char kbuf[64];
-            int kn = read(0, kbuf, sizeof(kbuf));
+            int kn = pipe_read(ev_rd, kbuf, sizeof(kbuf));
             if (kn > 0) pty_write(master, kbuf, kn);
         }
 

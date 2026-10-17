@@ -51,6 +51,26 @@ struct io_slot {
 #define ENVP_MAX  16
 #define ENV_MAX   256
 
+
+
+/* 进程分级 */
+#define CLASS_USER     0   /* 普通用户程序 */
+#define CLASS_SERVICE  1   /* 服务进程 */
+#define CLASS_KERNEL   2   /* 内核创建（IDLE / WM） */
+
+/* 能力位 */
+#define CAP_NONE         0x00
+#define CAP_KILL_OTHER   0x01   /* 杀非子进程（当前无使用者，预留） */
+#define CAP_DISPLAY      0x02   /* fb_claim / input_claim */
+#define CAP_MMIO         0x04   /* SYS_FB_MAP */
+#define CAP_SPAWN_SYS    0x08   /* spawn 时给子进程 SERVICE class 或非 0 caps */
+#define CAP_RAW_DEV      0x10   /* SYS_DEV_OPEN（当前不检查，预留） */
+
+#define CAP_ALL  (CAP_KILL_OTHER | CAP_DISPLAY | CAP_MMIO | \
+                  CAP_SPAWN_SYS | CAP_RAW_DEV)
+
+
+
 /* 就绪队列（在 task.c 中定义） */
 extern struct task *ready_queue_head;
 extern struct task *ready_queue_tail;
@@ -91,6 +111,11 @@ struct task {
     struct task *next;
     uint32_t creator_pid;            /* 创建者的 pid，仅记录用 */
     int exit_status;
+
+    /* 进程分级 + 能力（不占前 6 字段偏移） */
+    uint8_t  class;
+    uint8_t  reserved_priv[3];
+    uint32_t caps;
 
     uint32_t heap_base;
     uint32_t heap_brk;
@@ -149,7 +174,8 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd,
                          int envc, char *const envp[],
                          int redir_in_fd, int redir_out_fd, int redir_err_fd,
                          int redir_in_pipe, int redir_out_pipe, int redir_err_pipe,
-                         int redir_in_pty, int redir_out_pty, int redir_err_pty);
+                         int redir_in_pty, int redir_out_pty, int redir_err_pty,
+                         uint8_t child_class, uint32_t child_caps);
 struct task *get_current_task(void);
 void set_current_task(struct task *task);
 void scheduler_start(void) __attribute__((noreturn));

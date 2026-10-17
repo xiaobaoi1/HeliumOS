@@ -264,7 +264,8 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd,
                          int envc, char *const envp[],
                          int redir_in_fd, int redir_out_fd, int redir_err_fd,
                          int redir_in_pipe, int redir_out_pipe, int redir_err_pipe,
-                         int redir_in_pty, int redir_out_pty, int redir_err_pty) {
+                         int redir_in_pty, int redir_out_pty, int redir_err_pty,
+                         uint8_t child_class, uint32_t child_caps) {
     /* 1. 分配所有物理资源，任何一步失败都回滚 */
     struct task *task = (struct task*)pmm_alloc_page();
     if (!task) {
@@ -314,6 +315,9 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd,
     task->sleep_ticks = 0;
 
     task->creator_pid = get_current_task() ? get_current_task()->pid : 0;
+    task->class = child_class;
+    task->caps  = child_caps;
+    task->reserved_priv[0] = task->reserved_priv[1] = task->reserved_priv[2] = 0;
     task->wait_deadline = 0;
 
     task->refcount = 1;
