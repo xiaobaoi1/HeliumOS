@@ -110,7 +110,8 @@ USER_CFLAGS = -m32 -ffreestanding -fno-pic -fno-stack-protector \
 USER_APPS = shell idle test testkill sleeper argtest test_write \
             test_fault test_env count cat echo head tail wc \
             test_mmap test_stack ping test_dns nc tcpserver \
-            test_input test_pty wm term test_namedpipe test_perm
+            test_input test_pty wm term test_namedpipe test_perm \
+			test_createwin
 
 USER_OBJS = $(addprefix $(BUILD_DIR)/,$(addsuffix .o,$(USER_APPS)))
 USER_ELFS = $(addprefix $(BUILD_DIR)/,$(addsuffix .ELF,$(USER_APPS)))

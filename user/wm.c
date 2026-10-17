@@ -13,6 +13,7 @@
 #include "string.h"
 #include <stdint.h>
 #include "signal.h"
+#include "wm_proto.h"
 
 /* 前向声明 */
 static void mouse_restore(void);
@@ -91,6 +92,10 @@ struct window {
     int term_h;
     int term_pid;
 
+    int is_term;              /* 1 = WM spawn 的 TERM，0 = 应用自建 */
+    int owner_pid;            /* 存活检测 */
+    char shm_name[16];        /* 仅应用窗口——unlink 时用 */
+
     int shm_idx;
     unsigned int *pixels;    /* WM 侧 shm 映射（像素部分） */
     uint64_t *counter;       /* shm 头部 */
@@ -99,6 +104,7 @@ struct window {
     int event_w;             /* WM 保留的事件 pipe 写端 */
 };
 
+static int g_inbox_rd = -1;
 static struct window g_wins[MAX_WINDOWS];
 static int g_next_z = 1;
 static struct window *g_focus = NULL;
@@ -351,7 +357,58 @@ static struct window *make_window(int x, int y, int w, int h,
     }
     win->term_pid = sp.out_pid;
 
+    win->is_term = 1;
+    win->owner_pid = sp.out_pid;
+
     return win;
+}
+
+static struct window *make_app_window(struct wm_request *req) {
+    if (req->w == 0 || req->h == 0) return NULL;
+    if (req->w > 1600 || req->h > 1200) return NULL;
+
+    int slot = -1;
+    for (int i = 0; i < MAX_WINDOWS; i++)
+        if (!g_wins[i].used) { slot = i; break; }
+    if (slot < 0) return NULL;
+
+    struct window *w = &g_wins[slot];
+    memset(w, 0, sizeof(*w));
+    w->used = 1;
+    w->x = 120 + slot * 40;
+    w->y = 120 + slot * 40;
+    w->w = req->w + 2 * BORDER;
+    w->h = req->h + TITLE_H + 2 * BORDER;
+    w->z = g_next_z++;
+    w->is_term = 0;
+    w->owner_pid = req->owner_pid;
+    strncpy(w->title, req->title, sizeof(w->title) - 1);
+    strncpy(w->shm_name, req->shm_name, sizeof(w->shm_name) - 1);
+
+    /* 打开应用 shm */
+    int shm_size = 8 + req->w * req->h * 4;
+    int shm_id = shm_open(req->shm_name, shm_size, 0);
+    if (shm_id < 0) { w->used = 0; return NULL; }
+
+    unsigned int addr = mmap(0, shm_size,
+                             PROT_READ | PROT_WRITE,
+                             MAP_SHARED, shm_id);
+    if ((int)addr <= 0) { w->used = 0; return NULL; }
+
+    w->shm_idx = shm_id;
+    w->counter = (uint64_t*)addr;
+    w->pixels = (unsigned int*)(addr + 8);
+    w->last_seen = 0;
+
+    /* 打开应用 ev pipe 写端 */
+    int ev_w = pipe_open(req->ev_name, 1);
+    if (ev_w < 0) { w->used = 0; return NULL; }
+    w->event_w = ev_w;
+
+    mouse_restore();
+    redraw_region(w->x, w->y, w->x + w->w + 4, w->y + w->h + 4);
+    mouse_draw();
+    return w;
 }
 
 static void destroy_window(struct window *w) {
@@ -382,6 +439,41 @@ static void destroy_window(struct window *w) {
     mouse_draw();
 }
 
+static void cleanup_dead_windows(void) {
+    uint32_t pids[64];
+    int n = proc_list(pids, 64);
+
+    for (int i = 0; i < MAX_WINDOWS; i++) {
+        struct window *w = &g_wins[i];
+        if (!w->used) continue;
+
+        int alive = 0;
+        for (int j = 0; j < n; j++) {
+            if ((int)pids[j] == w->owner_pid) { alive = 1; break; }
+        }
+        if (alive) continue;
+
+        int x0, y0, x1, y1;
+        win_bbox(w, &x0, &y0, &x1, &y1);
+
+        if (w->event_w >= 0) ipc_close(w->event_w);
+        if (!w->is_term && w->shm_name[0])
+            shm_unlink(w->shm_name);
+        if (w->is_term && w->term_h >= 0) {
+            kill(w->term_h, SIGKILL);
+            int st; wait(w->term_h, &st, 200);
+            process_close(w->term_h);
+        }
+
+        w->used = 0;
+        if (g_focus == w) g_focus = NULL;
+
+        mouse_restore();
+        redraw_region(x0, y0, x1, y1);
+        mouse_draw();
+    }
+}
+
 /* ==================== main ==================== */
 
 int main(int argc, char **argv) {
@@ -405,6 +497,17 @@ int main(int argc, char **argv) {
     if ((int)back_addr <= 0) { printf("wm: back mmap failed\n"); return 1; }
     g_back = (unsigned int*)back_addr;
     memset(g_back, 0, back_size);
+
+
+    /* wm-inbox：先 unlink 清残留，再创建 */
+    pipe_unlink(WM_INBOX_NAME);
+    int inbox_fds[2];
+    if (pipe_named(WM_INBOX_NAME, inbox_fds) < 0) {
+        printf("wm: wm-inbox create failed\n");
+        return 1;
+    }
+    g_inbox_rd = inbox_fds[0];
+    ipc_close(inbox_fds[1]);   /* WM 只保留读端 */
 
     struct window *w1 = make_window(80, 60, 600, 400, "Shell 1", 0);
     struct window *w2 = make_window(360, 300, 600, 400, "Shell 2", 1);
@@ -533,12 +636,16 @@ int main(int argc, char **argv) {
             }
         }
 
-        // static int wc = 0;
-        // if (wc++ < 30) {
-        //     dprintf(-1, "wm: c0=%llu l0=%llu c1=%llu l1=%llu\n",
-        //             w1 ? *w1->counter : 0, w1 ? w1->last_seen : 0,
-        //             w2 ? *w2->counter : 0, w2 ? w2->last_seen : 0);
-        // }
+        /* wm-inbox：处理创建请求 */
+        while (g_inbox_rd >= 0 &&
+               pipe_avail(g_inbox_rd) >= (int)sizeof(struct wm_request)) {
+            struct wm_request req;
+            int n = pipe_read(g_inbox_rd, &req, sizeof(req));
+            if (n == (int)sizeof(req) && req.magic == WM_MAGIC &&
+                req.type == WM_REQ_CREATE) {
+                make_app_window(&req);
+            }
+        }
 
         /* 检查 term 更新——counter 变化才重绘 */
         for (int i = 0; i < MAX_WINDOWS; i++) {
@@ -552,6 +659,13 @@ int main(int argc, char **argv) {
                           cli_x(w) + cli_w(w),
                           cli_y(w) + cli_h(w));
             mouse_draw();
+        }
+
+        /* 每 50 轮检查一次死窗口 */
+        static int check_cnt = 0;
+        if (++check_cnt >= 50) {
+            check_cnt = 0;
+            cleanup_dead_windows();
         }
 
         sleep_ms(2);
