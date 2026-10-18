@@ -113,7 +113,8 @@ USER_APPS = shell idle test testkill sleeper argtest test_write \
             test_mmap test_stack ping test_dns nc tcpserver \
             test_input test_pty wm term test_namedpipe test_perm \
 			test_createwin test_ansi\
-			dhcpclient desktop test_raw kilo test_malloc_loop
+			dhcpclient desktop test_raw kilo test_malloc_loop \
+			grep find hexdump
 
 USER_OBJS = $(addprefix $(BUILD_DIR)/,$(addsuffix .o,$(USER_APPS)))
 USER_ELFS = $(addprefix $(BUILD_DIR)/,$(addsuffix .ELF,$(USER_APPS)))

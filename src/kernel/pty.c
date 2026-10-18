@@ -10,7 +10,8 @@
 
 struct pty_pair {
     uint8_t used;
-    uint8_t reserved[3];
+    uint8_t esc_state;
+    uint8_t reserved[2];
 
     uint8_t  to_master[PTY_BUF_SIZE];
     uint32_t tm_head, tm_tail;
@@ -103,6 +104,27 @@ static void wake_slave(struct pty_pair *p) {
  * 只做最基本：行缓冲、退格、回车提交、^U 清行。
  * 不做：回显、^C、^D、^Z。 */
 static void line_discipline(struct pty_pair *p, uint8_t c) {
+    /* ESC 序列过滤：cooked mode 下丢弃 \x1b[... 序列。
+     * 方向键、Delete、功能键在 shell 里不该有作用。 */
+    if (p->esc_state == 1) {
+        if (c == '[') { p->esc_state = 2; return; }
+        p->esc_state = 0;
+        return;
+    }
+    if (p->esc_state == 2) {
+        if ((c >= '0' && c <= '9') || c == ';' || c == '?') return;
+        p->esc_state = 0;
+        return;
+    }
+    if (c == 0x1B) { p->esc_state = 1; return; }
+
+    /* 其他控制字符过滤（保留 \n \r \b \t ^C ^D ^U）。
+     * Ctrl+S/Q/F 等在 shell 里不该显示或存入行缓冲。 */
+    if (c < 0x20 && c != '\n' && c != '\r' && c != '\b' && c != '\t' &&
+        c != 0x03 && c != 0x04 && c != 0x15) {
+        return;
+    }
+    
     /* 小工具：往 to_master 写数据 + 唤醒 */
     #define ECHO(s, n) do { \
         buf_write(p->to_master, &p->tm_head, p->tm_tail, \

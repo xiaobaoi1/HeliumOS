@@ -1938,5 +1938,77 @@
     "directory": "/home/user/桌面/HeliumOS",
     "file": "/home/user/桌面/HeliumOS/user/kilo.c",
     "output": "/home/user/桌面/HeliumOS/build/kilo.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-m32",
+      "-ffreestanding",
+      "-fno-pic",
+      "-fno-stack-protector",
+      "-Iuser/",
+      "-Iuser/libc/include",
+      "-c",
+      "-o",
+      "build/test_malloc_loop.o",
+      "user/test_malloc_loop.c"
+    ],
+    "directory": "/home/user/桌面/HeliumOS",
+    "file": "/home/user/桌面/HeliumOS/user/test_malloc_loop.c",
+    "output": "/home/user/桌面/HeliumOS/build/test_malloc_loop.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-m32",
+      "-ffreestanding",
+      "-fno-pic",
+      "-fno-stack-protector",
+      "-Iuser/",
+      "-Iuser/libc/include",
+      "-c",
+      "-o",
+      "build/grep.o",
+      "user/grep.c"
+    ],
+    "directory": "/home/user/桌面/HeliumOS",
+    "file": "/home/user/桌面/HeliumOS/user/grep.c",
+    "output": "/home/user/桌面/HeliumOS/build/grep.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-m32",
+      "-ffreestanding",
+      "-fno-pic",
+      "-fno-stack-protector",
+      "-Iuser/",
+      "-Iuser/libc/include",
+      "-c",
+      "-o",
+      "build/find.o",
+      "user/find.c"
+    ],
+    "directory": "/home/user/桌面/HeliumOS",
+    "file": "/home/user/桌面/HeliumOS/user/find.c",
+    "output": "/home/user/桌面/HeliumOS/build/find.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-m32",
+      "-ffreestanding",
+      "-fno-pic",
+      "-fno-stack-protector",
+      "-Iuser/",
+      "-Iuser/libc/include",
+      "-c",
+      "-o",
+      "build/hexdump.o",
+      "user/hexdump.c"
+    ],
+    "directory": "/home/user/桌面/HeliumOS",
+    "file": "/home/user/桌面/HeliumOS/user/hexdump.c",
+    "output": "/home/user/桌面/HeliumOS/build/hexdump.o"
   }
 ]

@@ -44,19 +44,39 @@ static int read_line(char *buf, int max) {
     return i;
 }
 
-/* ---------- 参数解析：原地拆分，argv 存指针 ---------- */
-
+/* 原地拆分 argv。支持 "..." 和 '...' 引号：引号内的空格不分割，
+ * 引号本身去掉。无引号时行为和原来一致。
+ *
+ * 原地修改的原理：读指针 p 只在非引号字符时前进写指针 w，
+ * 跳过引号字符时 w 不前进——w 始终 ≤ p，安全覆盖。 */
 static int tokenize(char *cmd, char **argv, int max) {
     int argc = 0;
     char *p = cmd;
+    char *w = cmd;
+
     while (*p) {
         while (*p == ' ' || *p == '\t') p++;
         if (!*p) break;
         if (argc >= max) break;
-        argv[argc++] = p;
-        while (*p && *p != ' ' && *p != '\t') p++;
-        if (*p) *p++ = '\0';
+
+        argv[argc++] = w;
+
+        while (*p && *p != ' ' && *p != '\t') {
+            if (*p == '"' || *p == '\'') {
+                char q = *p++;
+                while (*p && *p != q) {
+                    *w++ = *p++;
+                }
+                if (*p == q) p++;   /* 跳过结束引号 */
+            } else {
+                *w++ = *p++;
+            }
+        }
+
+        if (*p) p++;                /* 跳过分隔符（空格或 tab） */
+        *w++ = '\0';
     }
+
     return argc;
 }
 
