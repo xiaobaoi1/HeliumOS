@@ -5,6 +5,7 @@
 #include <string.h>
 #include <stddef.h>
 #include <vmm.h>
+#include <pmm.h>
 
 static struct fb_info g_fb;
 

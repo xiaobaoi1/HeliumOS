@@ -12,6 +12,9 @@
 #include <vma.h>
 #include <vmm.h>
 #include <shm.h>
+#include <string.h>
+#include <pmm.h>
+#include <irq.h>
 
 extern void sleep_tick(void);
 

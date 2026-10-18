@@ -4,6 +4,7 @@
 #include <string.h>
 #include <stddef.h>
 #include <screen.h>
+#include <printf.h>
 
 static int cursor_x = 0;
 static int cursor_y = 0;

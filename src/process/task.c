@@ -10,6 +10,8 @@
 #include <net_sock.h>
 #include <input.h>
 #include <display.h>
+#include <scheduler.h>
+#include <string.h>
 
 extern void enter_user_mode(void);
 

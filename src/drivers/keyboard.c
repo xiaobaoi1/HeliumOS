@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <signal.h>
 #include <input.h>
+#include <irq.h>
 
 #define KEYBOARD_DATA_PORT   0x60
 

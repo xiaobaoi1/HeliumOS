@@ -215,6 +215,79 @@ static inline int __syscall5(int num, int a, int b, int c, int d, int e) {
     return ret;
 }
 
+/* ---------- 打开标志 ---------- */
+#define FS_O_RDONLY   0x01
+#define FS_O_WRONLY   0x02
+#define FS_O_RDWR     0x03
+#define FS_O_CREAT    0x04
+#define FS_O_TRUNC    0x08
+
+/* ---------- dirent（和内核一致） ---------- */
+#define DIRENT_NAME_MAX  256
+struct dirent {
+    char          name[DIRENT_NAME_MAX];
+    unsigned char attributes;
+    unsigned char reserved[3];
+    unsigned int  size;
+    unsigned short mod_date;
+    unsigned short mod_time;
+    unsigned int   pad;
+};
+
+/* 与内核 src/include/rtc.h 一致 */
+struct rtc_time {
+    unsigned short year;
+    unsigned char  month;
+    unsigned char  day;
+    unsigned char  hour;
+    unsigned char  minute;
+    unsigned char  second;
+    unsigned char  weekday;
+    unsigned char  reserved;
+};
+
+/* ---------- 标准 fd ---------- */
+#define STDIN_FILENO   0
+#define STDOUT_FILENO  1
+#define STDERR_FILENO  2
+
+/* 设备类型 */
+#define DEV_TYPE_KEYBOARD  1
+#define DEV_TYPE_SERIAL    2
+#define DEV_TYPE_VGA       3
+#define DEV_TYPE_ATA       4
+
+struct input_event {
+    unsigned int type;
+    unsigned int code;
+    int          x, y;
+};
+
+#define INPUT_KEY        1
+#define INPUT_MOUSE_MOVE 2
+#define INPUT_MOUSE_BTN  3
+
+
+
+struct fb_user_info {
+    unsigned int width;
+    unsigned int height;
+    unsigned int pitch;
+    unsigned int bpp;
+    unsigned int addr;
+};
+
+
+
+struct net_if_info {
+    unsigned int  ip;
+    unsigned int  mask;
+    unsigned int  gw;
+    unsigned int  broadcast;
+    unsigned char mac[6];
+    unsigned char reserved[2];
+};
+
 /* ---------- 便捷包装 ---------- */
 
 /* 进程控制 */
@@ -418,47 +491,7 @@ static inline int dev_close(int dev) {
     return __syscall(SYS_DEV_CLOSE, dev, 0, 0);
 }
 
-/* ---------- 打开标志 ---------- */
-#define FS_O_RDONLY   0x01
-#define FS_O_WRONLY   0x02
-#define FS_O_RDWR     0x03
-#define FS_O_CREAT    0x04
-#define FS_O_TRUNC    0x08
 
-/* ---------- dirent（和内核一致） ---------- */
-#define DIRENT_NAME_MAX  256
-struct dirent {
-    char          name[DIRENT_NAME_MAX];
-    unsigned char attributes;
-    unsigned char reserved[3];
-    unsigned int  size;
-    unsigned short mod_date;
-    unsigned short mod_time;
-    unsigned int   pad;
-};
-
-/* 与内核 src/include/rtc.h 一致 */
-struct rtc_time {
-    unsigned short year;
-    unsigned char  month;
-    unsigned char  day;
-    unsigned char  hour;
-    unsigned char  minute;
-    unsigned char  second;
-    unsigned char  weekday;
-    unsigned char  reserved;
-};
-
-/* ---------- 标准 fd ---------- */
-#define STDIN_FILENO   0
-#define STDOUT_FILENO  1
-#define STDERR_FILENO  2
-
-/* 设备类型 */
-#define DEV_TYPE_KEYBOARD  1
-#define DEV_TYPE_SERIAL    2
-#define DEV_TYPE_VGA       3
-#define DEV_TYPE_ATA       4
 
 
 
@@ -476,16 +509,6 @@ static inline unsigned int   ntohl(unsigned int x)   { return htonl(x); }
 static inline unsigned short ntohs(unsigned short x) { return htons(x); }
 
 
-struct input_event {
-    unsigned int type;
-    unsigned int code;
-    int          x, y;
-};
-
-#define INPUT_KEY        1
-#define INPUT_MOUSE_MOVE 2
-#define INPUT_MOUSE_BTN  3
-
 static inline int input_poll(struct input_event *ev) {
     return __syscall(SYS_INPUT_POLL, (int)ev, 0, 0);
 }
@@ -494,13 +517,6 @@ static inline int input_claim(void) {
     return __syscall(SYS_INPUT_CLAIM, 0, 0, 0);
 }
 
-struct fb_user_info {
-    unsigned int width;
-    unsigned int height;
-    unsigned int pitch;
-    unsigned int bpp;
-    unsigned int addr;
-};
 
 static inline int fb_map(struct fb_user_info *info) {
     return __syscall(SYS_FB_MAP, (int)info, 0, 0);
@@ -537,15 +553,6 @@ static inline int fd_avail(int fd) {
     return __syscall(SYS_FD_AVAIL, fd, 0, 0);
 }
 
-
-struct net_if_info {
-    unsigned int  ip;
-    unsigned int  mask;
-    unsigned int  gw;
-    unsigned int  broadcast;
-    unsigned char mac[6];
-    unsigned char reserved[2];
-};
 
 static inline int net_set_if(unsigned int ip, unsigned int mask, unsigned int gw) {
     return __syscall(SYS_NET_SET_IF, (int)ip, (int)mask, (int)gw);

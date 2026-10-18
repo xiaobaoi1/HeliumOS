@@ -415,7 +415,7 @@ static int parse_redirect(char **argv, struct redirect *r) {
 
 /* 按 | 分割 argv。argv 原地修改：| 变成 NULL 终结符。
  * 返回段数（>=1），超限返回 -1。 */
-static int split_by_pipe(char **argv, char **segs, int max) {
+static int split_by_pipe(char **argv, char ***segs, int max) {
     if (max < 1) return -1;
     int n = 1;
     segs[0] = argv;
@@ -637,7 +637,7 @@ static void cmd_uname(void) {
 
 /* ---------- 主循环 ---------- */
 
-void main(int _argc, char **_argv) {
+int main(int _argc, char **_argv) {
     (void)_argc; (void)_argv;
 
     /* shell 忽略 SIGINT —— 按 Ctrl+C 不杀 shell */

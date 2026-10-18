@@ -168,7 +168,7 @@ static void test_wait_timeout_then_kill(void) {
 
 /* ---------- 主入口 ---------- */
 
-void main(int argc, char **argv) {
+int main(int argc, char **argv) {
     (void)argc; (void)argv;
 
     // tty_set_color(C_YELLOW, C_BLACK);

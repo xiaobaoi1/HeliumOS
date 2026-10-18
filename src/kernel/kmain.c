@@ -38,6 +38,7 @@
 #include <input.h>
 #include <pty.h>
 #include <e1000.h>
+#include <tty.h>
 
 
 static const char *shell_env[] = {

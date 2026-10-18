@@ -26,6 +26,10 @@
 #include <input.h>
 #include <pty.h>
 #include <net_proto.h>
+#include <string.h>
+#include <elf.h>
+#include <heap.h>
+#include <scheduler.h>
 
 #define PROT_READ   0x01
 #define PROT_WRITE  0x02

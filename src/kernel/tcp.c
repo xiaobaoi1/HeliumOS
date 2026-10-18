@@ -3,6 +3,7 @@
 #include <printf.h>
 #include <string.h>
 #include <stddef.h>
+#include <heap.h>
 
 static struct tcp_socket g_tcp[TCP_MAX_SOCKETS];
 
