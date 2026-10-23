@@ -6,7 +6,7 @@
 #include <stddef.h>
 #include "stdio.h"
 
-/* ---------- ELF 32 位结构（只定义加载器需要的） ---------- */
+/* ---------- ELF 32 位结构 ---------- */
 
 #define EI_NIDENT 16
 
@@ -65,41 +65,46 @@ typedef struct {
 #define PT_DYNAMIC 2
 
 /* d_tag */
-#define DT_NULL     0
-#define DT_NEEDED   1
-#define DT_PLTRELSZ 2
-#define DT_STRTAB   5
-#define DT_SYMTAB   6
-#define DT_REL      17
-#define DT_RELSZ    18
-#define DT_JMPREL   23
+#define DT_NULL        0
+#define DT_NEEDED      1
+#define DT_PLTRELSZ    2
+#define DT_HASH        4
+#define DT_STRTAB      5
+#define DT_SYMTAB      6
+#define DT_REL         17
+#define DT_RELSZ       18
+#define DT_JMPREL      23
+#define DT_INIT_ARRAY  25
+#define DT_INIT_ARRAYSZ 27
 
-/* r_info 编码 */
 #define R_SYM(r_info)  ((r_info) >> 8)
 #define R_TYPE(r_info) ((r_info) & 0xFF)
 
-#define R_386_32      1
+#define R_386_32       1
 #define R_386_GLOB_DAT 6
 #define R_386_JMP_SLOT 7
 #define R_386_RELATIVE 8
 
-/* ---------- 加载器状态 ---------- */
-
 #define DL_MAX_LIBS 8
+#define DL_MAX_DEPS 8
 
 struct loaded_lib {
     int used;
     char path[64];
-    uint32_t base;              /* mmap 返回的基址 */
-    uint32_t bias;              /* base - p_vaddr（p_vaddr 通常 0） */
+    uint32_t bias;
 
-    uint32_t dyn_addr;          /* .dynamic 在进程内的地址 */
+    uint32_t dyn_addr;
     uint32_t dyn_size;
 
     uint32_t symtab_addr;
     uint32_t strtab_addr;
+    uint32_t nsyms;              /* 符号总数，来自 DT_HASH */
 
     int refcount;
+
+    /* 依赖的库（DT_NEEDED） */
+    int dep_count;
+    struct loaded_lib *deps[DL_MAX_DEPS];
 };
 
 static struct loaded_lib g_libs[DL_MAX_LIBS];
@@ -118,8 +123,6 @@ char *dlerror(void) {
     return g_errbuf;
 }
 
-/* ---------- 按路径查已加载 ---------- */
-
 static struct loaded_lib *find_lib(const char *path) {
     for (int i = 0; i < DL_MAX_LIBS; i++) {
         if (g_libs[i].used && strcmp(g_libs[i].path, path) == 0)
@@ -127,8 +130,6 @@ static struct loaded_lib *find_lib(const char *path) {
     }
     return NULL;
 }
-
-/* ---------- 从 ELF 数据读 ---------- */
 
 static uint32_t get_dyn(struct loaded_lib *lib, int32_t tag) {
     Elf32_Dyn *dyn = (Elf32_Dyn*)lib->dyn_addr;
@@ -140,26 +141,36 @@ static uint32_t get_dyn(struct loaded_lib *lib, int32_t tag) {
     return 0;
 }
 
-/* ---------- 符号查找（只在单个 handle 内） ---------- */
+/* ---------- 符号查找（支持依赖链递归） ---------- */
 
+/* 在本库的 .dynsym 中查找有定义的符号 */
 static const Elf32_Sym *find_sym_in_lib(struct loaded_lib *lib, const char *name) {
-    if (!lib->symtab_addr || !lib->strtab_addr) return NULL;
+    if (!lib->symtab_addr || !lib->strtab_addr || !lib->nsyms) return NULL;
 
-    /* .dynsym 的大小：从 strtab_addr - symtab_addr 不一定准确，
-     * 但 GNU hash 或者遍历到 st_name == 0 且 st_value == 0 的哨兵。
-     * 第一版简化：遍历 symtab，直到名字为空且 value 为 0。 */
     Elf32_Sym *sym = (Elf32_Sym*)lib->symtab_addr;
     const char *strtab = (const char*)lib->strtab_addr;
 
-    for (int i = 1; i < 512; i++) {   /* 上限保护 */
-        if (sym[i].st_name == 0 && sym[i].st_value == 0 &&
-            sym[i].st_size == 0 && sym[i].st_info == 0)
-            break;
-        const char *sname = strtab + sym[i].st_name;
-        if (strcmp(sname, name) == 0)
+    /* 从 1 开始，跳过 index 0 的全零空符号 */
+    for (uint32_t i = 1; i < lib->nsyms; i++) {
+        /* 跳过未定义符号（SHN_UNDEF），依赖库中才有 */
+        if (sym[i].st_shndx == 0) continue;
+
+        if (strcmp(strtab + sym[i].st_name, name) == 0)
             return &sym[i];
     }
     return NULL;
+}
+
+/* 递归查找符号：先自己，再依赖。找不到返回 0xFFFFFFFF (-1) */
+static uint32_t find_symbol_addr(struct loaded_lib *lib, const char *name) {
+    const Elf32_Sym *sym = find_sym_in_lib(lib, name);
+    if (sym) return lib->bias + sym->st_value;
+
+    for (int i = 0; i < lib->dep_count; i++) {
+        uint32_t addr = find_symbol_addr(lib->deps[i], name);
+        if (addr != 0xFFFFFFFF) return addr;
+    }
+    return 0xFFFFFFFF;
 }
 
 /* ---------- 重定位 ---------- */
@@ -186,15 +197,14 @@ static int apply_relocs(struct loaded_lib *lib, uint32_t rel_addr,
             *loc = lib->bias + addend;
         } else if (type == R_386_GLOB_DAT || type == R_386_JMP_SLOT) {
             const char *sname = strtab + symtab[symidx].st_name;
-            /* 先在当前库找，找不到再查依赖链——第一版只查当前库 */
-            const Elf32_Sym *sym = find_sym_in_lib(lib, sname);
-            if (!sym) {
+            uint32_t addr = find_symbol_addr(lib, sname);
+            if (addr == 0xFFFFFFFF) {
                 dprintf(2, "[dl] unresolved: %s\n", sname);
                 return -1;
             }
-            *loc = lib->bias + sym->st_value;
+            *loc = addr;
         } else {
-            /* 其他类型忽略——-fPIC 的简单库通常只有上面三种 */
+            /* 不支持的 reloc 类型：忽略 */
         }
     }
     return 0;
@@ -203,7 +213,7 @@ static int apply_relocs(struct loaded_lib *lib, uint32_t rel_addr,
 /* ---------- dlopen ---------- */
 
 void *dlopen(const char *path, int mode) {
-    (void)mode;   /* 第一版只做 RTLD_NOW 等价行为 */
+    (void)mode;
 
     if (!path) { set_error("null path"); return NULL; }
 
@@ -237,17 +247,12 @@ void *dlopen(const char *path, int mode) {
         fs_close(fd); set_error("bad phnum"); return NULL;
     }
 
-    /* 读 program headers */
     Elf32_Phdr ph[16];
     uint32_t ph_bytes = eh.e_phnum * sizeof(Elf32_Phdr);
-    if (fs_seek(fd, eh.e_phoff) != 0) {
-        fs_close(fd); set_error("seek phdr failed"); return NULL;
-    }
-    if (fs_read(fd, ph, ph_bytes) != (int)ph_bytes) {
+    if (fs_seek(fd, eh.e_phoff) != 0 || fs_read(fd, ph, ph_bytes) != (int)ph_bytes) {
         fs_close(fd); set_error("read phdr failed"); return NULL;
     }
 
-    /* 第一遍：计算所有 PT_LOAD 的虚拟地址范围 */
     struct loaded_lib *lib = &g_libs[slot];
     memset(lib, 0, sizeof(*lib));
     lib->used = 1;
@@ -268,30 +273,23 @@ void *dlopen(const char *path, int mode) {
         set_error("no PT_LOAD"); return NULL;
     }
 
-    /* 一次性 mmap 整个库的连续地址空间 */
     uint32_t total_size = (max_vaddr_end - min_vaddr + 0xFFF) & ~0xFFFu;
-    unsigned int base = mmap(0, total_size,
-                             PROT_READ | PROT_WRITE,
+    unsigned int base = mmap(0, total_size, PROT_READ | PROT_WRITE,
                              MAP_PRIVATE | MAP_ANONYMOUS, -1);
     if ((int)base <= 0) {
         fs_close(fd); lib->used = 0;
         set_error("mmap failed"); return NULL;
     }
 
-    lib->base = base;
     lib->bias = base - min_vaddr;
 
-    /* 第二遍：把数据读入连续的内存块 */
     for (int i = 0; i < eh.e_phnum; i++) {
         if (ph[i].p_type != PT_LOAD || ph[i].p_filesz == 0) continue;
-
         uint8_t *dst = (uint8_t*)(lib->bias + ph[i].p_vaddr);
-
         if (fs_seek(fd, ph[i].p_offset) != 0) {
             fs_close(fd); lib->used = 0;
             set_error("seek segment failed"); return NULL;
         }
-
         uint32_t done = 0;
         while (done < ph[i].p_filesz) {
             uint32_t chunk = ph[i].p_filesz - done;
@@ -302,7 +300,6 @@ void *dlopen(const char *path, int mode) {
         }
     }
 
-    /* 第二遍：找 PT_DYNAMIC */
     for (int i = 0; i < eh.e_phnum; i++) {
         if (ph[i].p_type != PT_DYNAMIC) continue;
         lib->dyn_addr = lib->bias + ph[i].p_vaddr;
@@ -314,33 +311,66 @@ void *dlopen(const char *path, int mode) {
         set_error("no PT_DYNAMIC"); return NULL;
     }
 
-    /* 解析 .dynamic 拿 symtab/strtab */
     uint32_t dt_symtab = get_dyn(lib, DT_SYMTAB);
     uint32_t dt_strtab = get_dyn(lib, DT_STRTAB);
     if (dt_symtab) lib->symtab_addr = lib->bias + dt_symtab;
     if (dt_strtab) lib->strtab_addr = lib->bias + dt_strtab;
 
-    /* 处理 .rel.dyn */
+    /* 解析 DT_HASH 拿到符号总数 */
+    uint32_t dt_hash = get_dyn(lib, DT_HASH);
+    if (dt_hash) {
+        uint32_t *hash = (uint32_t*)(lib->bias + dt_hash);
+        lib->nsyms = hash[1];  /* nchain 即符号总数 */
+    } else {
+        lib->nsyms = 64;       /* 兜底值 */
+    }
+
+    /* 1. 处理 DT_NEEDED 依赖（必须在重定位之前完成） */
+    {
+        Elf32_Dyn *dyn = (Elf32_Dyn*)lib->dyn_addr;
+        int n = lib->dyn_size / sizeof(Elf32_Dyn);
+        const char *strtab = (const char*)lib->strtab_addr;
+        for (int i = 0; i < n; i++) {
+            if (dyn[i].d_tag == DT_NULL) break;
+            if (dyn[i].d_tag == DT_NEEDED) {
+                const char *dep_name = strtab + dyn[i].d_val;
+                char dep_path[64];
+                snprintf(dep_path, sizeof(dep_path), "SYS:/%s", dep_name);
+
+                void *dep = dlopen(dep_path, RTLD_NOW);
+                if (!dep) {
+                    fs_close(fd); lib->used = 0;
+                    set_error("dlopen dep failed"); return NULL;
+                }
+                if (lib->dep_count < DL_MAX_DEPS)
+                    lib->deps[lib->dep_count++] = (struct loaded_lib*)dep;
+            }
+        }
+    }
+
+    /* 2. 重定位（依赖已加载完毕） */
     uint32_t dt_rel    = get_dyn(lib, DT_REL);
     uint32_t dt_relsz  = get_dyn(lib, DT_RELSZ);
     if (apply_relocs(lib, dt_rel ? lib->bias + dt_rel : 0, dt_relsz) < 0) {
-        fs_close(fd); lib->used = 0;
-        set_error("reloc failed"); return NULL;
+        fs_close(fd); lib->used = 0; set_error("reloc failed"); return NULL;
     }
 
-    /* 处理 .rel.plt */
     uint32_t dt_jmprel   = get_dyn(lib, DT_JMPREL);
     uint32_t dt_pltrelsz = get_dyn(lib, DT_PLTRELSZ);
     if (apply_relocs(lib, dt_jmprel ? lib->bias + dt_jmprel : 0, dt_pltrelsz) < 0) {
-        fs_close(fd); lib->used = 0;
-        set_error("plt reloc failed"); return NULL;
+        fs_close(fd); lib->used = 0; set_error("plt reloc failed"); return NULL;
     }
 
-    /* DT_NEEDED：第一版不支持依赖链（库本身无外部依赖）。
-     * 若发现 DT_NEEDED，返回错误。 */
-    if (get_dyn(lib, DT_NEEDED) != 0) {
-        fs_close(fd); lib->used = 0;
-        set_error("DT_NEEDED unsupported in v1"); return NULL;
+    /* 3. 执行 init_array 构造函数 */
+    uint32_t init_arr = get_dyn(lib, DT_INIT_ARRAY);
+    uint32_t init_sz = get_dyn(lib, DT_INIT_ARRAYSZ);
+    if (init_arr && init_sz) {
+        uint32_t *arr = (uint32_t*)(lib->bias + init_arr);
+        int count = init_sz / sizeof(uint32_t);
+        for (int i = 0; i < count; i++) {
+            void (*fn)(void) = (void*)arr[i];
+            if (fn) fn();
+        }
     }
 
     lib->refcount = 1;
@@ -355,10 +385,9 @@ void *dlsym(void *handle, const char *name) {
     struct loaded_lib *lib = (struct loaded_lib*)handle;
     if (!lib->used) { set_error("invalid handle"); return NULL; }
 
-    const Elf32_Sym *sym = find_sym_in_lib(lib, name);
-    if (!sym) { set_error("symbol not found"); return NULL; }
-
-    return (void*)(lib->bias + sym->st_value);
+    uint32_t addr = find_symbol_addr(lib, name);
+    if (addr == 0xFFFFFFFF) { set_error("symbol not found"); return NULL; }
+    return (void*)addr;
 }
 
 /* ---------- dlclose ---------- */
@@ -371,8 +400,10 @@ int dlclose(void *handle) {
     lib->refcount--;
     if (lib->refcount > 0) return 0;
 
-    /* 第一版不 munmap——VMA 在进程退出时回收。
-     * 只标记 slot 空闲，允许同名再次加载（会重新 mmap）。 */
+    for (int i = 0; i < lib->dep_count; i++)
+        dlclose(lib->deps[i]);
+
+    /* 第一版不 munmap，只标记 slot 空闲 */
     lib->used = 0;
     return 0;
 }

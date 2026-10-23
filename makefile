@@ -125,7 +125,7 @@ USER_APPS = shell idle test testkill sleeper argtest test_write \
 			grep find hexdump test_mui_draw test_mui_button test_mui_form \
 			test_dl
 
-USER_LIBS = libmath
+USER_LIBS = libmath libmylib
 USER_LIB_SOS = $(addprefix $(BUILD_DIR)/,$(addsuffix .so,$(USER_LIBS)))
 
 USER_OBJS = $(addprefix $(BUILD_DIR)/,$(addsuffix .o,$(USER_APPS)))
@@ -290,10 +290,19 @@ $(BUILD_DIR)/%.o: user/%.c
 	@mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -c $< -o $@
 
+# 基础库
+# 每个库依赖的其他库（用 -l 指定）
+EXTRA_LDLIBS_math :=
+EXTRA_LDLIBS_mylib := -lmath
+
+# 统一的 .so 编译规则
+# $* 匹配的是 lib%.so 中的 %
 $(BUILD_DIR)/lib%.so: user/lib/lib%.c
 	@mkdir -p $(BUILD_DIR)
 	$(CC) -m32 -ffreestanding -nostdlib -fno-stack-protector -shared -fPIC \
-	      -Iuser/ -Iuser/libc/include -o $@ $<
+	      -Wl,--hash-style=sysv \
+	      -Iuser/ -Iuser/libc/include -L$(BUILD_DIR) \
+	      -o $@ $< $(EXTRA_LDLIBS_$*)
 
 # ---------- 链接 ----------
 
