@@ -52,7 +52,7 @@ int mui_context_init(struct mui_context *ctx,
 
     unsigned int addr = mmap(0, shm_size,
                              PROT_READ | PROT_WRITE,
-                             MAP_SHARED, shm_id);
+                             MAP_SHARED, shm_id, 0);
     if ((int)addr <= 0) return -1;
 
     ctx->hdr = (struct shm_hdr*)addr;

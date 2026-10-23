@@ -132,6 +132,7 @@
 #define MAP_PRIVATE    0x01
 #define MAP_SHARED     0x02
 #define MAP_ANONYMOUS  0x04
+#define MAP_FILE       0x08
 #define MAP_FIXED      0x10
 
 
@@ -210,6 +211,20 @@ static inline int __syscall5(int num, int a, int b, int c, int d, int e) {
         "int $0x80"
         : "=a"(ret)
         : "a"(num), "b"(a), "c"(b), "d"(c), "S"(d), "D"(e)
+        : "memory", "cc"
+    );
+    return ret;
+}
+
+static inline int __syscall6(int num, int a, int b, int c, int d, int e, int f) {
+    int ret;
+    __asm__ volatile (
+        "pushl %%ebp\n\t"
+        "movl %7, %%ebp\n\t"
+        "int $0x80\n\t"
+        "popl %%ebp\n\t"
+        : "=a"(ret)
+        : "a"(num), "b"(a), "c"(b), "d"(c), "S"(d), "D"(e), "g"(f)
         : "memory", "cc"
     );
     return ret;
@@ -395,9 +410,9 @@ static inline int brk(int new_brk) {
 }
 
 static inline unsigned int mmap(unsigned int addr, unsigned int length,
-                                int prot, int flags, int shm_idx) {
-    return (unsigned int)__syscall5(SYS_MMAP, (int)addr, (int)length,
-                                    prot, flags, shm_idx);
+                                int prot, int flags, int shm_idx, unsigned int offset) {
+    return (unsigned int)__syscall6(SYS_MMAP, (int)addr, (int)length,
+                                    prot, flags, shm_idx, (int)offset);
 }
 
 static inline int munmap(unsigned int addr, unsigned int length) {

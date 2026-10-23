@@ -18,7 +18,7 @@ int main(int argc, char **argv) {
 
     unsigned int addr = mmap(0, shm_size,
                              PROT_READ | PROT_WRITE,
-                             MAP_SHARED, shm_id);
+                             MAP_SHARED, shm_id, 0);
     if ((int)addr <= 0) { printf("mmap: %d\n", (int)addr); return 1; }
 
     uint64_t *counter = (uint64_t*)addr;

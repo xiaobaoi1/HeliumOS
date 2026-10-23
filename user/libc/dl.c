@@ -1,0 +1,435 @@
+#include "dlfcn.h"
+#include "syscall.h"
+#include "string.h"
+#include "stdlib.h"
+#include <stdint.h>
+#include <stddef.h>
+#include "stdio.h"
+
+/* ---------- ELF 32 位结构 ---------- */
+
+#define EI_NIDENT 16
+
+typedef struct {
+    unsigned char  e_ident[EI_NIDENT];
+    uint16_t       e_type;
+    uint16_t       e_machine;
+    uint32_t       e_version;
+    uint32_t       e_entry;
+    uint32_t       e_phoff;
+    uint32_t       e_shoff;
+    uint32_t       e_flags;
+    uint16_t       e_ehsize;
+    uint16_t       e_phentsize;
+    uint16_t       e_phnum;
+    uint16_t       e_shentsize;
+    uint16_t       e_shnum;
+    uint16_t       e_shstrndx;
+} Elf32_Ehdr;
+
+typedef struct {
+    uint32_t p_type;
+    uint32_t p_offset;
+    uint32_t p_vaddr;
+    uint32_t p_paddr;
+    uint32_t p_filesz;
+    uint32_t p_memsz;
+    uint32_t p_flags;
+    uint32_t p_align;
+} Elf32_Phdr;
+
+typedef struct {
+    int32_t  d_tag;
+    uint32_t d_val;
+} Elf32_Dyn;
+
+typedef struct {
+    uint32_t st_name;
+    uint32_t st_value;
+    uint32_t st_size;
+    unsigned char st_info;
+    unsigned char st_other;
+    uint16_t st_shndx;
+} Elf32_Sym;
+
+typedef struct {
+    uint32_t r_offset;
+    uint32_t r_info;
+} Elf32_Rel;
+
+/* e_type */
+#define ET_DYN 3
+
+/* p_type */
+#define PT_LOAD    1
+#define PT_DYNAMIC 2
+
+/* d_tag */
+#define DT_NULL        0
+#define DT_NEEDED      1
+#define DT_PLTRELSZ    2
+#define DT_HASH        4
+#define DT_STRTAB      5
+#define DT_SYMTAB      6
+#define DT_REL         17
+#define DT_RELSZ       18
+#define DT_JMPREL      23
+#define DT_INIT_ARRAY  25
+#define DT_INIT_ARRAYSZ 27
+
+#define R_SYM(r_info)  ((r_info) >> 8)
+#define R_TYPE(r_info) ((r_info) & 0xFF)
+
+#define R_386_32       1
+#define R_386_GLOB_DAT 6
+#define R_386_JMP_SLOT 7
+#define R_386_RELATIVE 8
+
+#define DL_MAX_LIBS 8
+#define DL_MAX_DEPS 8
+
+struct loaded_lib {
+    int used;
+    char path[64];
+    uint32_t bias;
+
+    uint32_t dyn_addr;
+    uint32_t dyn_size;
+
+    uint32_t symtab_addr;
+    uint32_t strtab_addr;
+    uint32_t nsyms;              /* 符号总数，来自 DT_HASH */
+
+    int refcount;
+
+    /* 依赖的库（DT_NEEDED） */
+    int dep_count;
+    struct loaded_lib *deps[DL_MAX_DEPS];
+};
+
+static struct loaded_lib g_libs[DL_MAX_LIBS];
+static char g_errbuf[128];
+static int  g_has_err = 0;
+
+static void set_error(const char *msg) {
+    strncpy(g_errbuf, msg, sizeof(g_errbuf) - 1);
+    g_errbuf[sizeof(g_errbuf) - 1] = '\0';
+    g_has_err = 1;
+}
+
+char *dlerror(void) {
+    if (!g_has_err) return NULL;
+    g_has_err = 0;
+    return g_errbuf;
+}
+
+static struct loaded_lib *find_lib(const char *path) {
+    for (int i = 0; i < DL_MAX_LIBS; i++) {
+        if (g_libs[i].used && strcmp(g_libs[i].path, path) == 0)
+            return &g_libs[i];
+    }
+    return NULL;
+}
+
+static uint32_t get_dyn(struct loaded_lib *lib, int32_t tag) {
+    Elf32_Dyn *dyn = (Elf32_Dyn*)lib->dyn_addr;
+    int n = lib->dyn_size / sizeof(Elf32_Dyn);
+    for (int i = 0; i < n; i++) {
+        if (dyn[i].d_tag == DT_NULL) break;
+        if (dyn[i].d_tag == tag) return dyn[i].d_val;
+    }
+    return 0;
+}
+
+/* ---------- 符号查找（支持依赖链递归） ---------- */
+
+/* 在本库的 .dynsym 中查找有定义的符号 */
+static const Elf32_Sym *find_sym_in_lib(struct loaded_lib *lib, const char *name) {
+    if (!lib->symtab_addr || !lib->strtab_addr || !lib->nsyms) return NULL;
+
+    Elf32_Sym *sym = (Elf32_Sym*)lib->symtab_addr;
+    const char *strtab = (const char*)lib->strtab_addr;
+
+    /* 从 1 开始，跳过 index 0 的全零空符号 */
+    for (uint32_t i = 1; i < lib->nsyms; i++) {
+        /* 跳过未定义符号（SHN_UNDEF），依赖库中才有 */
+        if (sym[i].st_shndx == 0) continue;
+
+        if (strcmp(strtab + sym[i].st_name, name) == 0)
+            return &sym[i];
+    }
+    return NULL;
+}
+
+/* 递归查找符号：先自己，再依赖。找不到返回 0xFFFFFFFF (-1) */
+static uint32_t find_symbol_addr(struct loaded_lib *lib, const char *name) {
+    const Elf32_Sym *sym = find_sym_in_lib(lib, name);
+    if (sym) return lib->bias + sym->st_value;
+
+    for (int i = 0; i < lib->dep_count; i++) {
+        uint32_t addr = find_symbol_addr(lib->deps[i], name);
+        if (addr != 0xFFFFFFFF) return addr;
+    }
+    return 0xFFFFFFFF;
+}
+
+/* ---------- 重定位 ---------- */
+
+static int apply_relocs(struct loaded_lib *lib, uint32_t rel_addr,
+                        uint32_t rel_size) {
+    if (!rel_addr || !rel_size) return 0;
+
+    Elf32_Rel *rel = (Elf32_Rel*)rel_addr;
+    int n = rel_size / sizeof(Elf32_Rel);
+    Elf32_Sym *symtab = (Elf32_Sym*)lib->symtab_addr;
+    const char *strtab = (const char*)lib->strtab_addr;
+
+    for (int i = 0; i < n; i++) {
+        uint32_t r_offset = rel[i].r_offset;
+        uint32_t r_info   = rel[i].r_info;
+        uint32_t type     = R_TYPE(r_info);
+        uint32_t symidx   = R_SYM(r_info);
+
+        uint32_t *loc = (uint32_t*)(lib->bias + r_offset);
+
+        if (type == R_386_RELATIVE) {
+            uint32_t addend = *loc;
+            *loc = lib->bias + addend;
+        } else if (type == R_386_GLOB_DAT || type == R_386_JMP_SLOT) {
+            const char *sname = strtab + symtab[symidx].st_name;
+            uint32_t addr = find_symbol_addr(lib, sname);
+            if (addr == 0xFFFFFFFF) {
+                dprintf(2, "[dl] unresolved: %s\n", sname);
+                return -1;
+            }
+            *loc = addr;
+        } else {
+            /* 不支持的 reloc 类型：忽略 */
+        }
+    }
+    return 0;
+}
+
+/* ---------- dlopen ---------- */
+
+void *dlopen(const char *path, int mode) {
+    (void)mode;
+
+    if (!path) { set_error("null path"); return NULL; }
+
+    struct loaded_lib *existing = find_lib(path);
+    if (existing) {
+        existing->refcount++;
+        return existing;
+    }
+
+    int slot = -1;
+    for (int i = 0; i < DL_MAX_LIBS; i++) {
+        if (!g_libs[i].used) { slot = i; break; }
+    }
+    if (slot < 0) { set_error("too many libs"); return NULL; }
+
+    int fd = fs_open(path, FS_O_RDONLY);
+    if (fd < 0) { set_error("cannot open file"); return NULL; }
+
+    Elf32_Ehdr eh;
+    if (fs_read(fd, &eh, sizeof(eh)) != (int)sizeof(eh)) {
+        fs_close(fd); set_error("cannot read ELF header"); return NULL;
+    }
+    if (eh.e_ident[0] != 0x7F || eh.e_ident[1] != 'E' ||
+        eh.e_ident[2] != 'L'  || eh.e_ident[3] != 'F') {
+        fs_close(fd); set_error("not ELF"); return NULL;
+    }
+    if (eh.e_type != ET_DYN) {
+        fs_close(fd); set_error("not ET_DYN"); return NULL;
+    }
+    if (eh.e_phnum == 0 || eh.e_phnum > 16) {
+        fs_close(fd); set_error("bad phnum"); return NULL;
+    }
+
+    Elf32_Phdr ph[16];
+    uint32_t ph_bytes = eh.e_phnum * sizeof(Elf32_Phdr);
+    if (fs_seek(fd, eh.e_phoff) != 0 || fs_read(fd, ph, ph_bytes) != (int)ph_bytes) {
+        fs_close(fd); set_error("read phdr failed"); return NULL;
+    }
+
+    struct loaded_lib *lib = &g_libs[slot];
+    memset(lib, 0, sizeof(*lib));
+    lib->used = 1;
+    strncpy(lib->path, path, sizeof(lib->path) - 1);
+
+    uint32_t min_vaddr = 0xFFFFFFFF;
+    uint32_t max_vaddr_end = 0;
+
+    for (int i = 0; i < eh.e_phnum; i++) {
+        if (ph[i].p_type != PT_LOAD || ph[i].p_memsz == 0) continue;
+        if (ph[i].p_vaddr < min_vaddr) min_vaddr = ph[i].p_vaddr;
+        if (ph[i].p_vaddr + ph[i].p_memsz > max_vaddr_end)
+            max_vaddr_end = ph[i].p_vaddr + ph[i].p_memsz;
+    }
+
+    if (min_vaddr == 0xFFFFFFFF || max_vaddr_end <= min_vaddr) {
+        fs_close(fd); lib->used = 0;
+        set_error("no PT_LOAD"); return NULL;
+    }
+
+    /* 第一遍：mmap 整个跨度，作为骨架 */
+    uint32_t total_size = (max_vaddr_end - min_vaddr + 0xFFF) & ~0xFFFu;
+    unsigned int base = mmap(0, total_size, PROT_READ | PROT_WRITE,
+                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if ((int)base <= 0) {
+        fs_close(fd); lib->used = 0;
+        set_error("mmap base failed"); return NULL;
+    }
+
+    lib->bias = base - min_vaddr;
+
+    /* 第二遍：处理每个段 */
+    for (int i = 0; i < eh.e_phnum; i++) {
+        if (ph[i].p_type != PT_LOAD || ph[i].p_filesz == 0) continue;
+        
+        uint32_t seg_vaddr = ph[i].p_vaddr + lib->bias;
+        int is_write = (ph[i].p_flags & 0x2); /* PF_W */
+
+        if (is_write) {
+            /* 数据段：沿用 fs_read 方式写入预留空间 */
+            uint8_t *dst = (uint8_t*)seg_vaddr;
+            if (fs_seek(fd, ph[i].p_offset) != 0) {
+                fs_close(fd); lib->used = 0;
+                set_error("seek segment failed"); return NULL;
+            }
+            uint32_t done = 0;
+            while (done < ph[i].p_filesz) {
+                uint32_t chunk = ph[i].p_filesz - done;
+                if (chunk > 4096) chunk = 4096;
+                int n = fs_read(fd, dst + done, chunk);
+                if (n <= 0) break;
+                done += n;
+            }
+        } else {
+            /* 代码段：卸载之前的匿名内存，重新映射为 MAP_FILE */
+            uint32_t map_len = (ph[i].p_memsz + 0xFFF) & ~0xFFFu;
+            uint32_t map_off = ph[i].p_offset & ~0xFFFu;
+            uint32_t map_addr = seg_vaddr & ~0xFFFu;
+            
+            /* 取消原有的匿名映射 */
+            munmap(map_addr, map_len);
+
+            /* 重新作为文件映射，传入 map_off */
+            unsigned int res = mmap(map_addr, map_len, PROT_READ | PROT_EXEC,
+                                    MAP_PRIVATE | MAP_FILE, fd, map_off);
+            /* 如果失败 */
+            if ((int)res <= 0) {
+                fs_close(fd); lib->used = 0;
+                set_error("mmap file seg failed"); return NULL;
+            }
+        }
+    }
+
+    for (int i = 0; i < eh.e_phnum; i++) {
+        if (ph[i].p_type != PT_DYNAMIC) continue;
+        lib->dyn_addr = lib->bias + ph[i].p_vaddr;
+        lib->dyn_size = ph[i].p_memsz;
+        break;
+    }
+    if (!lib->dyn_addr) {
+        fs_close(fd); lib->used = 0;
+        set_error("no PT_DYNAMIC"); return NULL;
+    }
+
+    uint32_t dt_symtab = get_dyn(lib, DT_SYMTAB);
+    uint32_t dt_strtab = get_dyn(lib, DT_STRTAB);
+    if (dt_symtab) lib->symtab_addr = lib->bias + dt_symtab;
+    if (dt_strtab) lib->strtab_addr = lib->bias + dt_strtab;
+
+    /* 解析 DT_HASH 拿到符号总数 */
+    uint32_t dt_hash = get_dyn(lib, DT_HASH);
+    if (dt_hash) {
+        uint32_t *hash = (uint32_t*)(lib->bias + dt_hash);
+        lib->nsyms = hash[1];  /* nchain 即符号总数 */
+    } else {
+        lib->nsyms = 64;       /* 兜底值 */
+    }
+
+    /* 1. 处理 DT_NEEDED 依赖（必须在重定位之前完成） */
+    {
+        Elf32_Dyn *dyn = (Elf32_Dyn*)lib->dyn_addr;
+        int n = lib->dyn_size / sizeof(Elf32_Dyn);
+        const char *strtab = (const char*)lib->strtab_addr;
+        for (int i = 0; i < n; i++) {
+            if (dyn[i].d_tag == DT_NULL) break;
+            if (dyn[i].d_tag == DT_NEEDED) {
+                const char *dep_name = strtab + dyn[i].d_val;
+                char dep_path[64];
+                snprintf(dep_path, sizeof(dep_path), "SYS:/%s", dep_name);
+
+                void *dep = dlopen(dep_path, RTLD_NOW);
+                if (!dep) {
+                    fs_close(fd); lib->used = 0;
+                    set_error("dlopen dep failed"); return NULL;
+                }
+                if (lib->dep_count < DL_MAX_DEPS)
+                    lib->deps[lib->dep_count++] = (struct loaded_lib*)dep;
+            }
+        }
+    }
+
+    /* 2. 重定位（依赖已加载完毕） */
+    uint32_t dt_rel    = get_dyn(lib, DT_REL);
+    uint32_t dt_relsz  = get_dyn(lib, DT_RELSZ);
+    if (apply_relocs(lib, dt_rel ? lib->bias + dt_rel : 0, dt_relsz) < 0) {
+        fs_close(fd); lib->used = 0; set_error("reloc failed"); return NULL;
+    }
+
+    uint32_t dt_jmprel   = get_dyn(lib, DT_JMPREL);
+    uint32_t dt_pltrelsz = get_dyn(lib, DT_PLTRELSZ);
+    if (apply_relocs(lib, dt_jmprel ? lib->bias + dt_jmprel : 0, dt_pltrelsz) < 0) {
+        fs_close(fd); lib->used = 0; set_error("plt reloc failed"); return NULL;
+    }
+
+    /* 3. 执行 init_array 构造函数 */
+    uint32_t init_arr = get_dyn(lib, DT_INIT_ARRAY);
+    uint32_t init_sz = get_dyn(lib, DT_INIT_ARRAYSZ);
+    if (init_arr && init_sz) {
+        uint32_t *arr = (uint32_t*)(lib->bias + init_arr);
+        int count = init_sz / sizeof(uint32_t);
+        for (int i = 0; i < count; i++) {
+            void (*fn)(void) = (void*)arr[i];
+            if (fn) fn();
+        }
+    }
+
+    lib->refcount = 1;
+    fs_close(fd);
+    return lib;
+}
+
+/* ---------- dlsym ---------- */
+
+void *dlsym(void *handle, const char *name) {
+    if (!handle || !name) { set_error("null arg"); return NULL; }
+    struct loaded_lib *lib = (struct loaded_lib*)handle;
+    if (!lib->used) { set_error("invalid handle"); return NULL; }
+
+    uint32_t addr = find_symbol_addr(lib, name);
+    if (addr == 0xFFFFFFFF) { set_error("symbol not found"); return NULL; }
+    return (void*)addr;
+}
+
+/* ---------- dlclose ---------- */
+
+int dlclose(void *handle) {
+    if (!handle) return -1;
+    struct loaded_lib *lib = (struct loaded_lib*)handle;
+    if (!lib->used) return -1;
+
+    lib->refcount--;
+    if (lib->refcount > 0) return 0;
+
+    for (int i = 0; i < lib->dep_count; i++)
+        dlclose(lib->deps[i]);
+
+    /* 第一版不 munmap，只标记 slot 空闲 */
+    lib->used = 0;
+    return 0;
+}

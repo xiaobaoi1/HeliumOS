@@ -88,6 +88,7 @@ OBJS = $(BUILD_DIR)/start.o \
 	   $(BUILD_DIR)/mouse.o \
 	   $(BUILD_DIR)/input.o \
 	   $(BUILD_DIR)/pty.o \
+	   $(BUILD_DIR)/file_map.o \
 
 	   
 
@@ -122,13 +123,17 @@ USER_APPS = shell idle test testkill sleeper argtest test_write \
             test_input test_pty wm term test_namedpipe test_perm \
 			test_createwin test_ansi\
 			dhcpclient desktop test_raw kilo test_malloc_loop \
-			grep find hexdump test_mui_draw test_mui_button test_mui_form
+			grep find hexdump test_mui_draw test_mui_button test_mui_form \
+			test_dl
+
+USER_LIBS = libmath libmylib
+USER_LIB_SOS = $(addprefix $(BUILD_DIR)/,$(addsuffix .so,$(USER_LIBS)))
 
 USER_OBJS = $(addprefix $(BUILD_DIR)/,$(addsuffix .o,$(USER_APPS)))
 USER_ELFS = $(addprefix $(BUILD_DIR)/,$(addsuffix .ELF,$(USER_APPS)))
 
 LIBC_SRCS = string printf malloc signal env assert ctype qsort \
-            abort stdlib inet netdb termios ioctl unistd atexit
+            abort stdlib inet netdb termios ioctl unistd atexit dl
 
 LIBC_OBJS = $(addprefix $(BUILD_DIR)/libc_,$(addsuffix .o,$(LIBC_SRCS))) \
             $(BUILD_DIR)/libc_sigreturn.o
@@ -185,7 +190,7 @@ $(ISO): $(KERNEL_ELF)
 	@echo "ISO 镜像生成成功: $(ISO)"
 
 # ==================== 硬盘镜像（用于测试文件系统写入） ====================
-$(DISK_IMG): $(KERNEL_ELF) $(USER_ELFS)
+$(DISK_IMG): $(KERNEL_ELF) $(USER_ELFS) $(USER_LIB_SOS)
 	@echo "正在创建 FAT32 硬盘镜像 (需要 sudo 权限)..."
 	dd if=/dev/zero of=$(DISK_IMG) bs=1M count=64 status=none
 	(echo o; echo n; echo p; echo 1; echo 2048; echo; echo t; echo c; echo a; echo 1; echo w) | fdisk $(DISK_IMG) > /dev/null 2>&1
@@ -201,6 +206,9 @@ $(DISK_IMG): $(KERNEL_ELF) $(USER_ELFS)
 	sudo cp tools/unifont-17.0.03.hex /mnt/build/UNICODE-17.HEX; \
 	for app in $(USER_APPS); do \
 	    sudo cp $(BUILD_DIR)/$$app.ELF /mnt/build/$$app; \
+	done; \
+	for lib in $(USER_LIBS); do \
+	    sudo cp $(BUILD_DIR)/$$lib.so /mnt/build/$$(echo $$lib | tr a-z A-Z).SO; \
 	done; \
 	sudo cp $(SRC_DIR)/kernel/kmain.c /mnt/build/kmain.c; \
 	sudo cp user/idle.c /mnt/build/idle.c; \
@@ -282,6 +290,20 @@ $(BUILD_DIR)/methylui/%.o: $(METHYLUI_DIR)/%.c
 $(BUILD_DIR)/%.o: user/%.c
 	@mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+# 基础库
+# 每个库依赖的其他库（用 -l 指定）
+EXTRA_LDLIBS_math :=
+EXTRA_LDLIBS_mylib := -lmath
+
+# 统一的 .so 编译规则
+# $* 匹配的是 lib%.so 中的 %
+$(BUILD_DIR)/lib%.so: user/lib/lib%.c
+	@mkdir -p $(BUILD_DIR)
+	$(CC) -m32 -ffreestanding -nostdlib -fno-stack-protector -shared -fPIC \
+	      -Wl,--hash-style=sysv \
+	      -Iuser/ -Iuser/libc/include -L$(BUILD_DIR) \
+	      -o $@ $< $(EXTRA_LDLIBS_$*)
 
 # ---------- 链接 ----------
 

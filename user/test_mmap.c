@@ -10,7 +10,7 @@ int main(int argc, char **argv) {
 
     /* 1. 匿名 mmap */
     unsigned int addr = mmap(0, 4096, PROT_READ | PROT_WRITE,
-                             MAP_PRIVATE | MAP_ANONYMOUS, -1);
+                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     printf("anon mmap: 0x%x\n", addr);
     if ((int)addr > 0) {
         char *p = (char*)addr;
@@ -26,12 +26,12 @@ int main(int argc, char **argv) {
     printf("shm_open: %d\n", shm1);
 
     unsigned int s1 = mmap(0, 4096, PROT_READ | PROT_WRITE,
-                           MAP_SHARED, shm1);
+                           MAP_SHARED, shm1, 0);
     printf("shared mmap #1: 0x%x\n", s1);
 
     /* 同进程再映射一次（模拟第二进程） */
     unsigned int s2 = mmap(0, 4096, PROT_READ | PROT_WRITE,
-                           MAP_SHARED, shm1);
+                           MAP_SHARED, shm1, 0);
     printf("shared mmap #2: 0x%x\n", s2);
 
     if ((int)s1 > 0 && (int)s2 > 0) {

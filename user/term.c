@@ -547,7 +547,7 @@ static int term_resize(int new_w, int new_h) {
 
     unsigned int new_addr = mmap(0, new_shm_size,
                                  PROT_READ | PROT_WRITE,
-                                 MAP_SHARED, new_id);
+                                 MAP_SHARED, new_id, 0);
     if ((int)new_addr <= 0) return -1;
 
     struct shm_hdr *new_hdr = (struct shm_hdr*)new_addr;
@@ -641,7 +641,7 @@ int main(int argc, char **argv) {
     if (shm_id < 0) { dprintf(2, "term: shm_open %d\n", shm_id); return 1; }
 
     unsigned int addr = mmap(0, shm_size,
-                             PROT_READ | PROT_WRITE, MAP_SHARED, shm_id);
+                             PROT_READ | PROT_WRITE, MAP_SHARED, shm_id, 0);
     if ((int)addr <= 0) { dprintf(2, "term: mmap %d\n", (int)addr); return 1; }
 
     g_shm = (struct shm_hdr*)addr;

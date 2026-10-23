@@ -30,6 +30,7 @@
 #include <elf.h>
 #include <heap.h>
 #include <scheduler.h>
+#include <file_map.h>
 
 #define PROT_READ   0x01
 #define PROT_WRITE  0x02
@@ -38,6 +39,7 @@
 #define MAP_PRIVATE    0x01
 #define MAP_SHARED     0x02
 #define MAP_ANONYMOUS  0x04
+#define MAP_FILE       0x08
 #define MAP_FIXED      0x10
 
 #define MMAP_BASE  0x60000000u
@@ -353,7 +355,7 @@ static uint32_t mmap_find_free(struct task *t, uint32_t len) {
 }
 
 static uint32_t sys_mmap(uint32_t addr, uint32_t length, uint32_t prot,
-                         uint32_t flags, int shm_idx) {
+                         uint32_t flags, int shm_idx, uint32_t offset) {
     struct task *cur = get_current_task();
     if (!cur) return EINVAL;
     if (length == 0) return EINVAL;
@@ -384,6 +386,35 @@ static uint32_t sys_mmap(uint32_t addr, uint32_t length, uint32_t prot,
     if (prot & PROT_EXEC)  vma_flags |= VMA_EXEC;
 
     struct shm *s = NULL;
+
+    if (flags & MAP_FILE) {
+        /* arg5 传入的是 fs_fd */
+        int fd = shm_idx;
+        if (fd < 0 || fd >= FS_MAX_HANDLES || !cur->fs_handles[fd].used)
+            return EINVAL;
+        
+        struct fs_handle *h = &cur->fs_handles[fd];
+        if (h->obj_type != FS_OBJ_FILE) return EINVAL;
+
+        uint32_t file_size = h->u.fat32_file.file_size;
+        if (file_size == 0 || file_size < length) length = file_size; /* 限制长度 */
+        length = (length + 0xFFF) & ~0xFFFu;
+
+        struct file_mapping *fm = file_map_get(h->vol, h->u.fat32_file.first_cluster, h->u.fat32_file.file_size);
+        if (!fm) return ENOMEM;
+
+        int r = vma_insert(cur, start, start + length, vma_flags, VMA_TYPE_FILE, NULL, 0);
+        if (r != OK) return r;
+
+        struct vma *v = vma_find(cur, start);
+        if (v) {
+            v->filemap = fm;
+            v->filemap_offset = offset / 4096;  /* 字节转页 */
+            file_map_ref(fm);
+        }
+        return start;
+    }
+
     if (is_shared) {
         s = shm_at(shm_idx);
         if (!s) return EINVAL;
@@ -843,6 +874,7 @@ void syscall_handler(struct registers *regs) {
     uint32_t arg3 = regs->edx;
     uint32_t arg4 = regs->esi;
     uint32_t arg5 = regs->edi;
+    uint32_t arg6 = regs->ebp;
 
     int32_t ret = 0;
 
@@ -869,7 +901,7 @@ void syscall_handler(struct registers *regs) {
             ret = sys_brk(arg1);
             break;
         case SYS_MMAP:
-            ret = (int)sys_mmap(arg1, arg2, arg3, arg4, (int)arg5);
+            ret = (int)sys_mmap(arg1, arg2, arg3, arg4, (int)arg5, arg6);
             break;
         case SYS_MUNMAP:
             ret = sys_munmap(arg1, arg2);

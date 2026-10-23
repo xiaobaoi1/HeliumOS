@@ -39,6 +39,7 @@
 #include <pty.h>
 #include <e1000.h>
 #include <tty.h>
+#include <file_map.h>
 
 
 static const char *shell_env[] = {
@@ -157,6 +158,7 @@ void kmain(uint32_t magic, uint32_t addr) {
     heap_init();
     vma_init();
     shm_init();
+    file_map_init();
     gdt_init();
     tss_init();
     vmm_init();

@@ -43,7 +43,7 @@ void *malloc(size_t size) {
         size_t map_size = (total + 4095) & ~4095u;
         unsigned int addr = mmap(0, map_size,
                                  PROT_READ | PROT_WRITE,
-                                 MAP_PRIVATE | MAP_ANONYMOUS, -1);
+                                 MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if ((int)addr <= 0) return NULL;
 
         struct block *b = (struct block*)addr;
