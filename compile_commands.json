@@ -10,11 +10,119 @@
       "-Iuser/libc/include",
       "-c",
       "-o",
-      "build/test_mui_draw.o",
-      "user/test_mui_draw.c"
+      "build/libc_dl.o",
+      "user/libc/dl.c"
     ],
     "directory": "/home/user/桌面/HeliumOS",
-    "file": "/home/user/桌面/HeliumOS/user/test_mui_draw.c",
-    "output": "/home/user/桌面/HeliumOS/build/test_mui_draw.o"
+    "file": "/home/user/桌面/HeliumOS/user/libc/dl.c",
+    "output": "/home/user/桌面/HeliumOS/build/libc_dl.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-m32",
+      "-ffreestanding",
+      "-fno-pic",
+      "-fno-stack-protector",
+      "-Iuser/",
+      "-Iuser/libc/include",
+      "-c",
+      "-o",
+      "build/methylui/mui_font.o",
+      "user/methylui/mui_font.c"
+    ],
+    "directory": "/home/user/桌面/HeliumOS",
+    "file": "/home/user/桌面/HeliumOS/user/methylui/mui_font.c",
+    "output": "/home/user/桌面/HeliumOS/build/methylui/mui_font.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-m32",
+      "-ffreestanding",
+      "-fno-pic",
+      "-fno-stack-protector",
+      "-Iuser/",
+      "-Iuser/libc/include",
+      "-c",
+      "-o",
+      "build/methylui/mui_surface.o",
+      "user/methylui/mui_surface.c"
+    ],
+    "directory": "/home/user/桌面/HeliumOS",
+    "file": "/home/user/桌面/HeliumOS/user/methylui/mui_surface.c",
+    "output": "/home/user/桌面/HeliumOS/build/methylui/mui_surface.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-m32",
+      "-ffreestanding",
+      "-fno-pic",
+      "-fno-stack-protector",
+      "-Iuser/",
+      "-Iuser/libc/include",
+      "-c",
+      "-o",
+      "build/methylui/mui_widget.o",
+      "user/methylui/mui_widget.c"
+    ],
+    "directory": "/home/user/桌面/HeliumOS",
+    "file": "/home/user/桌面/HeliumOS/user/methylui/mui_widget.c",
+    "output": "/home/user/桌面/HeliumOS/build/methylui/mui_widget.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-m32",
+      "-ffreestanding",
+      "-fno-pic",
+      "-fno-stack-protector",
+      "-Iuser/",
+      "-Iuser/libc/include",
+      "-c",
+      "-o",
+      "build/methylui/mui_context.o",
+      "user/methylui/mui_context.c"
+    ],
+    "directory": "/home/user/桌面/HeliumOS",
+    "file": "/home/user/桌面/HeliumOS/user/methylui/mui_context.c",
+    "output": "/home/user/桌面/HeliumOS/build/methylui/mui_context.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-m32",
+      "-ffreestanding",
+      "-fno-pic",
+      "-fno-stack-protector",
+      "-Iuser/",
+      "-Iuser/libc/include",
+      "-c",
+      "-o",
+      "build/methylui/mui_label.o",
+      "user/methylui/mui_label.c"
+    ],
+    "directory": "/home/user/桌面/HeliumOS",
+    "file": "/home/user/桌面/HeliumOS/user/methylui/mui_label.c",
+    "output": "/home/user/桌面/HeliumOS/build/methylui/mui_label.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-m32",
+      "-ffreestanding",
+      "-fno-pic",
+      "-fno-stack-protector",
+      "-Iuser/",
+      "-Iuser/libc/include",
+      "-c",
+      "-o",
+      "build/methylui/mui_textbox.o",
+      "user/methylui/mui_textbox.c"
+    ],
+    "directory": "/home/user/桌面/HeliumOS",
+    "file": "/home/user/桌面/HeliumOS/user/methylui/mui_textbox.c",
+    "output": "/home/user/桌面/HeliumOS/build/methylui/mui_textbox.o"
   }
 ]
