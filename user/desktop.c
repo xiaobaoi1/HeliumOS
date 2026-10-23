@@ -127,6 +127,7 @@ static int create_wm_window(const char *tag, int kind, int x, int y,
     req.w = w;
     req.h = h;
     req.owner_pid = getpid();
+    req.min_w = req.min_h = req.max_w = req.max_h = 0;
     strncpy(req.shm_name, out_shm_name, sizeof(req.shm_name) - 1);
     strncpy(req.ev_name, out_ev_name, sizeof(req.ev_name) - 1);
     strncpy(req.title, tag, sizeof(req.title) - 1);
@@ -354,7 +355,7 @@ static void handle_menu_event(struct wm_event *ev) {
         else draw_menu(-1);
         return;
     }
-    if (ev->type == WM_EV_MOUSE_BTN && ev->code == 1) {
+    if (ev->type == WM_EV_MOUSE_DOWN && ev->code == 1) {
         int item = (ev->y - MENU_PAD) / MENU_ITEM_H;
         if (item == 0) spawn_term(600, 400, 200, 100);
         else if (item == 1) spawn("TEST", NULL, NULL);
@@ -382,7 +383,7 @@ static void handle_panel_event(struct wm_event *ev) {
         return;
     }
 
-    if (ev->type == WM_EV_MOUSE_BTN && ev->code == 1) {
+    if (ev->type == WM_EV_MOUSE_DOWN && ev->code == 1) {
         if (ev->x < WIN_ITEM_X0) {
             open_start_menu();
             return;
