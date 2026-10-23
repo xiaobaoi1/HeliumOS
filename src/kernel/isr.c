@@ -15,6 +15,7 @@
 #include <string.h>
 #include <pmm.h>
 #include <irq.h>
+#include <file_map.h>
 
 extern void sleep_tick(void);
 
@@ -58,6 +59,16 @@ static int handle_page_fault(struct task *cur, uint32_t fault_addr,
             memset((void*)phys, 0, 4096);
             v->shm->pages[page_idx] = phys;
         }
+
+        if (v->flags & VMA_WRITE) pte_flags |= PTE_WRITE;
+        vmm_map_user_page(cur->pgd, page, phys, pte_flags);
+        return 0;
+    }
+
+    if (v && v->filemap) {
+        uint32_t page_idx = v->filemap_offset + (fault_addr - v->start) / 0x1000;
+        uint32_t phys = file_map_get_page(v->filemap, page_idx);
+        if (!phys) return -1;
 
         if (v->flags & VMA_WRITE) pte_flags |= PTE_WRITE;
         vmm_map_user_page(cur->pgd, page, phys, pte_flags);

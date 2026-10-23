@@ -88,6 +88,7 @@ OBJS = $(BUILD_DIR)/start.o \
 	   $(BUILD_DIR)/mouse.o \
 	   $(BUILD_DIR)/input.o \
 	   $(BUILD_DIR)/pty.o \
+	   $(BUILD_DIR)/file_map.o \
 
 	   
 

@@ -9,6 +9,7 @@
 #define VMA_TYPE_MMAP    3
 #define VMA_TYPE_ELF     4
 #define VMA_TYPE_PIPE    5
+#define VMA_TYPE_FILE    6
 
 /* 权限位（语义上对齐 PTE_*，但不复用——它们是 VMA 的抽象） */
 #define VMA_READ   0x01
@@ -18,16 +19,21 @@
 
 struct task;
 struct shm;
+struct file_mapping;
 
-/* 一个虚拟地址区间 [start, end)。页对齐，半开。 */
 struct vma {
     uint32_t start;
     uint32_t end;
     uint32_t flags;
     uint8_t  type;
     uint8_t  reserved[3];
-    struct shm *shm;        /* 共享映射时非 NULL */
-    uint32_t shm_offset;    /* 在 shm->pages 里的起始页索引 */
+    
+    struct shm *shm;
+    uint32_t shm_offset;
+    
+    struct file_mapping *filemap;
+    uint32_t filemap_offset;
+    
     struct vma *next;
 };
 

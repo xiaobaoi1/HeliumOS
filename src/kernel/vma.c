@@ -1,5 +1,6 @@
 #include <vma.h>
 #include <shm.h>
+#include <file_map.h>
 #include <task.h>
 #include <heap.h>
 #include <errno.h>
@@ -43,6 +44,11 @@ int vma_insert(struct task *t, uint32_t start, uint32_t end,
     node->type       = type;
     node->shm        = shm;
     node->shm_offset = shm_offset;
+    
+    /* filemap 由外部（如 sys_mmap）在插入后赋值，初始为 NULL */
+    node->filemap        = NULL;
+    node->filemap_offset = 0;
+
     node->reserved[0] = node->reserved[1] = node->reserved[2] = 0;
     node->next       = NULL;
 
@@ -74,7 +80,7 @@ void vma_remove_range(struct task *t, uint32_t start, uint32_t end) {
         }
 
         if (v->start < start && v->end > end) {
-            /* 拆成左右两段。两者都引用同一个 shm（如果有）。 */
+            /* 拆成左右两段。两者都引用同一个对象（如果有）。 */
             struct vma *right = (struct vma*)kmalloc(sizeof(struct vma));
             if (!right) {
                 KLOG_WARN("VMA: kmalloc failed, skipping split\n");
@@ -87,25 +93,38 @@ void vma_remove_range(struct task *t, uint32_t start, uint32_t end) {
             right->type       = v->type;
             right->shm        = v->shm;
             right->shm_offset = v->shm_offset + (end - v->start) / 0x1000;
+            
+            right->filemap        = v->filemap;
+            right->filemap_offset = v->filemap_offset + (end - v->start) / 0x1000;
+            
             right->reserved[0] = right->reserved[1] = right->reserved[2] = 0;
             right->next       = v->next;
 
             v->end = start;
 
-            if (v->shm) shm_ref(v->shm);   /* 拆分后 2 个 VMA */
+            if (v->shm) shm_ref(v->shm);
+            if (v->filemap) file_map_ref(v->filemap);
 
             v->next = right;
             pp = &right->next;
         } else if (v->start < start) {
+            /* 切掉右半部分 */
             v->end = start;
             pp = &v->next;
         } else if (v->end > end) {
+            /* 切掉左半部分。偏移量前进。 */
+            uint32_t shift = (end - v->start) / 0x1000;
             v->start = end;
-            if (v->shm) v->shm_offset += (end - v->start) / 0x1000;
+            
+            if (v->shm) v->shm_offset += shift;
+            if (v->filemap) v->filemap_offset += shift;
+            
             pp = &v->next;
         } else {
             /* 完全包含：删除 */
             if (v->shm) shm_unref(v->shm);
+            if (v->filemap) file_map_unref(v->filemap);
+            
             *pp = v->next;
             kfree(v);
         }
@@ -118,6 +137,7 @@ void vma_free_all(struct task *t) {
     while (v) {
         struct vma *next = v->next;
         if (v->shm) shm_unref(v->shm);
+        if (v->filemap) file_map_unref(v->filemap);
         kfree(v);
         v = next;
     }
