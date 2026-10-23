@@ -99,7 +99,7 @@ static int create_wm_window(const char *tag, int kind, int x, int y,
 
     unsigned int addr = mmap(0, shm_size,
                              PROT_READ | PROT_WRITE,
-                             MAP_SHARED, shm_id);
+                             MAP_SHARED, shm_id, 0);
     if ((int)addr <= 0) return -1;
 
     struct shm_hdr *hdr = (struct shm_hdr*)addr;

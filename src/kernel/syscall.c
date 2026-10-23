@@ -355,7 +355,7 @@ static uint32_t mmap_find_free(struct task *t, uint32_t len) {
 }
 
 static uint32_t sys_mmap(uint32_t addr, uint32_t length, uint32_t prot,
-                         uint32_t flags, int shm_idx) {
+                         uint32_t flags, int shm_idx, uint32_t offset) {
     struct task *cur = get_current_task();
     if (!cur) return EINVAL;
     if (length == 0) return EINVAL;
@@ -406,10 +406,10 @@ static uint32_t sys_mmap(uint32_t addr, uint32_t length, uint32_t prot,
         int r = vma_insert(cur, start, start + length, vma_flags, VMA_TYPE_FILE, NULL, 0);
         if (r != OK) return r;
 
-        /* 找到刚插入的 VMA，关联 filemap */
         struct vma *v = vma_find(cur, start);
         if (v) {
             v->filemap = fm;
+            v->filemap_offset = offset / 4096;  /* 字节转页 */
             file_map_ref(fm);
         }
         return start;
@@ -874,6 +874,7 @@ void syscall_handler(struct registers *regs) {
     uint32_t arg3 = regs->edx;
     uint32_t arg4 = regs->esi;
     uint32_t arg5 = regs->edi;
+    uint32_t arg6 = regs->ebp;
 
     int32_t ret = 0;
 
@@ -900,7 +901,7 @@ void syscall_handler(struct registers *regs) {
             ret = sys_brk(arg1);
             break;
         case SYS_MMAP:
-            ret = (int)sys_mmap(arg1, arg2, arg3, arg4, (int)arg5);
+            ret = (int)sys_mmap(arg1, arg2, arg3, arg4, (int)arg5, arg6);
             break;
         case SYS_MUNMAP:
             ret = sys_munmap(arg1, arg2);

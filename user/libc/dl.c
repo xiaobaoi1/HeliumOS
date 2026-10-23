@@ -273,30 +273,56 @@ void *dlopen(const char *path, int mode) {
         set_error("no PT_LOAD"); return NULL;
     }
 
+    /* 第一遍：mmap 整个跨度，作为骨架 */
     uint32_t total_size = (max_vaddr_end - min_vaddr + 0xFFF) & ~0xFFFu;
     unsigned int base = mmap(0, total_size, PROT_READ | PROT_WRITE,
-                             MAP_PRIVATE | MAP_ANONYMOUS, -1);
+                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if ((int)base <= 0) {
         fs_close(fd); lib->used = 0;
-        set_error("mmap failed"); return NULL;
+        set_error("mmap base failed"); return NULL;
     }
 
     lib->bias = base - min_vaddr;
 
+    /* 第二遍：处理每个段 */
     for (int i = 0; i < eh.e_phnum; i++) {
         if (ph[i].p_type != PT_LOAD || ph[i].p_filesz == 0) continue;
-        uint8_t *dst = (uint8_t*)(lib->bias + ph[i].p_vaddr);
-        if (fs_seek(fd, ph[i].p_offset) != 0) {
-            fs_close(fd); lib->used = 0;
-            set_error("seek segment failed"); return NULL;
-        }
-        uint32_t done = 0;
-        while (done < ph[i].p_filesz) {
-            uint32_t chunk = ph[i].p_filesz - done;
-            if (chunk > 4096) chunk = 4096;
-            int n = fs_read(fd, dst + done, chunk);
-            if (n <= 0) break;
-            done += n;
+        
+        uint32_t seg_vaddr = ph[i].p_vaddr + lib->bias;
+        int is_write = (ph[i].p_flags & 0x2); /* PF_W */
+
+        if (is_write) {
+            /* 数据段：沿用 fs_read 方式写入预留空间 */
+            uint8_t *dst = (uint8_t*)seg_vaddr;
+            if (fs_seek(fd, ph[i].p_offset) != 0) {
+                fs_close(fd); lib->used = 0;
+                set_error("seek segment failed"); return NULL;
+            }
+            uint32_t done = 0;
+            while (done < ph[i].p_filesz) {
+                uint32_t chunk = ph[i].p_filesz - done;
+                if (chunk > 4096) chunk = 4096;
+                int n = fs_read(fd, dst + done, chunk);
+                if (n <= 0) break;
+                done += n;
+            }
+        } else {
+            /* 代码段：卸载之前的匿名内存，重新映射为 MAP_FILE */
+            uint32_t map_len = (ph[i].p_memsz + 0xFFF) & ~0xFFFu;
+            uint32_t map_off = ph[i].p_offset & ~0xFFFu;
+            uint32_t map_addr = seg_vaddr & ~0xFFFu;
+            
+            /* 取消原有的匿名映射 */
+            munmap(map_addr, map_len);
+
+            /* 重新作为文件映射，传入 map_off */
+            unsigned int res = mmap(map_addr, map_len, PROT_READ | PROT_EXEC,
+                                    MAP_PRIVATE | MAP_FILE, fd, map_off);
+            /* 如果失败 */
+            if ((int)res <= 0) {
+                fs_close(fd); lib->used = 0;
+                set_error("mmap file seg failed"); return NULL;
+            }
         }
     }
 

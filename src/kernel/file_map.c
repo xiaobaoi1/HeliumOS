@@ -88,7 +88,6 @@ uint32_t file_map_get_page(struct file_mapping *fm, uint32_t page_idx) {
         temp_f.first_cluster = fm->first_cluster;
         temp_f.file_size = fm->file_size;
         
-        /* 直接调用底层 FAT32 读取 */
         fat32_read_file(fvol, &temp_f, (uint8_t*)phys, offset, read_sz);
     }
 

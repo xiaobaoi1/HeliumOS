@@ -520,7 +520,7 @@ static struct window *make_app_window(struct wm_request *req) {
 
     unsigned int addr = mmap(0, shm_size,
                              PROT_READ | PROT_WRITE,
-                             MAP_SHARED, shm_id);
+                             MAP_SHARED, shm_id, 0);
     if ((int)addr <= 0) { w->used = 0; return NULL; }
 
     w->shm_idx = shm_id;
@@ -694,7 +694,7 @@ static void handle_resize_request(struct wm_resize_request *req) {
 
     unsigned int addr = mmap(0, shm_size,
                              PROT_READ | PROT_WRITE,
-                             MAP_SHARED, shm_id);
+                             MAP_SHARED, shm_id, 0);
     if ((int)addr <= 0) return;
 
     if (w->map_addr) {
@@ -1015,7 +1015,7 @@ int main(int argc, char **argv) {
     unsigned int back_size = info.pitch * info.height;
     unsigned int back_addr = mmap(0, back_size,
                                   PROT_READ | PROT_WRITE,
-                                  MAP_PRIVATE | MAP_ANONYMOUS, -1);
+                                  MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if ((int)back_addr <= 0) { printf("wm: back mmap failed\n"); return 1; }
     g_back = (unsigned int*)back_addr;
     memset(g_back, 0, back_size);
