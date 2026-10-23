@@ -108,13 +108,21 @@ all: $(DISK_IMG)
 USER_CFLAGS = -m32 -ffreestanding -fno-pic -fno-stack-protector \
               -Iuser/ -Iuser/libc/include -MMD -MP
 
+METHYLUI_DIR  = user/methylui
+METHYLUI_OBJS = $(BUILD_DIR)/methylui/mui_font.o \
+                $(BUILD_DIR)/methylui/mui_surface.o \
+                $(BUILD_DIR)/methylui/mui_widget.o \
+                $(BUILD_DIR)/methylui/mui_context.o \
+				$(BUILD_DIR)/methylui/mui_label.o \
+                $(BUILD_DIR)/methylui/mui_textbox.o
+
 USER_APPS = shell idle test testkill sleeper argtest test_write \
             test_fault test_env count cat echo head tail wc \
             test_mmap test_stack ping test_dns nc tcpserver \
             test_input test_pty wm term test_namedpipe test_perm \
 			test_createwin test_ansi\
 			dhcpclient desktop test_raw kilo test_malloc_loop \
-			grep find hexdump
+			grep find hexdump test_mui_draw test_mui_button test_mui_form
 
 USER_OBJS = $(addprefix $(BUILD_DIR)/,$(addsuffix .o,$(USER_APPS)))
 USER_ELFS = $(addprefix $(BUILD_DIR)/,$(addsuffix .ELF,$(USER_APPS)))
@@ -267,6 +275,10 @@ $(BUILD_DIR)/libc_%.o: user/libc/%.c
 	@mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/methylui/%.o: $(METHYLUI_DIR)/%.c
+	@mkdir -p $(BUILD_DIR)/methylui
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
 $(BUILD_DIR)/%.o: user/%.c
 	@mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -c $< -o $@
@@ -276,6 +288,9 @@ $(BUILD_DIR)/%.o: user/%.c
 # 附加对象映射（只有两个程序需要，直接赋值最清晰）
 EXTRA_OBJS_wm      := $(BUILD_DIR)/wm_font.o
 EXTRA_OBJS_desktop := $(BUILD_DIR)/wm_font.o
+EXTRA_OBJS_test_mui_draw := $(METHYLUI_OBJS)
+EXTRA_OBJS_test_mui_button := $(METHYLUI_OBJS)
+EXTRA_OBJS_test_mui_form := $(METHYLUI_OBJS)
 
 # 统一链接规则（二次展开拿 EXTRA_OBJS_<stem>）
 .SECONDEXPANSION:
