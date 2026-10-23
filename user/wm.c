@@ -56,7 +56,10 @@ static void blit_back_to_fb(int x0, int y0, int x1, int y1) {
 
 /* ==================== 窗口 ==================== */
 
-#define MAX_WINDOWS 8
+#define MAX_WINDOWS      8
+#define CTRL_BTN_SIZE    16
+#define CTRL_BTN_GAP     4
+#define CTRL_BTN_MARGIN  4
 
 struct window {
     int used;
@@ -76,17 +79,28 @@ struct window {
     uint64_t last_seen;
     struct shm_hdr *shm;
 
-    unsigned int map_addr;   /* 新增 */
-    unsigned int map_size;   /* 新增 */
+    unsigned int map_addr;
+    unsigned int map_size;
 
     int event_w;
     int minimized;
+    int maximized;
+    int restore_x, restore_y, restore_w, restore_h;
+    uint32_t min_w, min_h, max_w, max_h;
+    int closing;
+    uint32_t close_tick;
+    uint32_t cursor;
 };
 
 static int g_inbox_rd = -1;
 static struct window g_wins[MAX_WINDOWS];
 static int g_next_z = 1;
+static struct window *g_mouse_entered = NULL;
+static struct window *g_mouse_down_win = NULL;
 static struct window *g_focus = NULL;
+static uint32_t g_wm_tick = 0;
+
+/* ---------- 窗口坐标 ---------- */
 
 static int cli_x(struct window *w) {
     return w->kind == WM_KIND_NORMAL ? w->x + BORDER : w->x;
@@ -97,46 +111,154 @@ static int cli_y(struct window *w) {
 static int cli_w(struct window *w) { return w->cw; }
 static int cli_h(struct window *w) { return w->ch; }
 
+/* ---------- 事件发送 ---------- */
+
+static void send_event(struct window *w, uint32_t type, uint32_t code,
+                       int x, int y, uint32_t extra) {
+    if (!w || w->event_w < 0) return;
+    struct wm_event ev;
+    ev.type = type;
+    ev.code = code;
+    ev.x = x;
+    ev.y = y;
+    ev.extra = extra;
+    pipe_write(w->event_w, &ev, sizeof(ev));
+}
+
+/* ---------- 焦点 ---------- */
+
+static void set_focus(struct window *w) {
+    if (w && w->kind != WM_KIND_NORMAL) w = NULL;
+    if (g_focus == w) return;
+    if (g_focus && g_focus->kind == WM_KIND_NORMAL)
+        send_event(g_focus, WM_EV_FOCUS_OUT, 0, 0, 0, 0);
+    g_focus = w;
+    if (w && w->kind == WM_KIND_NORMAL)
+        send_event(w, WM_EV_FOCUS_IN, 0, 0, 0, 0);
+}
+
+/* ---------- 悬停进入/离开 ---------- */
+
+static void update_mouse_entered(struct window *target, int mx, int my) {
+    if (target == g_mouse_entered) return;
+    if (g_mouse_entered)
+        send_event(g_mouse_entered, WM_EV_MOUSE_LEAVE, 0, 0, 0, 0);
+    g_mouse_entered = target;
+    if (target) {
+        int cx = mx - cli_x(target);
+        int cy = my - cli_y(target);
+        send_event(target, WM_EV_MOUSE_ENTER, 0, cx, cy, 0);
+    }
+}
+
+/* ---------- 窗口内容 blit ---------- */
+
 static void blit_shm_to_back(struct window *w) {
-    int cw = cli_w(w);
-    int ch = cli_h(w);
+    int cw = cli_w(w);   /* shm 实际行宽（可能是旧值，大） */
+    int ch = cli_h(w);   /* shm 实际行数 */
     int cx = cli_x(w);
     int cy = cli_y(w);
 
-    for (int y = 0; y < ch; y++) {
-        unsigned int *dst = g_back + (cy + y) * g_pitch_px + cx;
-        unsigned int *src = w->pixels + y * cw;
-        memcpy(dst, src, cw * 4);
+    /* 客户区可见尺寸：不超出窗口边界。
+     * unmaximize 的中间状态 cw/ch 是旧的大值，w->w/h 是新值——
+     * 只画窗口内可见的左上部分，不溢出到窗口外的壁纸区域。 */
+    int vis_w = cw;
+    int vis_h = ch;
+    if (w->kind == WM_KIND_NORMAL) {
+        int max_w = w->w - 2 * BORDER;
+        int max_h = w->h - TITLE_H - 2 * BORDER;
+        if (vis_w > max_w) vis_w = max_w;
+        if (vis_h > max_h) vis_h = max_h;
+    } else {
+        if (vis_w > w->w) vis_w = w->w;
+        if (vis_h > w->h) vis_h = w->h;
+    }
+    if (vis_w <= 0 || vis_h <= 0) return;
+
+    /* 屏幕内可见范围（双保险——极端情况下窗口位置越界） */
+    int x0 = cx;
+    int x1 = cx + vis_w;
+    int y0 = cy;
+    int y1 = cy + vis_h;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > (int)g_W) x1 = g_W;
+    if (y1 > (int)g_H) y1 = g_H;
+    if (x1 <= x0 || y1 <= y0) return;
+
+    int sx = x0 - cx;
+    int sy = y0 - cy;
+
+    for (int y = y0; y < y1; y++) {
+        unsigned int *dst = g_back + y * g_pitch_px + x0;
+        unsigned int *src = w->pixels + (sy + (y - y0)) * cw + sx;
+        memcpy(dst, src, (x1 - x0) * 4);
     }
 }
 
 static void draw_title_text(struct window *w);
 
+/* ---------- 三按钮绘制辅助 ---------- */
+
+static void draw_ctrl_minimize(int bx, int by) {
+    fill_rect_buf(g_back, bx, by, CTRL_BTN_SIZE, CTRL_BTN_SIZE, COL_BORDER);
+    for (int i = 0; i < 8; i++)
+        put_pixel_buf(g_back, bx + 4 + i, by + 8, 0x000000);
+}
+
+static void draw_ctrl_maximize(int bx, int by) {
+    fill_rect_buf(g_back, bx, by, CTRL_BTN_SIZE, CTRL_BTN_SIZE, COL_BORDER);
+    for (int i = 0; i < 8; i++) {
+        put_pixel_buf(g_back, bx + 4 + i, by + 4, 0x000000);
+        put_pixel_buf(g_back, bx + 4 + i, by + 12, 0x000000);
+        put_pixel_buf(g_back, bx + 4, by + 4 + i, 0x000000);
+        put_pixel_buf(g_back, bx + 12, by + 4 + i, 0x000000);
+    }
+}
+
+static void draw_ctrl_close(int bx, int by, unsigned int color) {
+    fill_rect_buf(g_back, bx, by, CTRL_BTN_SIZE, CTRL_BTN_SIZE, color);
+    for (int i = 0; i < 8; i++) {
+        put_pixel_buf(g_back, bx + 4 + i, by + 4 + i, 0xFFFFFF);
+        put_pixel_buf(g_back, bx + 12 - i, by + 4 + i, 0xFFFFFF);
+    }
+}
+
+/* ---------- 窗口装饰 ---------- */
+
 static void render_win_frame(struct window *w) {
     if (w->kind != WM_KIND_NORMAL) return;
 
+    /* 阴影 */
     fill_rect_buf(g_back, w->x + 4, w->y + 4, w->w, w->h, 0x000000);
+
+    /* 标题栏 */
     fill_rect_buf(g_back, w->x, w->y, w->w, TITLE_H, COL_TITLE);
+
+    /* 边框 */
     fill_rect_buf(g_back, w->x, w->y, w->w, BORDER, COL_BORDER);
     fill_rect_buf(g_back, w->x, w->y + w->h - BORDER, w->w, BORDER, COL_BORDER);
     fill_rect_buf(g_back, w->x, w->y, BORDER, w->h, COL_BORDER);
     fill_rect_buf(g_back, w->x + w->w - BORDER, w->y, BORDER, w->h, COL_BORDER);
-    fill_rect_buf(g_back, cli_x(w), cli_y(w), cli_w(w), cli_h(w), 0x000000);
+
+    /* 客户区黑底（按窗口实际尺寸，不是 shm 尺寸——最大化时大） */
+    int actual_cw = w->w - 2 * BORDER;
+    int actual_ch = w->h - TITLE_H - 2 * BORDER;
+    fill_rect_buf(g_back, cli_x(w), cli_y(w), actual_cw, actual_ch, 0x000000);
 
     draw_title_text(w);
 
-    int bx = w->x + w->w - CLOSE_BTN_W - 4;
-    int by = w->y + 4;
-    unsigned int btn_col = (w == g_focus) ? COL_CLOSE_HL : COL_CLOSE;
-    fill_rect_buf(g_back, bx, by, CLOSE_BTN_W - 8, CLOSE_BTN_W - 8, btn_col);
-    int cx0 = bx + 2, cy0 = by + 2;
-    int sz = CLOSE_BTN_W - 12;
-    for (int i = 0; i < sz; i++) {
-        put_pixel_buf(g_back, cx0 + i, cy0 + i, 0xFFFFFF);
-        put_pixel_buf(g_back, cx0 + sz - 1 - i, cy0 + i, 0xFFFFFF);
-        put_pixel_buf(g_back, cx0 + i + 1, cy0 + i, 0xFFFFFF);
-        put_pixel_buf(g_back, cx0 + sz - i, cy0 + i, 0xFFFFFF);
-    }
+    /* 三按钮 */
+    int by = w->y + (TITLE_H - CTRL_BTN_SIZE) / 2;
+    int bx_close = w->x + w->w - CTRL_BTN_MARGIN - CTRL_BTN_SIZE;
+    int bx_max   = bx_close - CTRL_BTN_GAP - CTRL_BTN_SIZE;
+    int bx_min   = bx_max   - CTRL_BTN_GAP - CTRL_BTN_SIZE;
+
+    unsigned int close_col = (w == g_focus) ? COL_CLOSE_HL : COL_CLOSE;
+
+    draw_ctrl_minimize(bx_min, by);
+    draw_ctrl_maximize(bx_max, by);
+    draw_ctrl_close(bx_close, by, close_col);
 }
 
 static void draw_title_text(struct window *w) {
@@ -144,6 +266,7 @@ static void draw_title_text(struct window *w) {
 
     int tx = w->x + 8;
     int ty = w->y + (TITLE_H - FONT_H) / 2;
+    int tx_limit = w->x + w->w - CTRL_BTN_MARGIN - CTRL_BTN_SIZE * 3 - CTRL_BTN_GAP * 2 - 8;
 
     for (const char *p = w->title; *p; p++) {
         int cp = (unsigned char)*p;
@@ -161,9 +284,11 @@ static void draw_title_text(struct window *w) {
             }
         }
         tx += FONT_W;
-        if (tx + FONT_W > w->x + w->w - 28) break;
+        if (tx + FONT_W > tx_limit) break;
     }
 }
+
+/* ---------- 分层 ---------- */
 
 static int layer_of(struct window *w) {
     switch (w->kind) {
@@ -277,14 +402,7 @@ static void mouse_draw(void) {
     mouse_prev_y = mouse_y;
 }
 
-/* ==================== 事件 ==================== */
-
-static void send_event(struct window *w, uint32_t type, uint32_t code,
-                       int x, int y) {
-    if (!w || w->event_w < 0) return;
-    struct wm_event ev = { type, code, x, y };
-    pipe_write(w->event_w, &ev, sizeof(ev));
-}
+/* ==================== 查找 ==================== */
 
 static struct window *find_by_shm(const char *shm_name) {
     for (int i = 0; i < MAX_WINDOWS; i++) {
@@ -301,6 +419,13 @@ static struct window *find_by_kind(int kind) {
     return NULL;
 }
 
+static int dock_height(void) {
+    struct window *dock = find_by_kind(WM_KIND_DOCK);
+    return dock ? dock->h : 0;
+}
+
+/* ==================== 窗口列表推送 ==================== */
+
 static void push_window_list(void) {
     struct window *dock = find_by_kind(WM_KIND_DOCK);
     if (!dock || dock->event_w < 0) return;
@@ -309,16 +434,17 @@ static void push_window_list(void) {
     for (int i = 0; i < MAX_WINDOWS; i++) {
         if (g_wins[i].used && g_wins[i].kind == WM_KIND_NORMAL) n++;
     }
-    if (n > 8) n = 8;
+    if (n > MAX_WINDOWS) n = MAX_WINDOWS;
 
-    uint8_t buf[16 + 8 * 40];
+    uint8_t buf[sizeof(struct wm_event) + MAX_WINDOWS * sizeof(struct wm_window_entry)];
     struct wm_event *ev = (struct wm_event*)buf;
-    ev->type = WM_EV_WINDOW_LIST;
-    ev->code = (uint32_t)n;
+    ev->type  = WM_EV_WINDOW_LIST;
+    ev->code  = (uint32_t)n;
     ev->x = 0;
     ev->y = 0;
+    ev->extra = 0;
 
-    int off = 16;
+    int off = sizeof(struct wm_event);
     int count = 0;
     for (int i = 0; i < MAX_WINDOWS && count < n; i++) {
         struct window *w = &g_wins[i];
@@ -328,7 +454,7 @@ static void push_window_list(void) {
         e->minimized = (uint32_t)w->minimized;
         memset(e->title, 0, 32);
         strncpy(e->title, w->title, 31);
-        off += 40;
+        off += sizeof(struct wm_window_entry);
         count++;
     }
 
@@ -355,6 +481,13 @@ static struct window *make_app_window(struct wm_request *req) {
     w->ch = req->h;
     w->owner_pid = req->owner_pid;
     w->minimized = 0;
+    w->maximized = 0;
+    w->closing = 0;
+    w->cursor = WM_CURSOR_ARROW;
+    w->min_w = req->min_w;
+    w->min_h = req->min_h;
+    w->max_w = req->max_w;
+    w->max_h = req->max_h;
     strncpy(w->title, req->title, sizeof(w->title) - 1);
     strncpy(w->shm_name, req->shm_name, sizeof(w->shm_name) - 1);
 
@@ -416,7 +549,9 @@ static void minimize_window(struct window *w) {
     int x0, y0, x1, y1;
     win_bbox(w, &x0, &y0, &x1, &y1);
     w->minimized = 1;
-    if (g_focus == w) g_focus = NULL;
+    if (g_focus == w) set_focus(NULL);
+    if (g_mouse_entered == w) g_mouse_entered = NULL;
+    if (g_mouse_down_win == w) g_mouse_down_win = NULL;
     mouse_restore();
     redraw_region(x0, y0, x1, y1);
     mouse_draw();
@@ -427,11 +562,78 @@ static void restore_window(struct window *w) {
     if (!w || !w->minimized) return;
     w->minimized = 0;
     w->z = g_next_z++;
-    g_focus = w;
+    set_focus(w);
     mouse_restore();
     int x0, y0, x1, y1;
     win_bbox(w, &x0, &y0, &x1, &y1);
     redraw_region(x0, y0, x1, y1);
+    mouse_draw();
+    push_window_list();
+}
+
+static void maximize_window(struct window *w) {
+    if (!w || w->kind != WM_KIND_NORMAL || w->maximized) return;
+
+    int ox0, oy0, ox1, oy1;
+    win_bbox(w, &ox0, &oy0, &ox1, &oy1);
+
+    w->restore_x = w->x;
+    w->restore_y = w->y;
+    w->restore_w = w->w;
+    w->restore_h = w->h;
+
+    w->x = 0;
+    w->y = 0;
+    w->w = g_W;
+    w->h = g_H - dock_height();
+    w->maximized = 1;
+
+    /* 注意：此处不改 w->cw/ch——shm 还是旧尺寸。
+     * blit_shm_to_back 用旧 cw/ch 读旧 shm，加边界检查后只显示屏幕内部分。
+     * w->cw/ch 等 term 收到 WM_EV_RESIZE 重建 shm 后由 handle_resize_request 更新。 */
+
+    int new_cw = w->w - 2 * BORDER;
+    int new_ch = w->h - TITLE_H - 2 * BORDER;
+    send_event(w, WM_EV_RESIZE, (uint32_t)new_cw, 0, 0, (uint32_t)new_ch);
+
+    int nx0, ny0, nx1, ny1;
+    win_bbox(w, &nx0, &ny0, &nx1, &ny1);
+    int ux0 = ox0 < nx0 ? ox0 : nx0;
+    int uy0 = oy0 < ny0 ? oy0 : ny0;
+    int ux1 = ox1 > nx1 ? ox1 : nx1;
+    int uy1 = oy1 > ny1 ? oy1 : ny1;
+
+    mouse_restore();
+    redraw_region(ux0, uy0, ux1, uy1);
+    mouse_draw();
+    push_window_list();
+}
+
+static void unmaximize_window(struct window *w) {
+    if (!w || !w->maximized) return;
+
+    int ox0, oy0, ox1, oy1;
+    win_bbox(w, &ox0, &oy0, &ox1, &oy1);
+
+    w->x = w->restore_x;
+    w->y = w->restore_y;
+    w->w = w->restore_w;
+    w->h = w->restore_h;
+    w->maximized = 0;
+
+    int new_cw = w->w - 2 * BORDER;
+    int new_ch = w->h - TITLE_H - 2 * BORDER;
+    send_event(w, WM_EV_RESIZE, (uint32_t)new_cw, 0, 0, (uint32_t)new_ch);
+
+    int nx0, ny0, nx1, ny1;
+    win_bbox(w, &nx0, &ny0, &nx1, &ny1);
+    int ux0 = ox0 < nx0 ? ox0 : nx0;
+    int uy0 = oy0 < ny0 ? oy0 : ny0;
+    int ux1 = ox1 > nx1 ? ox1 : nx1;
+    int uy1 = oy1 > ny1 ? oy1 : ny1;
+
+    mouse_restore();
+    redraw_region(ux0, uy0, ux1, uy1);
     mouse_draw();
     push_window_list();
 }
@@ -443,7 +645,7 @@ static void destroy_window(struct window *w) {
     win_bbox(w, &x0, &y0, &x1, &y1);
 
     if (w->kind == WM_KIND_POPUP) {
-        send_event(w, WM_EV_CLOSE, 0, 0, 0);
+        send_event(w, WM_EV_CLOSE, 0, 0, 0, 0);
     }
 
     if (w->event_w >= 0) ipc_close(w->event_w);
@@ -457,7 +659,9 @@ static void destroy_window(struct window *w) {
 
     w->used = 0;
     w->event_w = -1;
-    if (g_focus == w) g_focus = NULL;
+    if (g_focus == w) set_focus(NULL);
+    if (g_mouse_entered == w) g_mouse_entered = NULL;
+    if (g_mouse_down_win == w) g_mouse_down_win = NULL;
 
     mouse_restore();
     redraw_region(x0, y0, x1, y1);
@@ -468,14 +672,22 @@ static void destroy_window(struct window *w) {
 static void handle_resize_request(struct wm_resize_request *req) {
     struct window *w = find_by_shm(req->old_shm);
     if (!w) return;
-    if (req->new_w == 0 || req->new_h == 0) return;
-    if (req->new_w > 2048 || req->new_h > 1536) return;
+
+    int cw = (int)req->new_w;
+    int ch = (int)req->new_h;
+
+    /* 遵守 min/max 约束 */
+    if (w->min_w && cw < (int)w->min_w) cw = (int)w->min_w;
+    if (w->min_h && ch < (int)w->min_h) ch = (int)w->min_h;
+    if (w->max_w && cw > (int)w->max_w) cw = (int)w->max_w;
+    if (w->max_h && ch > (int)w->max_h) ch = (int)w->max_h;
+
+    if (cw == 0 || ch == 0) return;
+    if (cw > 2048 || ch > 1536) return;
 
     int ox0, oy0, ox1, oy1;
     win_bbox(w, &ox0, &oy0, &ox1, &oy1);
 
-    int cw = req->new_w;
-    int ch = req->new_h;
     int shm_size = shm_total_size(cw, ch);
     int shm_id = shm_open(req->new_shm, shm_size, 0);
     if (shm_id < 0) return;
@@ -511,6 +723,7 @@ static void handle_resize_request(struct wm_resize_request *req) {
     w->map_size = shm_size;
     w->last_seen = 0;
 
+    /* 位置夹紧——确保客户区在屏幕内 */
     if (w->x + w->w + 4 > (int)g_W) w->x = g_W - w->w - 4;
     if (w->y + w->h + 4 > (int)g_H) w->y = g_H - w->h - 4;
     if (w->x < 0) w->x = 0;
@@ -583,10 +796,12 @@ static void route_mouse_move(int mx, int my) {
         if (wall) target = wall;
     }
 
+    update_mouse_entered(target, mx, my);
+
     if (target) {
         int cx = mx - cli_x(target);
         int cy = my - cli_y(target);
-        send_event(target, WM_EV_MOUSE_MOVE, 0, cx, cy);
+        send_event(target, WM_EV_MOUSE_MOVE, 0, cx, cy, 0);
     }
 }
 
@@ -599,7 +814,8 @@ static void handle_mouse_press(int mx, int my,
             my >= popup->y && my < popup->y + popup->h) {
             int cx = mx - cli_x(popup);
             int cy = my - cli_y(popup);
-            send_event(popup, WM_EV_MOUSE_BTN, 1, cx, cy);
+            g_mouse_down_win = popup;
+            send_event(popup, WM_EV_MOUSE_DOWN, WM_BTN_LEFT, cx, cy, 0);
             return;
         }
         destroy_window(popup);
@@ -610,7 +826,8 @@ static void handle_mouse_press(int mx, int my,
         my >= dock->y && my < dock->y + dock->h) {
         int cx = mx - cli_x(dock);
         int cy = my - cli_y(dock);
-        send_event(dock, WM_EV_MOUSE_BTN, 1, cx, cy);
+        g_mouse_down_win = dock;
+        send_event(dock, WM_EV_MOUSE_DOWN, WM_BTN_LEFT, cx, cy, 0);
         return;
     }
 
@@ -627,33 +844,64 @@ static void handle_mouse_press(int mx, int my,
 
     if (hit) {
         int need_full = (hit != g_focus);
-        g_focus = hit;
+        set_focus(hit);
         hit->z = g_next_z++;
 
-        int bx = hit->x + hit->w - CLOSE_BTN_W - 4;
-        int by = hit->y + 4;
-        if (mx >= bx && mx < bx + CLOSE_BTN_W &&
-            my >= by && my < by + CLOSE_BTN_W) {
-            send_event(hit, WM_EV_CLOSE, 0, 0, 0);
-            destroy_window(hit);
-        } else if (my >= hit->y && my < hit->y + TITLE_H) {
-            *drag_win = hit;
-            *drag_dx = mx - hit->x;
-            *drag_dy = my - hit->y;
+        /* 控制框三按钮 */
+        int by       = hit->y + (TITLE_H - CTRL_BTN_SIZE) / 2;
+        int bx_close = hit->x + hit->w - CTRL_BTN_MARGIN - CTRL_BTN_SIZE;
+        int bx_max   = bx_close - CTRL_BTN_GAP - CTRL_BTN_SIZE;
+        int bx_min   = bx_max   - CTRL_BTN_GAP - CTRL_BTN_SIZE;
+
+        if (my >= by && my < by + CTRL_BTN_SIZE) {
+            if (mx >= bx_close && mx < bx_close + CTRL_BTN_SIZE) {
+                send_event(hit, WM_EV_CLOSE_REQUEST, 0, 0, 0, 0);
+                hit->closing = 1;
+                hit->close_tick = g_wm_tick;
+                return;
+            }
+            if (mx >= bx_max && mx < bx_max + CTRL_BTN_SIZE) {
+                if (hit->maximized) unmaximize_window(hit);
+                else                maximize_window(hit);
+                if (need_full) {
+                    mouse_restore();
+                    redraw_region(0, 0, g_W, g_H);
+                    mouse_draw();
+                }
+                return;
+            }
+            if (mx >= bx_min && mx < bx_min + CTRL_BTN_SIZE) {
+                minimize_window(hit);
+                return;
+            }
+        }
+
+        /* 标题栏拖动 */
+        if (my >= hit->y && my < hit->y + TITLE_H) {
+            if (!hit->maximized) {
+                *drag_win = hit;
+                *drag_dx = mx - hit->x;
+                *drag_dy = my - hit->y;
+            }
             if (need_full) {
                 mouse_restore();
                 redraw_region(0, 0, g_W, g_H);
                 mouse_draw();
             }
-        } else {
-            int cx = mx - cli_x(hit);
-            int cy = my - cli_y(hit);
-            send_event(hit, WM_EV_MOUSE_BTN, 1, cx, cy);
-            if (need_full) {
-                mouse_restore();
-                redraw_region(0, 0, g_W, g_H);
-                mouse_draw();
-            }
+            return;
+        }
+
+        /* 客户区 */
+        int cx = mx - cli_x(hit);
+        int cy = my - cli_y(hit);
+        if (cx >= 0 && cx < hit->cw && cy >= 0 && cy < hit->ch) {
+            g_mouse_down_win = hit;
+            send_event(hit, WM_EV_MOUSE_DOWN, WM_BTN_LEFT, cx, cy, 0);
+        }
+        if (need_full) {
+            mouse_restore();
+            redraw_region(0, 0, g_W, g_H);
+            mouse_draw();
         }
         return;
     }
@@ -662,9 +910,12 @@ static void handle_mouse_press(int mx, int my,
     if (wall) {
         int cx = mx - cli_x(wall);
         int cy = my - cli_y(wall);
-        send_event(wall, WM_EV_MOUSE_BTN, 1, cx, cy);
+        g_mouse_down_win = wall;
+        send_event(wall, WM_EV_MOUSE_DOWN, WM_BTN_LEFT, cx, cy, 0);
     }
 }
+
+/* ==================== inbox ==================== */
 
 static void handle_inbox(void) {
     while (g_inbox_rd >= 0 && pipe_avail(g_inbox_rd) >= 8) {
@@ -702,14 +953,20 @@ static void handle_inbox(void) {
             struct window *w = &g_wins[req.win_id];
             if (!w->used || w->kind != WM_KIND_NORMAL) continue;
 
-            if (req.action == WM_ACTION_MINIMIZE) minimize_window(w);
-            else if (req.action == WM_ACTION_RESTORE) restore_window(w);
-            else if (req.action == WM_ACTION_RAISE) {
+            if (req.action == WM_ACTION_MINIMIZE) {
+                minimize_window(w);
+            } else if (req.action == WM_ACTION_RESTORE) {
+                if (w->minimized) restore_window(w);
+                else if (w->maximized) unmaximize_window(w);
+            } else if (req.action == WM_ACTION_RAISE) {
                 w->z = g_next_z++;
-                g_focus = w;
+                set_focus(w);
                 mouse_restore();
                 redraw_region(w->x, w->y, w->x + w->w + 4, w->y + w->h + 4);
                 mouse_draw();
+            } else if (req.action == WM_ACTION_MAXIMIZE) {
+                if (w->maximized) unmaximize_window(w);
+                else              maximize_window(w);
             }
         } else if (hdr[1] == WM_REQ_RESIZE) {
             struct wm_resize_request req;
@@ -719,6 +976,20 @@ static void handle_inbox(void) {
             if (pipe_avail(g_inbox_rd) < rem) break;
             if (pipe_read(g_inbox_rd, (char*)&req + 8, rem) != rem) break;
             handle_resize_request(&req);
+        } else if (hdr[1] == WM_REQ_SET_CURSOR) {
+            struct wm_set_cursor_request req;
+            req.magic = hdr[0];
+            req.type = hdr[1];
+            int rem = sizeof(req) - 8;
+            if (pipe_avail(g_inbox_rd) < rem) break;
+            if (pipe_read(g_inbox_rd, (char*)&req + 8, rem) != rem) break;
+            for (int i = 0; i < MAX_WINDOWS; i++) {
+                if (g_wins[i].used &&
+                    g_wins[i].owner_pid == (int)req.owner_pid) {
+                    g_wins[i].cursor = req.cursor;
+                    break;
+                }
+            }
         } else {
             continue;
         }
@@ -778,7 +1049,7 @@ int main(int argc, char **argv) {
         while (input_poll(&ev) == 0) {
             if (ev.type == INPUT_KEY) {
                 if (g_focus && g_focus->event_w >= 0) {
-                    send_event(g_focus, WM_EV_KEY, ev.code, 0, 0);
+                    send_event(g_focus, WM_EV_KEY, ev.code, 0, 0, 0);
                 }
             } else if (ev.type == INPUT_MOUSE_MOVE) {
                 last_mx = ev.x;
@@ -792,22 +1063,14 @@ int main(int argc, char **argv) {
                 } else {
                     if (drag_win) {
                         drag_win = NULL;
-                    } else {
-                        struct window *popup = find_by_kind(WM_KIND_POPUP);
-                        if (popup) {
-                            int cx = ev.x - cli_x(popup);
-                            int cy = ev.y - cli_y(popup);
-                            send_event(popup, WM_EV_MOUSE_BTN, 0, cx, cy);
+                    } else if (g_mouse_down_win) {
+                        if (g_mouse_down_win->used) {
+                            int cx = ev.x - cli_x(g_mouse_down_win);
+                            int cy = ev.y - cli_y(g_mouse_down_win);
+                            send_event(g_mouse_down_win, WM_EV_MOUSE_UP,
+                                       WM_BTN_LEFT, cx, cy, 0);
                         }
-                        struct window *dock = find_by_kind(WM_KIND_DOCK);
-                        if (dock && ev.x >= dock->x &&
-                            ev.x < dock->x + dock->w &&
-                            ev.y >= dock->y &&
-                            ev.y < dock->y + dock->h) {
-                            int cx = ev.x - cli_x(dock);
-                            int cy = ev.y - cli_y(dock);
-                            send_event(dock, WM_EV_MOUSE_BTN, 0, cx, cy);
-                        }
+                        g_mouse_down_win = NULL;
                     }
                 }
             }
@@ -821,8 +1084,8 @@ int main(int argc, char **argv) {
                 if (ny < 0) ny = 0;
                 if (nx + drag_win->w + 4 > (int)g_W)
                     nx = g_W - drag_win->w - 4;
-                if (ny + drag_win->h + 4 > (int)g_H)
-                    ny = g_H - drag_win->h - 4;
+                if (ny + drag_win->h + 4 > (int)g_H - dock_height())
+                    ny = g_H - dock_height() - drag_win->h - 4;
 
                 if (nx != drag_win->x || ny != drag_win->y) {
                     mouse_restore();
@@ -853,6 +1116,15 @@ int main(int argc, char **argv) {
         }
 
         handle_inbox();
+
+        /* closing 超时：1 秒（500 tick）后强制销毁 */
+        for (int i = 0; i < MAX_WINDOWS; i++) {
+            struct window *w = &g_wins[i];
+            if (!w->used || !w->closing) continue;
+            if (g_wm_tick - w->close_tick > 500) {
+                destroy_window(w);
+            }
+        }
 
         /* 窗口 shm 更新 */
         for (int i = 0; i < MAX_WINDOWS; i++) {
@@ -925,6 +1197,7 @@ int main(int argc, char **argv) {
             cleanup_dead_windows();
         }
 
+        g_wm_tick++;
         sleep_ms(2);
     }
 
