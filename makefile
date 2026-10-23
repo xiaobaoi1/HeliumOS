@@ -106,6 +106,7 @@ all: $(DISK_IMG)
 # ==================== 用户程序变量 ====================
 
 USER_CFLAGS = -m32 -ffreestanding -fno-pic -fno-stack-protector \
+			  -Wall \
               -Iuser/ -Iuser/libc/include -MMD -MP
 
 METHYLUI_DIR  = user/methylui
@@ -190,8 +191,10 @@ $(DISK_IMG): $(KERNEL_ELF) $(USER_ELFS)
 	dd if=/dev/zero of=$(DISK_IMG) bs=1M count=64 status=none
 	(echo o; echo n; echo p; echo 1; echo 2048; echo; echo t; echo c; echo a; echo 1; echo w) | fdisk $(DISK_IMG) > /dev/null 2>&1
 	@OFFSET=$$((2048*512)); \
-	sudo losetup /dev/loop22 $(DISK_IMG); \
-	sudo losetup /dev/loop23 $(DISK_IMG) -o $$OFFSET; \
+	sudo losetup -d /dev/loop22 2>/dev/null || true; \
+	sudo losetup -d /dev/loop23 2>/dev/null || true; \
+	sudo losetup -P /dev/loop22 $(DISK_IMG); \
+	sudo losetup -P /dev/loop23 $(DISK_IMG) -o $$OFFSET; \
 
 	sudo mkfs.vfat -F 32 /dev/loop23 > /dev/null; \
 	sudo mount /dev/loop23 /mnt/build; \

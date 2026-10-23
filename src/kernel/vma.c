@@ -100,8 +100,9 @@ void vma_remove_range(struct task *t, uint32_t start, uint32_t end) {
             v->end = start;
             pp = &v->next;
         } else if (v->end > end) {
+            uint32_t shift = (end - v->start) / 0x1000;
             v->start = end;
-            if (v->shm) v->shm_offset += (end - v->start) / 0x1000;
+            if (v->shm) v->shm_offset += shift;
             pp = &v->next;
         } else {
             /* 完全包含：删除 */

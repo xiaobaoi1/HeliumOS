@@ -39,6 +39,7 @@
 #include <pty.h>
 #include <e1000.h>
 #include <tty.h>
+#include <font.h>
 
 
 static const char *shell_env[] = {
@@ -233,6 +234,12 @@ void kmain(uint32_t magic, uint32_t addr) {
     if (!sys_vol) {
         panic("no FAT32 volume found");
     }
+
+    /* WM 接管 fb 前，把内核 tty 升级到 fb_char 高分辨率显示。
+     * WM 启动后 fb_claim 会设 g_fb_owner，display_flush 停止刷屏，
+     * 内核日志只剩串口。 */
+    font_init(sys_vol);
+    tty_try_upgrade();
 
     mouse_init();
 
