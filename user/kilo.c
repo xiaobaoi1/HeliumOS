@@ -65,7 +65,6 @@
 
 typedef int ssize_t;
 typedef int time_t;
-typedef int FILE;   /* 只为编译通过，函数体里不用 */
 
 static time_t time(time_t *t) { if (t) *t = 0; return 0; }
 

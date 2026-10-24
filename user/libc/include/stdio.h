@@ -4,6 +4,21 @@
 #include <stdarg.h>
 #include <stddef.h>
 
+typedef struct __helio_file FILE;
+
+extern FILE *stdin;
+extern FILE *stdout;
+extern FILE *stderr;
+
+FILE *fopen(const char *path, const char *mode);
+int fclose(FILE *stream);
+unsigned int fread(void *ptr, unsigned int size, unsigned int nmemb, FILE *stream);
+unsigned int fwrite(const void *ptr, unsigned int size, unsigned int nmemb, FILE *stream);
+int fprintf(FILE *stream, const char *format, ...);
+int fflush(FILE *stream);
+int fgetc(FILE *stream);
+int fputc(int c, FILE *stream);
+
 /* 单字符输出 */
 int putchar(int c);
 

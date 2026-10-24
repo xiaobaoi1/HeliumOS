@@ -124,7 +124,7 @@ USER_APPS = shell idle test testkill sleeper argtest test_write \
 			test_createwin test_ansi\
 			dhcpclient desktop test_raw kilo test_malloc_loop \
 			grep find hexdump test_mui_draw test_mui_button test_mui_form \
-			test_dl
+			test_dl test_libc
 
 USER_LIBS = libmath libmylib
 USER_LIB_SOS = $(addprefix $(BUILD_DIR)/,$(addsuffix .so,$(USER_LIBS)))
@@ -133,10 +133,12 @@ USER_OBJS = $(addprefix $(BUILD_DIR)/,$(addsuffix .o,$(USER_APPS)))
 USER_ELFS = $(addprefix $(BUILD_DIR)/,$(addsuffix .ELF,$(USER_APPS)))
 
 LIBC_SRCS = string printf malloc signal env assert ctype qsort \
-            abort stdlib inet netdb termios ioctl unistd atexit dl
+            abort stdlib inet netdb termios ioctl unistd atexit dl \
+			stdio
 
 LIBC_OBJS = $(addprefix $(BUILD_DIR)/libc_,$(addsuffix .o,$(LIBC_SRCS))) \
-            $(BUILD_DIR)/libc_sigreturn.o
+            $(BUILD_DIR)/libc_sigreturn.o \
+            $(BUILD_DIR)/libc_setjmp.o
 
 
 # ==================== 编译规则 ====================
@@ -276,6 +278,10 @@ $(BUILD_DIR)/crt0.o: user/crt0.asm
 	$(ASM) $(ASMFLAGS) $< -o $@
 
 $(BUILD_DIR)/libc_sigreturn.o: user/libc/sigreturn.asm
+	@mkdir -p $(BUILD_DIR)
+	$(ASM) $(ASMFLAGS) $< -o $@
+
+$(BUILD_DIR)/libc_setjmp.o: user/libc/setjmp.asm
 	@mkdir -p $(BUILD_DIR)
 	$(ASM) $(ASMFLAGS) $< -o $@
 
