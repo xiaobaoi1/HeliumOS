@@ -34,4 +34,7 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap);
 /* 格式化输出到指定 fd */
 int dprintf(int fd, const char *fmt, ...);
 
+int sscanf(const char *str, const char *format, ...);
+void perror(const char *s);
+
 #endif

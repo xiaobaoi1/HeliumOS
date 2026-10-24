@@ -150,3 +150,35 @@ int fputc(int c, FILE *stream) {
     fwrite(&ch, 1, 1, stream);
     return (unsigned char)ch;
 }
+
+int sscanf(const char *str, const char *format, ...) {
+    /* 极简实现，仅支持 kilo 用到的 "%d;%d" */
+    if (!str || !format) return 0;
+    if (format[0] == '%' && format[1] == 'd') {
+        va_list ap;
+        va_start(ap, format);
+        int *a = va_arg(ap, int*);
+        int *b = va_arg(ap, int*);
+        va_end(ap);
+        
+        int v = 0;
+        while (*str >= '0' && *str <= '9') { v = v * 10 + (*str - '0'); str++; }
+        if (*str == ';') {
+            str++;
+            int v2 = 0;
+            while (*str >= '0' && *str <= '9') { v2 = v2 * 10 + (*str - '0'); str++; }
+            if (a) *a = v;
+            if (b) *b = v2;
+            return 2;
+        }
+    }
+    return 0;
+}
+
+void perror(const char *s) {
+    if (s) {
+        dprintf(2, "%s: error\n", s);
+    } else {
+        dprintf(2, "error\n");
+    }
+}

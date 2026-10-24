@@ -126,6 +126,14 @@ USER_APPS = shell idle test testkill sleeper argtest test_write \
 			grep find hexdump test_mui_draw test_mui_button test_mui_form \
 			test_dl test_libc test_malloc_big
 
+# 需要 POSIX 兼容层的应用
+POSIX_APPS = kilo
+POSIX_DIR  = user/posix
+POSIX_CFLAGS = -I$(POSIX_DIR)/include
+POSIX_OBJS = $(BUILD_DIR)/posix_fd.o \
+             $(BUILD_DIR)/posix_io.o \
+             $(BUILD_DIR)/posix_sys.o
+
 USER_LIBS = libmath libmylib
 USER_LIB_SOS = $(addprefix $(BUILD_DIR)/,$(addsuffix .so,$(USER_LIBS)))
 
@@ -133,12 +141,18 @@ USER_OBJS = $(addprefix $(BUILD_DIR)/,$(addsuffix .o,$(USER_APPS)))
 USER_ELFS = $(addprefix $(BUILD_DIR)/,$(addsuffix .ELF,$(USER_APPS)))
 
 LIBC_SRCS = string printf malloc signal env assert ctype qsort \
-            abort stdlib inet netdb termios ioctl unistd atexit dl \
+            abort stdlib inet netdb atexit dl \
 			stdio
 
 LIBC_OBJS = $(addprefix $(BUILD_DIR)/libc_,$(addsuffix .o,$(LIBC_SRCS))) \
             $(BUILD_DIR)/libc_sigreturn.o \
             $(BUILD_DIR)/libc_setjmp.o
+
+
+POSIX_DIR  = user/posix
+POSIX_OBJS = $(BUILD_DIR)/posix_fd.o \
+             $(BUILD_DIR)/posix_io.o \
+             $(BUILD_DIR)/posix_sys.o
 
 
 # ==================== 编译规则 ====================
@@ -297,6 +311,15 @@ $(BUILD_DIR)/%.o: user/%.c
 	@mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/posix_%.o: $(POSIX_DIR)/posix_%.c
+	@mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) $(POSIX_CFLAGS) -c $< -o $@
+
+# POSIX 应用专用编译规则（自动添加头文件路径）
+$(addprefix $(BUILD_DIR)/,$(addsuffix .o,$(POSIX_APPS))): $(BUILD_DIR)/%.o: user/%.c
+	@mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) $(POSIX_CFLAGS) -c $< -o $@
+
 # 基础库
 # 每个库依赖的其他库（用 -l 指定）
 EXTRA_LDLIBS_math :=
@@ -319,6 +342,7 @@ EXTRA_OBJS_desktop := $(BUILD_DIR)/wm_font.o
 EXTRA_OBJS_test_mui_draw := $(METHYLUI_OBJS)
 EXTRA_OBJS_test_mui_button := $(METHYLUI_OBJS)
 EXTRA_OBJS_test_mui_form := $(METHYLUI_OBJS)
+EXTRA_OBJS_kilo := $(POSIX_OBJS)
 
 # 统一链接规则（二次展开拿 EXTRA_OBJS_<stem>）
 .SECONDEXPANSION:
