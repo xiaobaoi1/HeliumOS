@@ -1149,10 +1149,16 @@ int main(int argc, char **argv) {
             if (dx0 == SHM_DIRTY_EMPTY || dx1 <= dx0 || dy1 <= dy0) {
                 dx0 = 0; dy0 = 0; dx1 = cw; dy1 = ch;
             }
-            if (dx0 >= (uint32_t)cw || dy0 >= (uint32_t)ch) continue;
+            if (dx0 >= (uint32_t)cw || dy0 >= (uint32_t)ch) {
+                w->shm->pub_x0 = SHM_DIRTY_EMPTY; /* 兜底清空，防止死锁 */
+                continue;
+            }
             if (dx1 > (uint32_t)cw) dx1 = cw;
             if (dy1 > (uint32_t)ch) dy1 = ch;
-            if (dx1 <= dx0 || dy1 <= dy0) continue;
+            if (dx1 <= dx0 || dy1 <= dy0) {
+                w->shm->pub_x0 = SHM_DIRTY_EMPTY; /* 兜底清空，防止死锁 */
+                continue;
+            }
 
             int sx0 = cli_x(w) + dx0;
             int sy0 = cli_y(w) + dy0;

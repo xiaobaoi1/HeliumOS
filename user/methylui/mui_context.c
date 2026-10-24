@@ -193,6 +193,15 @@ void mui_context_dispatch(struct mui_context *ctx, struct wm_event *ev) {
         case WM_EV_MOUSE_UP:
             dispatch_mouse_up(ctx, ev->x, ev->y, (int)ev->code);
             break;
+        case WM_EV_MOUSE_LEAVE:
+            /* 鼠标移出窗口，清除所有 hover 状态 */
+            if (ctx->hover) {
+                ctx->hover->hover = 0;
+                ctx->hover->dirty = 1;
+                if (ctx->hover->on_mouse_leave) ctx->hover->on_mouse_leave(ctx->hover);
+                ctx->hover = NULL;
+            }
+            break;
         case WM_EV_KEY:
             dispatch_key(ctx, (int)ev->code);
             break;
@@ -200,7 +209,6 @@ void mui_context_dispatch(struct mui_context *ctx, struct wm_event *ev) {
             ctx->close_requested = 1;
             break;
         case WM_EV_RESIZE:
-            /* 第一版不做——忽略。maximize 后客户区左上角保留旧内容。 */
             break;
         default:
             break;
@@ -217,20 +225,33 @@ void mui_context_paint(struct mui_context *ctx) {
 
     mui_widget_paint(ctx->root, &ctx->surface, 0, 0);
 
-    if (ctx->hdr->pub_x0 == SHM_DIRTY_EMPTY ||
-        ctx->hdr->pub_x1 <= ctx->hdr->pub_x0) {
-        if (ctx->hdr->cur_x0 != SHM_DIRTY_EMPTY &&
-            ctx->hdr->cur_x1 > ctx->hdr->cur_x0) {
+    /* 只要有新的 cur，就尝试发布或合并到 pub */
+    if (ctx->hdr->cur_x0 != SHM_DIRTY_EMPTY &&
+        ctx->hdr->cur_x1 > ctx->hdr->cur_x0) {
+        
+        /* 如果 pub 为空，直接赋值 */
+        if (ctx->hdr->pub_x0 == SHM_DIRTY_EMPTY ||
+            ctx->hdr->pub_x1 <= ctx->hdr->pub_x0) {
             ctx->hdr->pub_x0 = ctx->hdr->cur_x0;
             ctx->hdr->pub_y0 = ctx->hdr->cur_y0;
             ctx->hdr->pub_x1 = ctx->hdr->cur_x1;
             ctx->hdr->pub_y1 = ctx->hdr->cur_y1;
-            ctx->hdr->counter++;
-            ctx->hdr->cur_x0 = SHM_DIRTY_EMPTY;
-            ctx->hdr->cur_y0 = 0;
-            ctx->hdr->cur_x1 = 0;
-            ctx->hdr->cur_y1 = 0;
+        } else {
+            /* 如果 pub 非空，合并 cur 到 pub！(解决死锁的关键) */
+            if (ctx->hdr->cur_x0 < ctx->hdr->pub_x0) ctx->hdr->pub_x0 = ctx->hdr->cur_x0;
+            if (ctx->hdr->cur_y0 < ctx->hdr->pub_y0) ctx->hdr->pub_y0 = ctx->hdr->cur_y0;
+            if (ctx->hdr->cur_x1 > ctx->hdr->pub_x1) ctx->hdr->pub_x1 = ctx->hdr->cur_x1;
+            if (ctx->hdr->cur_y1 > ctx->hdr->pub_y1) ctx->hdr->pub_y1 = ctx->hdr->cur_y1;
         }
+
+        /* 无论哪种情况，都增加 counter 唤醒 WM */
+        ctx->hdr->counter++;
+
+        /* 清空 cur */
+        ctx->hdr->cur_x0 = SHM_DIRTY_EMPTY;
+        ctx->hdr->cur_y0 = 0;
+        ctx->hdr->cur_x1 = 0;
+        ctx->hdr->cur_y1 = 0;
     }
 }
 
@@ -240,7 +261,17 @@ void mui_context_run(struct mui_context *ctx) {
         while (pipe_avail(ctx->ev_rd) >= (int)sizeof(ev)) {
             int n = pipe_read(ctx->ev_rd, &ev, sizeof(ev));
             if (n != sizeof(ev)) break;
+            
             mui_context_dispatch(ctx, &ev);
+            
+            /* 如果是交互事件，立即重绘，确保按下高亮、悬停消失能被 WM 及时看到 */
+            if (ev.type == WM_EV_MOUSE_MOVE ||
+                ev.type == WM_EV_MOUSE_DOWN ||
+                ev.type == WM_EV_MOUSE_UP ||
+                ev.type == WM_EV_MOUSE_LEAVE ||
+                ev.type == WM_EV_KEY) {
+                mui_context_paint(ctx);
+            }
         }
 
         if (ctx->close_requested) {
