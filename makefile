@@ -124,7 +124,7 @@ USER_APPS = shell idle test testkill sleeper argtest test_write \
 			test_createwin test_ansi\
 			dhcpclient desktop test_raw kilo test_malloc_loop \
 			grep find hexdump test_mui_draw test_mui_button test_mui_form \
-			test_dl test_libc
+			test_dl test_libc test_malloc_big
 
 USER_LIBS = libmath libmylib
 USER_LIB_SOS = $(addprefix $(BUILD_DIR)/,$(addsuffix .so,$(USER_LIBS)))
