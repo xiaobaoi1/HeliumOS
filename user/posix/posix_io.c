@@ -86,7 +86,6 @@ long lseek(int fd, long offset, int whence) {
     if (new_off < 0) return -1;
     if (fs_seek(pfd->handle, new_off) < 0) return -1;
     pfd->offset = new_off;
-    dprintf(2, "[posix] lseek(fd=%d, off=%d, whence=%d) -> %d\n", fd, offset, whence, new_off);
     return new_off;
 }
 
