@@ -116,3 +116,13 @@ char *strdup(const char *s) {
     if (p) memcpy(p, s, n);
     return p;
 }
+
+char *strpbrk(const char *s, const char *accept) {
+    while (*s) {
+        for (const char *a = accept; *a; a++) {
+            if (*s == *a) return (char*)s;
+        }
+        s++;
+    }
+    return NULL;
+}

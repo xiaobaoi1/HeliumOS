@@ -142,7 +142,7 @@ USER_ELFS = $(addprefix $(BUILD_DIR)/,$(addsuffix .ELF,$(USER_APPS)))
 
 LIBC_SRCS = string printf malloc signal env assert ctype qsort \
             abort stdlib inet netdb atexit dl \
-			stdio
+			stdio errno sem
 
 LIBC_OBJS = $(addprefix $(BUILD_DIR)/libc_,$(addsuffix .o,$(LIBC_SRCS))) \
             $(BUILD_DIR)/libc_sigreturn.o \
@@ -229,6 +229,16 @@ $(DISK_IMG): $(KERNEL_ELF) $(USER_ELFS) $(USER_LIB_SOS)
 	sudo cp $(SRC_DIR)/kernel/kmain.c /mnt/build/kmain.c; \
 	sudo cp user/idle.c /mnt/build/idle.c; \
 
+	sudo cp $(BUILD_DIR)/TCC.ELF /mnt/build/TCC; \
+
+	sudo mkdir -p /mnt/build/INCLUDE; \
+	sudo mkdir -p /mnt/build/LIB; \
+	sudo cp -r $(BUILD_DIR)/tcc_sysroot/include/* /mnt/build/INCLUDE/; \
+	sudo cp -r $(BUILD_DIR)/tcc_sysroot/lib/* /mnt/build/LIB/; \
+	sudo cp $(BUILD_DIR)/tcc_sysroot/lib/* /mnt/build/LIB/; \
+
+	sudo echo "int main() { return 42; }" | sudo tee /mnt/build/test.c > /dev/null; \
+
 	echo "set timeout=5" | sudo tee /mnt/build/boot/grub/grub.cfg > /dev/null; \
 	echo "menuentry \"HeliumOS\" {" | sudo tee -a /mnt/build/boot/grub/grub.cfg > /dev/null; \
 	echo "  multiboot2 /boot/kernel.elf" | sudo tee -a /mnt/build/boot/grub/grub.cfg > /dev/null; \
@@ -253,7 +263,7 @@ $(DISK_IMG): $(KERNEL_ELF) $(USER_ELFS) $(USER_LIB_SOS)
 	
 
 # ==================== 运行目标 ====================
-# 默认运行 ISO（省事）
+# 默认运行 DISK
 run: $(ISO)
 	$(QEMU) -cdrom $(ISO) -serial stdio 
 
@@ -287,9 +297,13 @@ pack:
 
 # ---------- 编译 ----------
 
-$(BUILD_DIR)/crt0.o: user/crt0.asm
+# $(BUILD_DIR)/crt0.o: user/crt0.asm
+# 	@mkdir -p $(BUILD_DIR)
+# 	$(ASM) $(ASMFLAGS) $< -o $@
+
+$(BUILD_DIR)/crt0.o: user/crt0.S
 	@mkdir -p $(BUILD_DIR)
-	$(ASM) $(ASMFLAGS) $< -o $@
+	$(CC) -m32 -fno-asynchronous-unwind-tables -fno-unwind-tables -c $< -o $@
 
 $(BUILD_DIR)/libc_sigreturn.o: user/libc/sigreturn.asm
 	@mkdir -p $(BUILD_DIR)
@@ -349,6 +363,39 @@ EXTRA_OBJS_kilo := $(POSIX_OBJS)
 $(BUILD_DIR)/%.ELF: $(BUILD_DIR)/%.o $(BUILD_DIR)/crt0.o $(LIBC_OBJS) $$(EXTRA_OBJS_$$*) user/linker.ld
 	$(LD) -m elf_i386 -T user/linker.ld -o $@ \
 		$(BUILD_DIR)/crt0.o $< $(EXTRA_OBJS_$*) $(LIBC_OBJS)
+
+
+# 打包静态库，供 TCC 使用
+libc.a: $(LIBC_OBJS) $(POSIX_OBJS)
+	ar rcs $(BUILD_DIR)/libc.a $(LIBC_OBJS) $(POSIX_OBJS)
+
+tcc-prepare: libc.a
+	@mkdir -p $(BUILD_DIR)/tcc_sysroot/include
+	@mkdir -p $(BUILD_DIR)/tcc_sysroot/lib
+	# 拷贝头文件
+	cp -r user/libc/include/* $(BUILD_DIR)/tcc_sysroot/include/
+	cp -r user/posix/include/* $(BUILD_DIR)/tcc_sysroot/include/
+	# 拷贝 crt0.o 和 libc.a
+	cp $(BUILD_DIR)/crt0.o $(BUILD_DIR)/tcc_sysroot/lib/
+	cp $(BUILD_DIR)/libc.a $(BUILD_DIR)/tcc_sysroot/lib/
+
+
+tcc-cp:
+	cp ~/桌面/tinycc/libtcc1.a build/tcc_sysroot/lib/
+
+
+tcc: 
+	gcc -m32 -static -nostdlib     -Wl,-T,user/linker.ld     -Wl,--start-group     ~/桌面/tinycc/tcc.o     ~/桌面/tinycc/libtcc.a     build/crt0.o     build/libc.a     -Wl,--end-group     /usr/lib/gcc/x86_64-linux-gnu/15/32/libgcc.a     -o build/TCC.ELF
+
+
+
+dc:
+	sudo umount /dev/loop23
+	sudo losetup -d /dev/loop22
+	sudo losetup -d /dev/loop23
+
+
+
 
 # 声明伪目标
 .PHONY: all run run-disk debug debug-disk clean gdb pack run-net run-tcp $(DISK_IMG)

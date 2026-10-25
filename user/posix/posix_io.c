@@ -1,70 +1,125 @@
+#define read  helio_raw_read
+#define write helio_raw_write
 #include <fcntl.h>
-#include <posix_internal.h>
-#include "syscall.h"
 #include <stddef.h>
+#include "posix_internal.h"
+#include "syscall.h"
+#include "stdio.h"
+#include "unistd.h"
+#include <stdlib.h>
 
-#define SEEK_SET 0
+#undef read
+#undef write
 
-struct posix_fd;
-int posix_alloc_fd(int type, int handle);
-struct posix_fd *posix_get_fd(int fd);
-void posix_free_fd(int fd);
-
-#define FD_TYPE_FILE 1
-#define FD_TYPE_PIPE 2
-
-int open(const char *path, int flags, ...) {
-    int h = fs_open(path, flags);
-    if (h < 0) return -1;
-    return posix_alloc_fd(FD_TYPE_FILE, h);
+/* 1. read */
+long read(int fd, void *buf, size_t count) {
+    if (count == 0) return 0; /* 补上这一行 */
+    if (fd == 0) return helio_raw_read(0, buf, (unsigned int)count);
+    struct posix_fd *pfd = posix_get_fd(fd);
+    if (!pfd) return -1;
+    long r = -1;
+    if (pfd->type == FD_TYPE_FILE) r = fs_read(pfd->handle, buf, count);
+    else if (pfd->type == FD_TYPE_PIPE) r = pipe_read(pfd->handle, buf, count);
+    if (r > 0) pfd->offset += r;
+    return r;
 }
 
+/* 2. write */
+long write(int fd, const void *buf, size_t count) {
+    if (fd == 1 || fd == 2) return helio_raw_write(fd, buf, (unsigned int)count);
+    struct posix_fd *pfd = posix_get_fd(fd);
+    if (!pfd) return -1;
+    long r = -1;
+    if (pfd->type == FD_TYPE_FILE) r = fs_write(pfd->handle, buf, count);
+    else if (pfd->type == FD_TYPE_PIPE) r = pipe_write(pfd->handle, buf, count);
+    if (r > 0) pfd->offset += r;
+    return r;
+}
+
+/* 3. open */
+int open(const char *path, int flags, ...) {
+    int helio_flags = 0;
+
+    if ((flags & 3) == O_RDONLY)      helio_flags |= FS_O_RDONLY;
+    else if ((flags & 3) == O_WRONLY) helio_flags |= FS_O_WRONLY;
+    else if ((flags & 3) == O_RDWR)   helio_flags |= FS_O_RDWR;
+
+    if (flags & O_CREAT)  helio_flags |= FS_O_CREAT;
+    /* 不在标志里带 O_TRUNC，手动处理更稳妥 */
+    // if (flags & O_TRUNC)  helio_flags |= FS_O_TRUNC;
+
+    int h = fs_open(path, helio_flags);
+    if (h < 0) return -1;
+    
+    int fd = posix_alloc_fd(FD_TYPE_FILE, h);
+    if (fd >= 0 && (flags & O_TRUNC)) {
+        ftruncate(fd, 0); /* 手动截断 */
+    }
+    return fd;
+}
+
+/* 4. close */
 int close(int fd) {
     if (fd >= 0 && fd <= 2) return 0;
     struct posix_fd *pfd = posix_get_fd(fd);
     if (!pfd) return -1;
-    
     int r = -1;
     if (pfd->type == FD_TYPE_FILE) r = fs_close(pfd->handle);
     else if (pfd->type == FD_TYPE_PIPE) r = ipc_close(pfd->handle);
-    
     if (r == 0) posix_free_fd(fd);
     return r;
 }
 
-long posix_read(int fd, void *buf, size_t count) {
-    if (fd == 0) return read(0, buf, count); // read 是原生接口，下同
-    
-    struct posix_fd *pfd = posix_get_fd(fd);
-    if (!pfd) return -1;
-    
-    if (pfd->type == FD_TYPE_FILE) return fs_read(pfd->handle, buf, count);
-    if (pfd->type == FD_TYPE_PIPE) return pipe_read(pfd->handle, buf, count);
-    return -1;
-}
-
-long posix_write(int fd, const void *buf, size_t count) {
-    if (fd == 1 || fd == 2) return write(fd, buf, count);
-    
-    struct posix_fd *pfd = posix_get_fd(fd);
-    if (!pfd) return -1;
-    
-    if (pfd->type == FD_TYPE_FILE) return fs_write(pfd->handle, buf, count);
-    if (pfd->type == FD_TYPE_PIPE) return pipe_write(pfd->handle, buf, count);
-    return -1;
-}
-
-long posix_lseek(int fd, long offset, int whence) {
-    if (whence != SEEK_SET) return -1;
+/* 5. lseek */
+long lseek(int fd, long offset, int whence) {
     struct posix_fd *pfd = posix_get_fd(fd);
     if (!pfd || pfd->type != FD_TYPE_FILE) return -1;
-    if (fs_seek(pfd->handle, offset) < 0) return -1;
-    return offset;
+    long new_off = offset;
+    if (whence == 1) new_off = pfd->offset + offset;
+    else if (whence == 2) {
+        struct fstat_buf st;
+        if (fs_fstat(pfd->handle, &st) < 0) return -1;
+        new_off = st.size + offset;
+    }
+    else if (whence != 0) return -1;
+    
+    if (new_off < 0) return -1;
+    if (fs_seek(pfd->handle, new_off) < 0) return -1;
+    pfd->offset = new_off;
+    dprintf(2, "[posix] lseek(fd=%d, off=%d, whence=%d) -> %d\n", fd, offset, whence, new_off);
+    return new_off;
 }
 
-int posix_ftruncate(int fd, long length) {
+/* 6. ftruncate */
+int ftruncate(int fd, long length) {
     (void)length;
     struct posix_fd *pfd = posix_get_fd(fd);
     if (!pfd || pfd->type != FD_TYPE_FILE) return -1;
     return fs_truncate(pfd->handle);
+}
+
+/* 给应用层（kilo 等）用的宏包装 */
+long posix_read(int fd, void *buf, size_t count) {
+    return read(fd, buf, count);
+}
+
+long posix_write(int fd, const void *buf, size_t count) {
+    return write(fd, buf, count);
+}
+
+
+
+
+
+
+
+
+
+FILE *fdopen(int fd, const char *mode) {
+    (void)mode;
+    struct posix_fd *pfd = posix_get_fd(fd);
+    if (!pfd) return NULL;
+    
+    /* 调用底层 stdio 的工厂函数，把真实的 fs_handle 传进去 */
+    return __stdio_create_from_handle(pfd->handle, pfd->offset);
 }

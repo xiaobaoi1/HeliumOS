@@ -32,3 +32,7 @@ longjmp:
 .ret:
     mov eax, edx
     jmp ecx
+
+global _setjmp
+_setjmp:
+    jmp setjmp

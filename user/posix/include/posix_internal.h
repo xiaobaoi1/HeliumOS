@@ -9,6 +9,7 @@ struct posix_fd {
     int used;
     int type;
     int handle;
+    unsigned int offset;
 };
 
 int posix_alloc_fd(int type, int handle);

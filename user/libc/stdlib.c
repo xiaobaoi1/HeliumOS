@@ -86,3 +86,42 @@ int rand(void) {
     g_rand_state = g_rand_state * 1103515245u + 12345u;
     return (int)((g_rand_state >> 16) & 0x7FFF);
 }
+
+
+
+
+
+unsigned long strtoul(const char *s, char **endptr, int base) {
+    return (unsigned long)strtol(s, endptr, base);
+}
+unsigned long long strtoull(const char *s, char **endptr, int base) {
+    return (unsigned long long)strtoul(s, endptr, base);
+}
+long long strtoll(const char *s, char **endptr, int base) {
+    return (long long)strtol(s, endptr, base);
+}
+double strtod(const char *nptr, char **endptr) {
+    return (double)strtol(nptr, endptr, 10);
+}
+float strtof(const char *nptr, char **endptr) {
+    return (float)strtod(nptr, endptr);
+}
+long double strtold(const char *nptr, char **endptr) {
+    return (long double)strtod(nptr, endptr);
+}
+long double ldexpl(long double x, int exp) {
+    return x; /* 简易兜底 */
+}
+
+unsigned long __isoc23_strtoul(const char *s, char **endptr, int base) {
+    return strtoul(s, endptr, base);
+}
+unsigned long long __isoc23_strtoull(const char *s, char **endptr, int base) {
+    return strtoull(s, endptr, base);
+}
+long __isoc23_strtol(const char *s, char **endptr, int base) {
+    return strtol(s, endptr, base);
+}
+long long __isoc23_strtoll(const char *s, char **endptr, int base) {
+    return strtoll(s, endptr, base);
+}
