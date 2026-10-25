@@ -23,14 +23,15 @@
 #define LARGE_MAGIC1    0xB16B00B5u
 #define LARGE_MAGIC2    0xDEADBEEFu
 
+/* 单个大对象的上限：4MB。防止一个恶意请求耗尽物理内存。 */
+#define LARGE_MAX_SIZE  (4 * 1024 * 1024)
+
 struct large_header {
     uint32_t magic1;
     uint32_t magic2;
-    uint32_t pages;    /* 当前固定 1 */
+    uint32_t pages;    /* 实际分配的连续物理页数 */
     uint32_t size;     /* 用户请求的字节数 */
 };
-
-#define LARGE_MAX_SIZE  (4096 - (uint32_t)sizeof(struct large_header))
 
 
 static const uint32_t cache_sizes[NUM_CACHES] = {
@@ -102,15 +103,20 @@ void heap_init(void) {
 void *kmalloc(size_t size) {
     if (size == 0) return NULL;
 
-    /* 大对象：直通 pmm，一页内 */
+    /* 大对象：直通 pmm */
     if (size > MAX_OBJ_SIZE) {
         if (size > LARGE_MAX_SIZE) return NULL;
-        uint32_t phys = pmm_alloc_page();
+        
+        uint32_t total = size + (uint32_t)sizeof(struct large_header);
+        uint32_t pages = (total + 0xFFF) / 0x1000;
+        
+        uint32_t phys = pmm_alloc_pages(pages);
         if (!phys) return NULL;
+        
         struct large_header *h = (struct large_header*)phys;
         h->magic1 = LARGE_MAGIC1;
         h->magic2 = LARGE_MAGIC2;
-        h->pages  = 1;
+        h->pages  = pages;
         h->size   = (uint32_t)size;
         return (void*)(phys + sizeof(struct large_header));
     }
@@ -168,9 +174,8 @@ void kfree(void *ptr) {
         uint32_t pages = h->pages;
         h->magic1 = 0;
         h->magic2 = 0;
-        for (uint32_t i = 0; i < pages; i++) {
-            pmm_free_page(page + i * 4096);
-        }
+        /* 释放连续的多页 */
+        pmm_free_pages(page, pages);
         return;
     }
 

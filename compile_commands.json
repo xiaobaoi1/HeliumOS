@@ -1394,6 +1394,24 @@
       "-Iuser/libc/include",
       "-c",
       "-o",
+      "build/libc_stdio.o",
+      "user/libc/stdio.c"
+    ],
+    "directory": "/home/user/桌面/HeliumOS",
+    "file": "/home/user/桌面/HeliumOS/user/libc/stdio.c",
+    "output": "/home/user/桌面/HeliumOS/build/libc_stdio.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-m32",
+      "-ffreestanding",
+      "-fno-pic",
+      "-fno-stack-protector",
+      "-Iuser/",
+      "-Iuser/libc/include",
+      "-c",
+      "-o",
       "build/idle.o",
       "user/idle.c"
     ],
@@ -2228,6 +2246,24 @@
     "directory": "/home/user/桌面/HeliumOS",
     "file": "/home/user/桌面/HeliumOS/user/test_dl.c",
     "output": "/home/user/桌面/HeliumOS/build/test_dl.o"
+  },
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-m32",
+      "-ffreestanding",
+      "-fno-pic",
+      "-fno-stack-protector",
+      "-Iuser/",
+      "-Iuser/libc/include",
+      "-c",
+      "-o",
+      "build/test_libc.o",
+      "user/test_libc.c"
+    ],
+    "directory": "/home/user/桌面/HeliumOS",
+    "file": "/home/user/桌面/HeliumOS/user/test_libc.c",
+    "output": "/home/user/桌面/HeliumOS/build/test_libc.o"
   },
   {
     "arguments": [

@@ -50,6 +50,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <errno.h>
+#include <time.h>
 
 /* kilo 用到但 HeliumOS 不区分的标志——全定义为 0，
  * &~ 和 | 都是空操作，tcsetattr 只看 ICANON/ECHO/ISIG */
@@ -61,43 +62,6 @@
 #define OPOST    0
 #define CS8      0
 #define IEXTEN   0
-
-
-typedef int ssize_t;
-typedef int time_t;
-typedef int FILE;   /* 只为编译通过，函数体里不用 */
-
-static time_t time(time_t *t) { if (t) *t = 0; return 0; }
-
-static int isatty(int fd) { (void)fd; return 1; }
-
-static void perror(const char *s) {
-    dprintf(2, "%s: failed\n", s);
-}
-
-static char *strerror(int e) {
-    (void)e;
-    return (char*)"I/O error";
-}
-
-/* 仅支持 kilo 里那一处 "%d;%d" */
-static int sscanf(const char *s, const char *fmt, int *a, int *b) {
-    if (!s || !fmt || !a || !b) return 0;
-    if (fmt[0] != '%' || fmt[1] != 'd') return 0;
-    int n = 0;
-    int v = 0;
-    while (*s >= '0' && *s <= '9') { v = v * 10 + (*s - '0'); s++; n++; }
-    if (n == 0) return 0;
-    if (*s != ';') return 0;
-    s++;
-    int v2 = 0;
-    int n2 = 0;
-    while (*s >= '0' && *s <= '9') { v2 = v2 * 10 + (*s - '0'); s++; n2++; }
-    if (n2 == 0) return 0;
-    *a = v;
-    *b = v2;
-    return 2;
-}
 
 
 /* Syntax highlight types */
@@ -858,12 +822,8 @@ int editorOpen(char *filename) {
     E.filename = malloc(fnlen);
     memcpy(E.filename,filename,fnlen);
 
-    int fd = fs_open(filename, FS_O_RDONLY);
+    int fd = open(filename, O_RDONLY);
     if (fd < 0) {
-        if (fd != ENOENT) {
-            perror("Opening file");
-            exit(1);
-        }
         return 1;
     }
 
@@ -871,7 +831,7 @@ int editorOpen(char *filename) {
     char line[1024];
     int line_len = 0;
     int n;
-    while ((n = fs_read(fd, chunk, sizeof(chunk))) > 0) {
+    while ((n = read(fd, chunk, sizeof(chunk))) > 0) {
         for (int i = 0; i < n; i++) {
             char c = chunk[i];
             if (c == '\n') {
@@ -889,7 +849,7 @@ int editorOpen(char *filename) {
         line[line_len] = '\0';
         editorInsertRow(E.numrows, line, line_len);
     }
-    fs_close(fd);
+    close(fd);
     E.dirty = 0;
     return 0;
 }
@@ -898,18 +858,21 @@ int editorOpen(char *filename) {
 int editorSave(void) {
     int len;
     char *buf = editorRowsToString(&len);
-    int fd = fs_open(E.filename, FS_O_WRONLY | FS_O_CREAT);
+    
+    /* 截断或创建文件 */
+    int fd = open(E.filename, O_WRONLY | O_CREAT | O_TRUNC);
     if (fd < 0) goto writeerr;
-    if (fs_truncate(fd) < 0) goto writeerr_close;
-    if (fs_write(fd, buf, len) != len) goto writeerr_close;
-    fs_close(fd);
+    
+    if (write(fd, buf, len) != len) goto writeerr_close;
+    close(fd);
+    
     free(buf);
     E.dirty = 0;
     editorSetStatusMessage("%d bytes written on disk", len);
     return 0;
 
 writeerr_close:
-    fs_close(fd);
+    close(fd);
 writeerr:
     free(buf);
     editorSetStatusMessage("Can't save! I/O error");

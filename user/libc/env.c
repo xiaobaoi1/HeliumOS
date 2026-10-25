@@ -1,6 +1,7 @@
 #include <stddef.h>
 #include <string.h>
 #include <stdlib.h>
+#include "syscall.h"
 
 char **environ = NULL;
 

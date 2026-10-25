@@ -124,7 +124,15 @@ USER_APPS = shell idle test testkill sleeper argtest test_write \
 			test_createwin test_ansi\
 			dhcpclient desktop test_raw kilo test_malloc_loop \
 			grep find hexdump test_mui_draw test_mui_button test_mui_form \
-			test_dl
+			test_dl test_libc test_malloc_big
+
+# 需要 POSIX 兼容层的应用
+POSIX_APPS = kilo
+POSIX_DIR  = user/posix
+POSIX_CFLAGS = -I$(POSIX_DIR)/include
+POSIX_OBJS = $(BUILD_DIR)/posix_fd.o \
+             $(BUILD_DIR)/posix_io.o \
+             $(BUILD_DIR)/posix_sys.o
 
 USER_LIBS = libmath libmylib
 USER_LIB_SOS = $(addprefix $(BUILD_DIR)/,$(addsuffix .so,$(USER_LIBS)))
@@ -133,10 +141,18 @@ USER_OBJS = $(addprefix $(BUILD_DIR)/,$(addsuffix .o,$(USER_APPS)))
 USER_ELFS = $(addprefix $(BUILD_DIR)/,$(addsuffix .ELF,$(USER_APPS)))
 
 LIBC_SRCS = string printf malloc signal env assert ctype qsort \
-            abort stdlib inet netdb termios ioctl unistd atexit dl
+            abort stdlib inet netdb atexit dl \
+			stdio errno sem
 
 LIBC_OBJS = $(addprefix $(BUILD_DIR)/libc_,$(addsuffix .o,$(LIBC_SRCS))) \
-            $(BUILD_DIR)/libc_sigreturn.o
+            $(BUILD_DIR)/libc_sigreturn.o \
+            $(BUILD_DIR)/libc_setjmp.o
+
+
+POSIX_DIR  = user/posix
+POSIX_OBJS = $(BUILD_DIR)/posix_fd.o \
+             $(BUILD_DIR)/posix_io.o \
+             $(BUILD_DIR)/posix_sys.o
 
 
 # ==================== 编译规则 ====================
@@ -213,6 +229,16 @@ $(DISK_IMG): $(KERNEL_ELF) $(USER_ELFS) $(USER_LIB_SOS)
 	sudo cp $(SRC_DIR)/kernel/kmain.c /mnt/build/kmain.c; \
 	sudo cp user/idle.c /mnt/build/idle.c; \
 
+	sudo cp $(BUILD_DIR)/TCC.ELF /mnt/build/TCC; \
+
+	sudo mkdir -p /mnt/build/INCLUDE; \
+	sudo mkdir -p /mnt/build/LIB; \
+	sudo cp -r $(BUILD_DIR)/tcc_sysroot/include/* /mnt/build/INCLUDE/; \
+	sudo cp -r $(BUILD_DIR)/tcc_sysroot/lib/* /mnt/build/LIB/; \
+	sudo cp $(BUILD_DIR)/tcc_sysroot/lib/* /mnt/build/LIB/; \
+
+	sudo echo "int main() { return 42; }" | sudo tee /mnt/build/test.c > /dev/null; \
+
 	echo "set timeout=5" | sudo tee /mnt/build/boot/grub/grub.cfg > /dev/null; \
 	echo "menuentry \"HeliumOS\" {" | sudo tee -a /mnt/build/boot/grub/grub.cfg > /dev/null; \
 	echo "  multiboot2 /boot/kernel.elf" | sudo tee -a /mnt/build/boot/grub/grub.cfg > /dev/null; \
@@ -237,7 +263,7 @@ $(DISK_IMG): $(KERNEL_ELF) $(USER_ELFS) $(USER_LIB_SOS)
 	
 
 # ==================== 运行目标 ====================
-# 默认运行 ISO（省事）
+# 默认运行 DISK
 run: $(ISO)
 	$(QEMU) -cdrom $(ISO) -serial stdio 
 
@@ -271,11 +297,19 @@ pack:
 
 # ---------- 编译 ----------
 
-$(BUILD_DIR)/crt0.o: user/crt0.asm
+# $(BUILD_DIR)/crt0.o: user/crt0.asm
+# 	@mkdir -p $(BUILD_DIR)
+# 	$(ASM) $(ASMFLAGS) $< -o $@
+
+$(BUILD_DIR)/crt0.o: user/crt0.S
+	@mkdir -p $(BUILD_DIR)
+	$(CC) -m32 -fno-asynchronous-unwind-tables -fno-unwind-tables -c $< -o $@
+
+$(BUILD_DIR)/libc_sigreturn.o: user/libc/sigreturn.asm
 	@mkdir -p $(BUILD_DIR)
 	$(ASM) $(ASMFLAGS) $< -o $@
 
-$(BUILD_DIR)/libc_sigreturn.o: user/libc/sigreturn.asm
+$(BUILD_DIR)/libc_setjmp.o: user/libc/setjmp.asm
 	@mkdir -p $(BUILD_DIR)
 	$(ASM) $(ASMFLAGS) $< -o $@
 
@@ -290,6 +324,15 @@ $(BUILD_DIR)/methylui/%.o: $(METHYLUI_DIR)/%.c
 $(BUILD_DIR)/%.o: user/%.c
 	@mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/posix_%.o: $(POSIX_DIR)/posix_%.c
+	@mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) $(POSIX_CFLAGS) -c $< -o $@
+
+# POSIX 应用专用编译规则（自动添加头文件路径）
+$(addprefix $(BUILD_DIR)/,$(addsuffix .o,$(POSIX_APPS))): $(BUILD_DIR)/%.o: user/%.c
+	@mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) $(POSIX_CFLAGS) -c $< -o $@
 
 # 基础库
 # 每个库依赖的其他库（用 -l 指定）
@@ -313,12 +356,46 @@ EXTRA_OBJS_desktop := $(BUILD_DIR)/wm_font.o
 EXTRA_OBJS_test_mui_draw := $(METHYLUI_OBJS)
 EXTRA_OBJS_test_mui_button := $(METHYLUI_OBJS)
 EXTRA_OBJS_test_mui_form := $(METHYLUI_OBJS)
+EXTRA_OBJS_kilo := $(POSIX_OBJS)
 
 # 统一链接规则（二次展开拿 EXTRA_OBJS_<stem>）
 .SECONDEXPANSION:
 $(BUILD_DIR)/%.ELF: $(BUILD_DIR)/%.o $(BUILD_DIR)/crt0.o $(LIBC_OBJS) $$(EXTRA_OBJS_$$*) user/linker.ld
 	$(LD) -m elf_i386 -T user/linker.ld -o $@ \
 		$(BUILD_DIR)/crt0.o $< $(EXTRA_OBJS_$*) $(LIBC_OBJS)
+
+
+# 打包静态库，供 TCC 使用
+libc.a: $(LIBC_OBJS) $(POSIX_OBJS)
+	ar rcs $(BUILD_DIR)/libc.a $(LIBC_OBJS) $(POSIX_OBJS)
+
+tcc-prepare: libc.a
+	@mkdir -p $(BUILD_DIR)/tcc_sysroot/include
+	@mkdir -p $(BUILD_DIR)/tcc_sysroot/lib
+	# 拷贝头文件
+	cp -r user/libc/include/* $(BUILD_DIR)/tcc_sysroot/include/
+	cp -r user/posix/include/* $(BUILD_DIR)/tcc_sysroot/include/
+	# 拷贝 crt0.o 和 libc.a
+	cp $(BUILD_DIR)/crt0.o $(BUILD_DIR)/tcc_sysroot/lib/
+	cp $(BUILD_DIR)/libc.a $(BUILD_DIR)/tcc_sysroot/lib/
+
+
+tcc-cp:
+	cp ~/桌面/tinycc/libtcc1.a build/tcc_sysroot/lib/
+
+
+tcc: 
+	gcc -m32 -static -nostdlib     -Wl,-T,user/linker.ld     -Wl,--start-group     ~/桌面/tinycc/tcc.o     ~/桌面/tinycc/libtcc.a     build/crt0.o     build/libc.a     -Wl,--end-group     /usr/lib/gcc/x86_64-linux-gnu/15/32/libgcc.a     -o build/TCC.ELF
+
+
+
+dc:
+	sudo umount /dev/loop23
+	sudo losetup -d /dev/loop22
+	sudo losetup -d /dev/loop23
+
+
+
 
 # 声明伪目标
 .PHONY: all run run-disk debug debug-disk clean gdb pack run-net run-tcp $(DISK_IMG)

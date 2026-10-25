@@ -1,5 +1,5 @@
-#ifndef USER_SYS_IOCTL_H
-#define USER_SYS_IOCTL_H
+#ifndef POSIX_SYS_IOCTL_H
+#define POSIX_SYS_IOCTL_H
 
 struct winsize {
     unsigned short ws_row;

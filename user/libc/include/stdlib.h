@@ -27,6 +27,7 @@ void  __libc_init_environ(char **envp);
 int   atoi(const char *s);
 long  atol(const char *s);
 long  strtol(const char *s, char **endptr, int base);
+double strtod(const char *nptr, char **endptr);
 
 /* 绝对值 */
 int   abs(int x);
