@@ -58,8 +58,9 @@ uint32_t load_elf_from_disk(struct fat32_volume *vol, const char *path,
             #endif
 
 
-            uint32_t pages_needed = (ph.memsz + 4095) / 4096;
             uint32_t virt_start = ph.vaddr & ~0xFFF;
+            uint32_t virt_end   = (ph.vaddr + ph.memsz + 0xFFF) & ~0xFFF;
+            uint32_t pages_needed = (virt_end - virt_start) / 4096;
 
             for (uint32_t j = 0; j < pages_needed; j++) {
                 uint32_t phys = pmm_alloc_page();
