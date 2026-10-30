@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-/* 加载 SYS:/UNICODE.HEX 的 ASCII 子集。可重复调用，已加载则直接返回。 */
+/* 加载 SYS:/UNIFONT.HEX 的 ASCII 子集。可重复调用，已加载则直接返回。 */
 void mui_font_load(void);
 
 /* 返回 1 表示字体已加载，0 表示加载失败。 */

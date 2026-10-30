@@ -770,15 +770,32 @@ int main(int _argc, char **_argv) {
                 run_pipeline(argv);
             } else {
                 /* 普通 spawn */
-                int h = spawn(c, argv, NULL);
+                struct spawn_params sp = {
+                    .size = sizeof(sp),
+                    .in_fd = SPAWN_FD_INHERIT,
+                    .out_fd = SPAWN_FD_INHERIT,
+                    .err_fd = SPAWN_FD_INHERIT,
+                    .in_pipe = -1, .out_pipe = -1, .err_pipe = -1,
+                    .in_pty = -1, .out_pty = -1, .err_pty = -1,
+                    .flags = 0,
+                    .envp = (uint32_t)environ,
+                };
+                int h = spawn(c, argv, &sp);
                 if (h < 0) {
                     set_color(VGA_LIGHT_RED, VGA_BLACK);
                     printf("spawn '%s' failed (error %d)\n", c, h);
                     set_color(VGA_LIGHT_GRAY, VGA_BLACK);
                 } else {
+                    /* 切换 pty 前台到子进程。spawn_params 的 out_pid 由内核回填 */
+                    if (sp.out_pid > 0) pty_set_fg(-1, sp.out_pid);
+
                     int status = 0;
-                    wait(h, &status, 0);
-                    if (status != 0) {
+                    int wr = wait(h, &status, 0);
+
+                    /* 子进程退出或自己被其他信号打断后，恢复前台为 shell */
+                    pty_set_fg(-1, getpid());
+
+                    if (wr == 0 && status != 0) {
                         set_color(VGA_LIGHT_RED, VGA_BLACK);
                         printf("[shell] child exited with status %d\n", status);
                         set_color(VGA_LIGHT_GRAY, VGA_BLACK);

@@ -50,6 +50,10 @@ const struct ata_device *ata_get_device(int idx);
 
 /* LBA28 读写，每次一扇区 */
 int ata_read_sector(const struct ata_device *dev, uint32_t lba, uint8_t *buffer);
+/* 连续读 count 个扇区（LBA28 PIO）。count ∈ [1, 256]。
+ * 成功返回 0，失败返回 -1（buffer 清零）。 */
+int ata_read_sectors(const struct ata_device *dev, uint32_t lba,
+                     uint32_t count, uint8_t *buffer);
 int ata_write_sector(const struct ata_device *dev, uint32_t lba, const uint8_t *buffer);
 void ata_flush(const struct ata_device *dev);
 

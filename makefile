@@ -221,8 +221,8 @@ $(DISK_IMG): $(KERNEL_ELF) $(USER_ELFS) $(USER_LIB_SOS)
 	sudo mount /dev/loop23 /mnt/build; \
 	sudo mkdir -p /mnt/build/boot/grub; \
 	sudo cp $(KERNEL_ELF) /mnt/build/boot/; \
-	sudo cp tools/unifont.hex /mnt/build/UNICODE.HEX; \
-	sudo cp tools/unifont-17.0.03.hex /mnt/build/UNICODE-17.HEX; \
+	sudo cp tools/unifont.hex /mnt/build/UNIFONT.HEX; \
+	sudo cp tools/unifont-17.0.03.hex /mnt/build/UNIFONT-17.HEX; \
 	for app in $(USER_APPS); do \
 	    sudo cp $(BUILD_DIR)/$$app.ELF /mnt/build/$$app; \
 	done; \

@@ -13,7 +13,7 @@ static int hexval(char c) {
 }
 
 void wm_font_load(void) {
-    int fd = fs_open("SYS:/UNICODE.HEX", FS_O_RDONLY);
+    int fd = fs_open("SYS:/UNIFONT.HEX", FS_O_RDONLY);
     if (fd < 0) return;
 
     char buf[512], line[128];
@@ -35,6 +35,9 @@ void wm_font_load(void) {
                     cp = cp * 16 + v;
                     p++;
                 }
+
+                if (cp >= 128) goto done;
+
                 if (*p == ':' && cp >= 0 && cp < 128) {
                     p++;
                     int hl = 0;
@@ -54,6 +57,7 @@ void wm_font_load(void) {
             }
         }
     }
+    done:
     fs_close(fd);
     g_ok = (loaded > 0);
 }
