@@ -208,6 +208,9 @@ $(ISO): $(KERNEL_ELF)
 # ==================== 硬盘镜像（用于测试文件系统写入） ====================
 $(DISK_IMG): $(KERNEL_ELF) $(USER_ELFS) $(USER_LIB_SOS)
 	@echo "正在创建 FAT32 硬盘镜像 (需要 sudo 权限)..."
+	sudo umount /dev/loop23 || true  
+	sudo losetup -d /dev/loop22 || true 
+	sudo losetup -d /dev/loop23 || true 
 	dd if=/dev/zero of=$(DISK_IMG) bs=1M count=64 status=none
 	(echo o; echo n; echo p; echo 1; echo 2048; echo; echo t; echo c; echo a; echo 1; echo w) | fdisk $(DISK_IMG) > /dev/null 2>&1
 	@OFFSET=$$((2048*512)); \
@@ -228,6 +231,7 @@ $(DISK_IMG): $(KERNEL_ELF) $(USER_ELFS) $(USER_LIB_SOS)
 	done; \
 	sudo cp $(SRC_DIR)/kernel/kmain.c /mnt/build/kmain.c; \
 	sudo cp user/idle.c /mnt/build/idle.c; \
+	sudo cp user/kilo.c /mnt/build/kilo.c; \
 
 	sudo cp $(BUILD_DIR)/TCC.ELF /mnt/build/TCC; \
 
