@@ -1532,7 +1532,7 @@ static void handle_fm_event(struct fm_win *w, struct wm_event *ev) {
     /* 鼠标滚轮：mui_scroll 滚动列表 */
     if (ev->type == WM_EV_WHEEL) {
         if (!w->menu_open) {
-            mui_scroll_by(&w->scroll, -(int)ev->code);
+            mui_scroll_by(&w->scroll, (int)ev->code);
             w->scroll_dirty = 0;
             fm_sync_scroll_value(w);
             w->list.hover = mui_list_hit(&w->list, ev->x, ev->y - FM_TOP_BAR_H);

@@ -502,6 +502,7 @@ static void term_view_update(void) {
         g_scrolled = 0;
         g_cursor_drawn = 0;
         cursor_draw();
+        view_mark_dirty(0, 0, g_cw, g_ch);
     }
 
     if (g_scrolled) {
@@ -1008,7 +1009,7 @@ int main(int argc, char **argv) {
                     term_view_update();
                 }
             } else if (ev.type == WM_EV_WHEEL) {
-                mui_scroll_by(&g_scroll, -(int)ev.code);
+                mui_scroll_by(&g_scroll, (int)ev.code);
                 term_view_update();
             }
             /* 鼠标 / 焦点事件忽略 */

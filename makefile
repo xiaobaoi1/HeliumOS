@@ -132,7 +132,7 @@ USER_APPS = shell idle test testkill sleeper argtest test_write \
 			test_createwin test_ansi\
 			dhcpclient desktop test_raw kilo test_malloc_loop \
 			grep find hexdump test_mui_draw test_mui_button test_mui_form \
-			test_dl test_libc test_malloc_big
+			test_dl test_libc test_malloc_big http
 
 # 需要 POSIX 兼容层的应用
 POSIX_APPS = kilo
@@ -257,8 +257,9 @@ $(DISK_IMG): $(KERNEL_ELF) $(USER_ELFS) $(USER_LIB_SOS)
 	sudo cp -r $(BUILD_DIR)/tcc_sysroot/lib/* /mnt/build/LIB/; \
 	sudo cp $(BUILD_DIR)/tcc_sysroot/lib/* /mnt/build/LIB/; \
 
-	sudo cp user/Icon1.bmp /mnt/build/folder.bmp; \
-	sudo cp user/Icon2.bmp /mnt/build/exec.bmp; \
+	sudo cp user/folder.bmp /mnt/build/folder.bmp; \
+	sudo cp user/exec.bmp /mnt/build/exec.bmp; \
+	sudo cp user/background.bmp /mnt/build/background.bmp; \
 
 	sudo echo "int main() { return 42; }" | sudo tee /mnt/build/test.c > /dev/null; \
 

@@ -223,7 +223,12 @@ int sys_recvfrom(int h, void *buf_user, uint32_t max,
 
     if (cur->sock_handles[h].type == SOCK_STREAM) {
         struct tcp_socket *tcp = cur->sock_handles[h].tcp;
-        if (!tcp || tcp->state != TCP_ESTABLISHED) return EINVAL;
+        if (!tcp) return EINVAL;
+        /* 允许 CLOSE_WAIT / CLOSED——FIN 之后 rx_buf 里可能还有残留数据 */
+        if (tcp->state != TCP_ESTABLISHED &&
+            tcp->state != TCP_CLOSE_WAIT &&
+            tcp->state != TCP_CLOSED)
+            return EINVAL;
         if (max == 0) return 0;
 
         uint32_t range = max > UDP_PAYLOAD_MAX ? UDP_PAYLOAD_MAX : max;
@@ -232,7 +237,8 @@ int sys_recvfrom(int h, void *buf_user, uint32_t max,
 
         uint8_t tmp[UDP_PAYLOAD_MAX];
         int ret = tcp_recv(tcp, tmp, range);
-        if (ret <= 0) return ret;
+        if (ret < 0) return 0;         /* EOF：返回 0 表示对端关闭 */
+        if (ret == 0) return EAGAIN;   /* 暂时没数据 */
         if (copy_to_user((uint32_t)buf_user, tmp, ret) < 0) return EFAULT;
         return ret;
     }

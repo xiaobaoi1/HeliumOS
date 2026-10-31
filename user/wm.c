@@ -16,30 +16,57 @@ static void mouse_draw(void);
 static unsigned int *g_fb;
 static unsigned int *g_back;
 static unsigned int  g_W, g_H, g_pitch_px;
+static struct window *g_dragging = NULL;  /* 拖动中的窗口，合成时跳过 */
+static int g_no_present = 0;
+
+/* 当前绘制区域。redraw_region 进入时 set，退出时 reset。
+ * render_win_frame 内部的 fill_rect_buf / put_pixel_buf 自动按这个区域 clip，
+ * 避免拖动时画到区域外的无效像素。 */
+static int g_clip_x0, g_clip_y0, g_clip_x1, g_clip_y1;
+
+static void set_clip(int x0, int y0, int x1, int y1) {
+    g_clip_x0 = x0; g_clip_y0 = y0;
+    g_clip_x1 = x1; g_clip_y1 = y1;
+}
+
+static void reset_clip(void) {
+    g_clip_x0 = 0; g_clip_y0 = 0;
+    g_clip_x1 = (int)g_W; g_clip_y1 = (int)g_H;
+}
 
 static void put_pixel_buf(unsigned int *buf, int x, int y, unsigned int rgb) {
     if (x < 0 || y < 0 || x >= (int)g_W || y >= (int)g_H) return;
+    if (x < g_clip_x0 || y < g_clip_y0 || x >= g_clip_x1 || y >= g_clip_y1) return;
     buf[y * g_pitch_px + x] = rgb;
 }
 
 static void fill_rect_buf(unsigned int *buf, int x, int y, int w, int h,
                            unsigned int rgb) {
-    for (int j = 0; j < h; j++)
-        for (int i = 0; i < w; i++)
-            put_pixel_buf(buf, x + i, y + j, rgb);
+    int x0 = x, y0 = y, x1 = x + w, y1 = y + h;
+    if (x0 < g_clip_x0) x0 = g_clip_x0;
+    if (y0 < g_clip_y0) y0 = g_clip_y0;
+    if (x1 > g_clip_x1) x1 = g_clip_x1;
+    if (y1 > g_clip_y1) y1 = g_clip_y1;
+    if (x1 <= x0 || y1 <= y0) return;
+
+    for (int j = y0; j < y1; j++) {
+        unsigned int *row = buf + j * g_pitch_px;
+        for (int i = x0; i < x1; i++)
+            row[i] = rgb;
+    }
 }
 
 /* g_back is the stdvga VRAM render target.  Keep this helper for the
  * presentation path, but never bounce the same pixels through system RAM. */
 static void blit_back_to_fb(int x0, int y0, int x1, int y1) {
-    (void)x0; (void)y0; (void)x1; (void)y1;
-    if (g_back == g_fb) return;
-    /* Legacy fallback: only used if a backend exposes a separate shadow. */
+    if (g_back == g_fb) return;   /* 理论上不再发生，保底 */
+
     if (x0 < 0) x0 = 0;
     if (y0 < 0) y0 = 0;
     if (x1 > (int)g_W) x1 = (int)g_W;
     if (y1 > (int)g_H) y1 = (int)g_H;
     if (x1 <= x0 || y1 <= y0) return;
+
     for (int y = y0; y < y1; y++) {
         unsigned int *src = g_back + y * g_pitch_px + x0;
         unsigned int *dst = g_fb   + y * g_pitch_px + x0;
@@ -168,15 +195,12 @@ static void shm_clear_pub(struct window *w) {
     w->shm->pub_y1 = 0;
 }
 
-static void blit_shm_to_back(struct window *w) {
-    int cw = cli_w(w);   /* shm 实际行宽（可能是旧值，大） */
-    int ch = cli_h(w);   /* shm 实际行数 */
+static void blit_shm_to_back(struct window *w, int rx0, int ry0, int rx1, int ry1) {
+    int cw = cli_w(w);
+    int ch = cli_h(w);
     int cx = cli_x(w);
     int cy = cli_y(w);
 
-    /* 客户区可见尺寸：不超出窗口边界。
-     * unmaximize 的中间状态 cw/ch 是旧的大值，w->w/h 是新值——
-     * 只画窗口内可见的左上部分，不溢出到窗口外的壁纸区域。 */
     int vis_w = cw;
     int vis_h = ch;
     if (w->kind == WM_KIND_NORMAL) {
@@ -190,7 +214,6 @@ static void blit_shm_to_back(struct window *w) {
     }
     if (vis_w <= 0 || vis_h <= 0) return;
 
-    /* 屏幕内可见范围（双保险——极端情况下窗口位置越界） */
     int x0 = cx;
     int x1 = cx + vis_w;
     int y0 = cy;
@@ -199,6 +222,12 @@ static void blit_shm_to_back(struct window *w) {
     if (y0 < 0) y0 = 0;
     if (x1 > (int)g_W) x1 = g_W;
     if (y1 > (int)g_H) y1 = g_H;
+
+    /* 与重绘区域相交 */
+    if (x0 < rx0) x0 = rx0;
+    if (y0 < ry0) y0 = ry0;
+    if (x1 > rx1) x1 = rx1;
+    if (y1 > ry1) y1 = ry1;
     if (x1 <= x0 || y1 <= y0) return;
 
     int sx = x0 - cx;
@@ -322,6 +351,8 @@ static void redraw_region(int x0, int y0, int x1, int y1) {
     if (y1 > (int)g_H) y1 = (int)g_H;
     if (x1 <= x0 || y1 <= y0) return;
 
+    set_clip(x0, y0, x1, y1);
+
     /* 1. 壁纸 */
     struct window *wall = NULL;
     for (int i = 0; i < MAX_WINDOWS; i++) {
@@ -347,6 +378,7 @@ static void redraw_region(int x0, int y0, int x1, int y1) {
             for (int i = 0; i < MAX_WINDOWS; i++) {
                 struct window *w = &g_wins[i];
                 if (!w->used || w->minimized) continue;
+                if (w == g_dragging) continue;   /* 拖动窗口由拖动逻辑单独画 */
                 if (layer_of(w) != layer) continue;
                 if (w->z != z) continue;
                 if (layer == 1) {
@@ -357,12 +389,13 @@ static void redraw_region(int x0, int y0, int x1, int y1) {
                     if (w->x >= x1 || w->x + w->w <= x0) continue;
                     if (w->y >= y1 || w->y + w->h <= y0) continue;
                 }
-                blit_shm_to_back(w);
+                blit_shm_to_back(w, x0, y0, x1, y1);
             }
         }
     }
 
-    blit_back_to_fb(x0, y0, x1, y1);
+    reset_clip();
+    if (!g_no_present) blit_back_to_fb(x0, y0, x1, y1);
 }
 
 static void win_bbox(struct window *w, int *x0, int *y0, int *x1, int *y1) {
@@ -571,9 +604,12 @@ static struct window *make_app_window(struct wm_request *req) {
     w->event_w = ev_w;
 
     mouse_restore();
-    int bx0, by0, bx1, by1;
-    win_bbox(w, &bx0, &by0, &bx1, &by1);
-    redraw_region(bx0, by0, bx1, by1);
+    if (w->kind == WM_KIND_NORMAL) {
+        render_win_frame(w);
+        int bx0, by0, bx1, by1;
+        win_bbox(w, &bx0, &by0, &bx1, &by1);
+        blit_back_to_fb(bx0, by0, bx1, by1);
+    }
     mouse_draw();
     /* 新建的普通窗口直接拿焦点，键盘操作（Enter/Del/输入）无需先点一下 */
     if (w->kind == WM_KIND_NORMAL) set_focus(w);
@@ -706,6 +742,7 @@ static void destroy_window(struct window *w) {
     w->event_w = -1;
     if (g_focus == w) set_focus(NULL);
     if (g_mouse_entered == w) g_mouse_entered = NULL;
+    if (g_dragging == w) g_dragging = NULL;
     forget_window_buttons(w);
 
     mouse_restore();
@@ -1165,11 +1202,18 @@ int main(int argc, char **argv) {
     g_H  = info.height;
     g_pitch_px = info.pitch / 4;
 
-    /* Render directly into the stdvga VRAM mapping.  The display engine
-     * scans this buffer out; there is no system-RAM back buffer or final
-     * framebuffer copy. */
-    g_back = g_fb;
+    /* 系统内存 back buffer：所有合成写到 RAM，最后 blit_back_to_fb
+     * 一次性推到 stdvga VRAM。VRAM 直写会被 PCI 带宽限制拖慢，
+     * 导致可见的逐行绘制、撕裂、闪动。 */
+    unsigned int back_size = info.pitch * info.height;
+    unsigned int back_addr = mmap(0, back_size,
+                                  PROT_READ | PROT_WRITE,
+                                  MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if ((int)back_addr <= 0) { printf("wm: back mmap failed\n"); return 1; }
+    g_back = (unsigned int*)back_addr;
+    memset(g_back, 0, back_size);
     fill_rect_buf(g_back, 0, 0, g_W, g_H, COL_BG);
+    reset_clip();
 
     wm_font_load();
 
@@ -1234,6 +1278,7 @@ int main(int argc, char **argv) {
                 if (released & WM_BTN_LEFT) {
                     if (drag_win) {
                         drag_win = NULL;
+                        g_dragging = NULL;
                     } else if (g_mouse_down_win[0]) {
                         struct window *src = g_mouse_down_win[0];
                         struct window *dst = window_at(ev.x, ev.y);
@@ -1294,22 +1339,66 @@ int main(int argc, char **argv) {
 
                 if (nx != drag_win->x || ny != drag_win->y) {
                     mouse_restore();
+
                     int ox0, oy0, ox1, oy1;
                     win_bbox(drag_win, &ox0, &oy0, &ox1, &oy1);
                     drag_win->x = nx;
                     drag_win->y = ny;
                     int nx0, ny0, nx1, ny1;
                     win_bbox(drag_win, &nx0, &ny0, &nx1, &ny1);
+
+                    int ix0 = ox0 > nx0 ? ox0 : nx0;
+                    int iy0 = oy0 > ny0 ? oy0 : ny0;
+                    int ix1 = ox1 < nx1 ? ox1 : nx1;
+                    int iy1 = oy1 < ny1 ? oy1 : ny1;
+                    int has_intersect = (ix0 < ix1 && iy0 < iy1);
+
+                    g_dragging = drag_win;
+                    g_no_present = 1;
+
+                    if (has_intersect) {
+                        if (oy0 < iy0) redraw_region(ox0, oy0, ox1, iy0);
+                        if (iy1 < oy1) redraw_region(ox0, iy1, ox1, oy1);
+                        if (ox0 < ix0) redraw_region(ox0, iy0, ix0, iy1);
+                        if (ix1 < ox1) redraw_region(ix1, iy0, ox1, iy1);
+                    } else {
+                        redraw_region(ox0, oy0, ox1, oy1);
+                    }
+
+                    if (has_intersect) {
+                        if (ny0 < iy0) redraw_region(nx0, ny0, nx1, iy0);
+                        if (iy1 < ny1) redraw_region(nx0, iy1, nx1, ny1);
+                        if (nx0 < ix0) redraw_region(nx0, iy0, ix0, iy1);
+                        if (ix1 < nx1) redraw_region(ix1, iy0, nx1, iy1);
+                    } else {
+                        redraw_region(nx0, ny0, nx1, ny1);
+                    }
+
+                    set_clip(0, 0, (int)g_W, (int)g_H);
+                    render_win_frame(drag_win);
+                    blit_shm_to_back(drag_win, nx0, ny0, nx1, ny1);
+
+                    g_dragging = NULL;
+                    g_no_present = 0;
+
                     int ux0 = ox0 < nx0 ? ox0 : nx0;
                     int uy0 = oy0 < ny0 ? oy0 : ny0;
                     int ux1 = ox1 > nx1 ? ox1 : nx1;
                     int uy1 = oy1 > ny1 ? oy1 : ny1;
-                    redraw_region(ux0, uy0, ux1, uy1);
+                    blit_back_to_fb(ux0, uy0, ux1, uy1);
+
+                    mouse_x = last_mx;
+                    mouse_y = last_my;
+                    mouse_draw();
+                } else if (last_mx != mouse_x || last_my != mouse_y) {
+                    /* 鼠标动了但窗口没动（被屏幕/任务栏夹住）——只重画光标 */
+                    mouse_restore();
+                    mouse_x = last_mx;
+                    mouse_y = last_my;
                     mouse_draw();
                 }
-                mouse_x = last_mx;
-                mouse_y = last_my;
             } else {
+                /* 非拖动：普通鼠标移动 */
                 if (last_mx != mouse_x || last_my != mouse_y) {
                     mouse_restore();
                     mouse_x = last_mx;
