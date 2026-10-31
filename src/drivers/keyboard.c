@@ -15,16 +15,24 @@ static int caps_lock = 0;
 static int ctrl_pressed = 0;
 static int alt_pressed = 0;
 
+static void update_mods(void) {
+    uint32_t m = 0;
+    if (shift_pressed) m |= INPUT_MOD_SHIFT;
+    if (ctrl_pressed)  m |= INPUT_MOD_CTRL;
+    if (alt_pressed)   m |= INPUT_MOD_ALT;
+    input_set_mods(m);
+}
+
 /* 扫描码转 ASCII（内部函数） */
 static char scancode_to_ascii(uint8_t scancode) {
     // ===== 1. 修饰键：只更新状态，不产生字符 =====
-    if (scancode == 0x2A || scancode == 0x36) { shift_pressed = 1; return 0; } // 左/右 Shift 按下
-    if (scancode == 0xAA || scancode == 0xB6) { shift_pressed = 0; return 0; } // 左/右 Shift 释放
+    if (scancode == 0x2A || scancode == 0x36) { shift_pressed = 1; update_mods(); return 0; } // 左/右 Shift 按下
+    if (scancode == 0xAA || scancode == 0xB6) { shift_pressed = 0; update_mods(); return 0; } // 左/右 Shift 释放
     if (scancode == 0x3A) { caps_lock = !caps_lock; return 0; }                // Caps Lock 切换
-    if (scancode == 0x1D) { ctrl_pressed = 1; return 0; }                       // Ctrl 按下
-    if (scancode == 0x9D) { ctrl_pressed = 0; return 0; }                       // Ctrl 释放
-    if (scancode == 0x38) { alt_pressed = 1; return 0; }                        // Alt 按下
-    if (scancode == 0xB8) { alt_pressed = 0; return 0; }                        // Alt 释放
+    if (scancode == 0x1D) { ctrl_pressed = 1; update_mods(); return 0; }        // Ctrl 按下
+    if (scancode == 0x9D) { ctrl_pressed = 0; update_mods(); return 0; }        // Ctrl 释放
+    if (scancode == 0x38) { alt_pressed = 1; update_mods(); return 0; }         // Alt 按下
+    if (scancode == 0xB8) { alt_pressed = 0; update_mods(); return 0; }         // Alt 释放
 
     // for test ESC
     if (scancode == 0x01) return 27;
@@ -38,6 +46,7 @@ static char scancode_to_ascii(uint8_t scancode) {
                 .type = INPUT_KEY,
                 .code = 0x03,
                 .x = 0, .y = 0,
+                .mods = input_get_mods(),
             };
             input_post(&ev);
         } else {
@@ -120,6 +129,7 @@ void keyboard_handle_irq(void) {
             .type = INPUT_KEY,
             .code = (uint32_t)(unsigned char)c,
             .x = 0, .y = 0,
+            .mods = input_get_mods(),
         };
         input_post(&ev);
         return;
@@ -135,6 +145,8 @@ void keyboard_handle_irq(void) {
         case 0x47: seq = "\x1b[H"; break;   /* Home */
         case 0x4F: seq = "\x1b[F"; break;   /* End */
         case 0x53: seq = "\x1b[3~"; break;  /* Delete */
+        case 0x49: seq = "\x1b[5~"; break;  /* Page Up */
+        case 0x51: seq = "\x1b[6~"; break;  /* Page Down */
     }
     if (seq) {
         for (int i = 0; seq[i]; i++) {
@@ -142,6 +154,7 @@ void keyboard_handle_irq(void) {
                 .type = INPUT_KEY,
                 .code = (uint32_t)(unsigned char)seq[i],
                 .x = 0, .y = 0,
+                .mods = input_get_mods(),
             };
             input_post(&ev);
         }

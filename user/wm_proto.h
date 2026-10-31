@@ -32,10 +32,18 @@
 #define WM_EV_CLOSE_REQUEST 10
 #define WM_EV_CLOSE         11  /* WM 主动销毁时通知（POPUP） */
 #define WM_EV_WINDOW_LIST   12  /* 后接 n 个 wm_window_entry */
+#define WM_EV_WHEEL         13  /* code = 滚轮增量，x/y 客户区坐标 */
+#define WM_EV_DROP          14  /* 拖放释放到本窗口：x/y 客户区坐标 */
 
 #define WM_BTN_LEFT         1
 #define WM_BTN_RIGHT        2
 #define WM_BTN_MIDDLE       4
+
+/* 修饰键位（事件 extra 字段） */
+#define WM_MOD_SHIFT        0x01
+#define WM_MOD_CTRL         0x02
+#define WM_MOD_ALT          0x04
+#define WM_MOD_DROP_OUTSIDE 0x100   /* MOUSE_UP：释放点不在接收窗口内 */
 
 struct wm_event {
     uint32_t type;

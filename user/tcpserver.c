@@ -44,11 +44,11 @@ int main(int argc, char **argv) {
                 printf("recv %d bytes: ", n);
                 write(1, buf, n);
                 if (buf[n-1] != '\n') putchar('\n');
-
-                /* 回发 */
                 sendto(c, buf, n, NULL, 0);
-            } else if (n < 0) {
-                break;
+            } else if (n == 0) {
+                break;    /* EOF */
+            } else if (n != -10) {   /* EAGAIN */
+                break;    /* 其他错误 */
             }
             sleep_ms(20);
         }

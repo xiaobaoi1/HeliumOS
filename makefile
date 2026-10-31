@@ -81,6 +81,8 @@ OBJS = $(BUILD_DIR)/start.o \
 	   $(BUILD_DIR)/tcp.o \
 	   $(BUILD_DIR)/kmap.o \
 	   $(BUILD_DIR)/fb.o \
+	   $(BUILD_DIR)/stdvga.o \
+	   $(BUILD_DIR)/graphic.o \
 	   $(BUILD_DIR)/font.o \
 	   $(BUILD_DIR)/display.o \
 	   $(BUILD_DIR)/vga_text.o \
@@ -112,19 +114,25 @@ USER_CFLAGS = -m32 -ffreestanding -fno-pic -fno-stack-protector \
 METHYLUI_DIR  = user/methylui
 METHYLUI_OBJS = $(BUILD_DIR)/methylui/mui_font.o \
                 $(BUILD_DIR)/methylui/mui_surface.o \
+                $(BUILD_DIR)/methylui/mui_clip.o \
                 $(BUILD_DIR)/methylui/mui_widget.o \
                 $(BUILD_DIR)/methylui/mui_context.o \
 				$(BUILD_DIR)/methylui/mui_label.o \
-                $(BUILD_DIR)/methylui/mui_textbox.o
+                $(BUILD_DIR)/methylui/mui_textbox.o \
+                $(BUILD_DIR)/methylui/mui_list.o \
+                $(BUILD_DIR)/methylui/mui_scroll.o \
+                $(BUILD_DIR)/methylui/mui_bmpload.o \
+                $(BUILD_DIR)/methylui/mui_dialog.o
+
 
 USER_APPS = shell idle test testkill sleeper argtest test_write \
-            test_fault test_env count cat echo head tail wc \
+            test_fault test_env count methylate cat echo head tail wc \
             test_mmap test_stack ping test_dns nc tcpserver \
             test_input test_pty wm term test_namedpipe test_perm \
 			test_createwin test_ansi\
 			dhcpclient desktop test_raw kilo test_malloc_loop \
 			grep find hexdump test_mui_draw test_mui_button test_mui_form \
-			test_dl test_libc test_malloc_big
+			test_dl test_libc test_malloc_big http
 
 # 需要 POSIX 兼容层的应用
 POSIX_APPS = kilo
@@ -166,6 +174,14 @@ $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.asm
 
 # 通用规则：编译 src/kernel/ 和 src/drivers/ 下的 .c 文件
 $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.c
+	@mkdir -p $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/stdvga.o: $(KERNEL_DIR)/graphic/stdvga.c
+	@mkdir -p $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/graphic.o: $(KERNEL_DIR)/graphic/graphic.c
 	@mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -240,6 +256,10 @@ $(DISK_IMG): $(KERNEL_ELF) $(USER_ELFS) $(USER_LIB_SOS)
 	sudo cp -r $(BUILD_DIR)/tcc_sysroot/include/* /mnt/build/INCLUDE/; \
 	sudo cp -r $(BUILD_DIR)/tcc_sysroot/lib/* /mnt/build/LIB/; \
 	sudo cp $(BUILD_DIR)/tcc_sysroot/lib/* /mnt/build/LIB/; \
+
+	sudo cp user/folder.bmp /mnt/build/folder.bmp; \
+	sudo cp user/exec.bmp /mnt/build/exec.bmp; \
+	sudo cp user/background.bmp /mnt/build/background.bmp; \
 
 	sudo echo "int main() { return 42; }" | sudo tee /mnt/build/test.c > /dev/null; \
 
@@ -356,11 +376,16 @@ $(BUILD_DIR)/lib%.so: user/lib/lib%.c
 
 # 附加对象映射（只有两个程序需要，直接赋值最清晰）
 EXTRA_OBJS_wm      := $(BUILD_DIR)/wm_font.o
-EXTRA_OBJS_desktop := $(BUILD_DIR)/wm_font.o
+EXTRA_OBJS_desktop := $(BUILD_DIR)/wm_font.o $(METHYLUI_OBJS)
 EXTRA_OBJS_test_mui_draw := $(METHYLUI_OBJS)
 EXTRA_OBJS_test_mui_button := $(METHYLUI_OBJS)
 EXTRA_OBJS_test_mui_form := $(METHYLUI_OBJS)
 EXTRA_OBJS_kilo := $(POSIX_OBJS)
+EXTRA_OBJS_methylate := $(METHYLUI_OBJS)
+EXTRA_OBJS_term      := $(BUILD_DIR)/methylui/mui_font.o \
+                        $(BUILD_DIR)/methylui/mui_surface.o \
+                        $(BUILD_DIR)/methylui/mui_widget.o \
+                        $(BUILD_DIR)/methylui/mui_scroll.o
 
 # 统一链接规则（二次展开拿 EXTRA_OBJS_<stem>）
 .SECONDEXPANSION:

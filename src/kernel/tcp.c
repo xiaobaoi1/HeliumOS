@@ -387,9 +387,19 @@ int tcp_send(struct tcp_socket *s, const uint8_t *data, uint32_t len) {
 }
 
 int tcp_recv(struct tcp_socket *s, uint8_t *buf, uint32_t max) {
-    if (!s || s->state != TCP_ESTABLISHED) return -1;
+    if (!s) return -1;
+    /* 允许在 CLOSE_WAIT / CLOSED 状态继续读——FIN 之后 rx_buf 里可能还有数据 */
+    if (s->state != TCP_ESTABLISHED &&
+        s->state != TCP_CLOSE_WAIT &&
+        s->state != TCP_CLOSED) return -1;
     if (!buf || max == 0) return 0;
-    if (s->rx_count == 0) return 0;
+
+    if (s->rx_count == 0) {
+        /* 已关闭 + 无数据 = EOF */
+        if (s->state == TCP_CLOSE_WAIT || s->state == TCP_CLOSED)
+            return -1;
+        return 0;  /* 暂时没数据 */
+    }
 
     uint32_t n = max < s->rx_count ? max : s->rx_count;
     for (uint32_t i = 0; i < n; i++) {

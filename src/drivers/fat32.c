@@ -43,6 +43,16 @@ static int is_lfn_entry(const struct fat32_dir_entry *e) {
     return (e->attributes & 0x3F) == 0x0F;
 }
 
+/* 短名 11 字节的 LFN 校验和；用于识别残留/错配的 LFN 项。 */
+static uint8_t short_name_checksum(const struct fat32_dir_entry *e) {
+    uint8_t sum = 0;
+    for (int i = 0; i < 8; i++)
+        sum = (uint8_t)(((sum & 1) << 7) + (sum >> 1) + e->name[i]);
+    for (int i = 0; i < 3; i++)
+        sum = (uint8_t)(((sum & 1) << 7) + (sum >> 1) + e->ext[i]);
+    return sum;
+}
+
 /* 把 LFN 项的 13 个字符写到 buf + offset 处。
  * 遇到 0x0000 视为字符串结束。 */
 static void lfn_write_at(const struct fat32_dir_entry *e, char *buf,
@@ -278,6 +288,7 @@ static int find_entry_in_dir(struct fat32_volume *vol, uint32_t start_cluster,
     uint32_t guard = 1024;
     char lfn_buf[260];
     int  lfn_max_seq = 0;
+    int  lfn_checksum = -1;
 
     while (cluster < 0x0FFFFFF8 && guard-- > 0) {
         int sectors = vol->bpb.sectors_per_cluster;
@@ -300,9 +311,12 @@ static int find_entry_in_dir(struct fat32_volume *vol, uint32_t start_cluster,
                 }
                 if (e->name[0] == 0xE5) {
                     lfn_max_seq = 0;
+                    lfn_checksum = -1;
                     continue;
                 }
                 if (is_lfn_entry(e)) {
+                    if (lfn_max_seq == 0)
+                        lfn_checksum = e->create_time_tenth;
                     lfn_collect(e, lfn_buf, sizeof(lfn_buf), &lfn_max_seq);
                     continue;
                 }
@@ -315,9 +329,17 @@ static int find_entry_in_dir(struct fat32_volume *vol, uint32_t start_cluster,
                     continue;
                 }
 
+                /* 只有 LFN 校验和与当前短名匹配才采用长名；
+                 * 否则可能是旧操作留下的孤立 LFN 项。 */
+                int lfn_count = lfn_max_seq;
+                int lfn_valid = (lfn_max_seq > 0 &&
+                                 lfn_checksum == short_name_checksum(e));
+
                 char ename[260];
-                build_name(e, lfn_buf, lfn_max_seq, ename, sizeof(ename));
+                build_name(e, lfn_buf, lfn_valid ? lfn_max_seq : 0,
+                           ename, sizeof(ename));
                 lfn_max_seq = 0;
+                lfn_checksum = -1;
 
                 if (!name_eq(ename, name)) continue;
 
@@ -325,7 +347,7 @@ static int find_entry_in_dir(struct fat32_volume *vol, uint32_t start_cluster,
                 if (want_dir == 1 && !is_dir) continue;
                 if (want_dir == 0 && is_dir)  continue;
 
-                if (out_lfn_count) *out_lfn_count = lfn_max_seq;
+                if (out_lfn_count) *out_lfn_count = lfn_valid ? lfn_count : 0;
                 if (out_e) *out_e = *e;
                 if (out_sector_lba) *out_sector_lba = lba;
                 if (out_entry_idx) *out_entry_idx = j;
@@ -591,6 +613,7 @@ int fat32_readdir(struct fat32_volume *vol, struct fat32_dir *dir,
 
     char lfn_buf[260];
     int  lfn_max_seq = 0;
+    int  lfn_checksum = -1;
 
     uint32_t guard = 1024;
     while (dir->cur_cluster < 0x0FFFFFF8 && guard-- > 0) {
@@ -613,10 +636,13 @@ int fat32_readdir(struct fat32_volume *vol, struct fat32_dir *dir,
                 }
                 if (e->name[0] == 0xE5) {
                     lfn_max_seq = 0;
+                    lfn_checksum = -1;
                     continue;
                 }
 
                 if (is_lfn_entry(e)) {
+                    if (lfn_max_seq == 0)
+                        lfn_checksum = e->create_time_tenth;
                     int seq = e->name[0] & 0x1F;
                     if (seq >= 1 && seq <= 20) {
                         lfn_write_at(e, lfn_buf, sizeof(lfn_buf),
@@ -634,12 +660,14 @@ int fat32_readdir(struct fat32_volume *vol, struct fat32_dir *dir,
                     continue;
                 }
 
+                int lfn_valid = (lfn_max_seq > 0 &&
+                                 lfn_checksum == short_name_checksum(e));
+
                 int k = 0;
-                if (lfn_max_seq > 0) {
+                if (lfn_valid) {
                     lfn_buf[lfn_max_seq * 13] = '\0';
                     strncpy(out->name, lfn_buf, DIRENT_NAME_MAX - 1);
                     out->name[DIRENT_NAME_MAX - 1] = '\0';
-                    lfn_max_seq = 0;
                 } else {
                     for (int m = 0; m < 8 && e->name[m] != ' ' &&
                                     k < DIRENT_NAME_MAX - 2; m++)
@@ -652,6 +680,8 @@ int fat32_readdir(struct fat32_volume *vol, struct fat32_dir *dir,
                     }
                     out->name[k] = '\0';
                 }
+                lfn_max_seq = 0;
+                lfn_checksum = -1;
                 out->attributes = e->attributes;
                 out->size = e->file_size;
                 out->mod_date = e->mod_date;
@@ -794,8 +824,7 @@ static int find_free_dirent(struct fat32_volume *vol, uint32_t dir_cluster,
 }
 
 /* 名字是否 8.3 兼容 */
-static int is_83_compatible(const char *name) {
-    int main_len = 0, ext_len = 0;
+static int is_83_compatible(const char *name) {    int main_len = 0, ext_len = 0;
     int in_ext = 0;
 
     for (int i = 0; name[i]; i++) {
@@ -817,6 +846,14 @@ static int is_83_compatible(const char *name) {
         }
     }
     return main_len > 0;
+}
+
+/* 短名在 FAT 目录项里只能是大写。名字含小写时必须写 LFN，
+ * 否则 "foo.c" 会被存成 "FOO.C"，重命名后大小写就丢了。 */
+static int name_has_lower(const char *name) {
+    for (int i = 0; name && name[i]; i++)
+        if (name[i] >= 'a' && name[i] <= 'z') return 1;
+    return 0;
 }
 
 /* 短名冲突时的最大尝试次数 */
@@ -1193,7 +1230,7 @@ int fat32_create_file(struct fat32_volume *vol, const char *path,
     /* 195 = 15 个 LFN 项 × 13 字符。超过则一扇区放不下。 */
     if (name_len > 195) return ENAMETOOLONG;
 
-    if (is_83_compatible(name)) {
+    if (is_83_compatible(name) && !name_has_lower(name)) {
         memset(file, 0, sizeof(*file));
         file->first_cluster = 0;
         file->current_cluster = 0;
@@ -1528,7 +1565,7 @@ int fat32_mkdir(struct fat32_volume *vol, const char *path) {
         return ENAMETOOLONG;
     }
 
-    if (is_83_compatible(name)) {
+    if (is_83_compatible(name) && !name_has_lower(name)) {
         write_dirent(vol, sect_lba, idx, name, 0x10, new_cluster, 0, NULL, NULL);
         ata_flush(vol->dev);
         return OK;
@@ -1661,13 +1698,72 @@ int fat32_rename(struct fat32_volume *vol, const char *old_path,
     struct fat32_dir new_parent;
     if (fat32_opendir(vol, new_dir, &new_parent) != OK) return ENOENT;
 
+    uint32_t new_lba = 0, new_idx = 0;
     if (find_entry_in_dir(vol, new_parent.start_cluster, new_name, -1,
-                          NULL, NULL, NULL, NULL)) {
-        return EEXIST;
+                          NULL, &new_lba, &new_idx, NULL)) {
+        /* 目标名字就是源项自己（仅大小写变化）：允许继续，
+         * 否则 "foo.c" -> "Foo.c" 会被误判为已存在。 */
+        if (new_lba != old_lba || new_idx != old_idx) return EEXIST;
     }
 
     int name_len = strlen(new_name);
     if (name_len > 195) return ENAMETOOLONG;
+
+    /* 同目录时优先原地复用旧目录项，避免分配新项/删除旧项。
+     * 不同目录或新名字需要更多 LFN 槽位时才走旧路径。 */
+    int same_dir = (old_parent.start_cluster == new_parent.start_cluster);
+    if (same_dir) {
+        int needs_lfn = !(is_83_compatible(new_name) && !name_has_lower(new_name));
+        if (needs_lfn) {
+            int n_lfn = (name_len + 12) / 13;
+            if ((int)old_idx >= n_lfn) {
+                uint32_t start = old_idx - n_lfn;
+                uint8_t s[SECTOR_SIZE];
+                ata_read_sector(vol->dev, old_lba, s);
+                struct fat32_dir_entry *es = (struct fat32_dir_entry*)s;
+                int ok = 1;
+                for (uint32_t j = start; j < old_idx; j++) {
+                    int old_lfn_slot = ((int)j >= (int)old_idx - old_lfn);
+                    if (!old_lfn_slot && es[j].name[0] != 0x00 &&
+                        es[j].name[0] != 0xE5) {
+                        ok = 0;
+                        break;
+                    }
+                }
+                if (ok) {
+                    /* 复用原短名做 LFN 校验和，避免与其它短名冲突。 */
+                    uint8_t n8[8], e3[3];
+                    memcpy(n8, e.name, 8);
+                    memcpy(e3, e.ext, 3);
+                    write_lfn_sequence(vol, old_lba, start, new_name, name_len,
+                                       n8, e3, attr, first_cluster, file_size,
+                                       NULL, NULL);
+                    if (start > old_idx - old_lfn) {
+                        ata_read_sector(vol->dev, old_lba, s);
+                        es = (struct fat32_dir_entry*)s;
+                        for (uint32_t j = old_idx - old_lfn; j < start; j++)
+                            es[j].name[0] = 0xE5;
+                        ata_write_sector(vol->dev, old_lba, s);
+                    }
+                    ata_flush(vol->dev);
+                    return OK;
+                }
+            }
+        } else {
+            write_dirent(vol, old_lba, old_idx, new_name, attr,
+                         first_cluster, file_size, NULL, NULL);
+            if (old_lfn > 0) {
+                uint8_t s[SECTOR_SIZE];
+                ata_read_sector(vol->dev, old_lba, s);
+                struct fat32_dir_entry *es = (struct fat32_dir_entry*)s;
+                for (int j = (int)old_idx - old_lfn; j < (int)old_idx; j++)
+                    if (j >= 0) es[j].name[0] = 0xE5;
+                ata_write_sector(vol->dev, old_lba, s);
+            }
+            ata_flush(vol->dev);
+            return OK;
+        }
+    }
 
     uint32_t last_cluster = 0;
     uint32_t sect_lba, idx;
@@ -1686,7 +1782,7 @@ int fat32_rename(struct fat32_volume *vol, const char *old_path,
         idx = 0;
     }
 
-    if (is_83_compatible(new_name)) {
+    if (is_83_compatible(new_name) && !name_has_lower(new_name)) {
         write_dirent(vol, sect_lba, idx, new_name,
                      attr, first_cluster, file_size, NULL, NULL);
     } else {

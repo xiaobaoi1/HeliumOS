@@ -276,11 +276,17 @@ struct input_event {
     unsigned int type;
     unsigned int code;
     int          x, y;
+    unsigned int mods;
 };
 
 #define INPUT_KEY        1
 #define INPUT_MOUSE_MOVE 2
 #define INPUT_MOUSE_BTN  3
+#define INPUT_WHEEL      4
+
+#define INPUT_MOD_SHIFT  0x01
+#define INPUT_MOD_CTRL   0x02
+#define INPUT_MOD_ALT    0x04
 
 
 

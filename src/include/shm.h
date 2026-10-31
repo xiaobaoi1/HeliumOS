@@ -3,9 +3,9 @@
 
 #include <stdint.h>
 
-#define SHM_MAX_OBJECTS  16
+#define SHM_MAX_OBJECTS  64
 #define SHM_NAME_MAX     32
-#define SHM_MAX_PAGES    1024   /* 4MB 上限，壁纸全屏需要 3MB */
+#define SHM_MAX_PAGES    4096   /* 16MB 上限：支持高分辨率全屏窗口 */
 
 struct shm {
     char     name[SHM_NAME_MAX];
