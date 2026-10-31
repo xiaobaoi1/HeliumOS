@@ -45,6 +45,27 @@ static void textbox_ensure_cursor_visible(struct mui_textbox *t) {
     }
 }
 
+void mui_textbox_move_cursor(struct mui_textbox *t, int delta) {
+    if (!t) return;
+    int pos = t->cursor + delta;
+    if (pos < 0) pos = 0;
+    if (pos > t->len) pos = t->len;
+    if (pos == t->cursor) return;
+    t->cursor = pos;
+    t->base.dirty = 1;
+    textbox_ensure_cursor_visible(t);
+}
+
+void mui_textbox_cursor_home(struct mui_textbox *t) {
+    if (!t) return;
+    mui_textbox_move_cursor(t, -t->cursor);
+}
+
+void mui_textbox_cursor_end(struct mui_textbox *t) {
+    if (!t) return;
+    mui_textbox_move_cursor(t, t->len - t->cursor);
+}
+
 static void textbox_key(struct mui_widget *w, int key) {
     struct mui_textbox *t = (struct mui_textbox*)w;
 

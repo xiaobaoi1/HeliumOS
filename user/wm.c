@@ -29,19 +29,12 @@ static void fill_rect_buf(unsigned int *buf, int x, int y, int w, int h,
             put_pixel_buf(buf, x + i, y + j, rgb);
 }
 
-static void fb_restore_region(int x, int y, int w, int h) {
-    for (int j = 0; j < h; j++) {
-        int py = y + j;
-        if (py < 0 || py >= (int)g_H) continue;
-        for (int i = 0; i < w; i++) {
-            int px = x + i;
-            if (px < 0 || px >= (int)g_W) continue;
-            g_fb[py * g_pitch_px + px] = g_back[py * g_pitch_px + px];
-        }
-    }
-}
-
+/* g_back is the stdvga VRAM render target.  Keep this helper for the
+ * presentation path, but never bounce the same pixels through system RAM. */
 static void blit_back_to_fb(int x0, int y0, int x1, int y1) {
+    (void)x0; (void)y0; (void)x1; (void)y1;
+    if (g_back == g_fb) return;
+    /* Legacy fallback: only used if a backend exposes a separate shadow. */
     if (x0 < 0) x0 = 0;
     if (y0 < 0) y0 = 0;
     if (x1 > (int)g_W) x1 = (int)g_W;
@@ -96,7 +89,13 @@ static int g_inbox_rd = -1;
 static struct window g_wins[MAX_WINDOWS];
 static int g_next_z = 1;
 static struct window *g_mouse_entered = NULL;
-static struct window *g_mouse_down_win = NULL;
+
+/* 每个按钮按下时命中的窗口。索引：0=左, 1=右, 2=中。 */
+static struct window *g_mouse_down_win[3] = { NULL, NULL, NULL };
+/* 当前按钮掩码（bit0=左/bit1=右/bit2=中），与 WM_BTN_* 一致。 */
+static uint32_t g_btn_state = 0;
+static uint32_t g_mods = 0;      /* 最近一次输入事件的修饰键状态 */
+
 static struct window *g_focus = NULL;
 static uint32_t g_wm_tick = 0;
 
@@ -116,6 +115,13 @@ static int cli_h(struct window *w) { return w->ch; }
 static void send_event(struct window *w, uint32_t type, uint32_t code,
                        int x, int y, uint32_t extra) {
     if (!w || w->event_w < 0) return;
+
+    /* Mouse-move events are coalescible: dropping an old move while the
+     * client is busy is safe.  Never let this high-rate stream fill the
+     * event pipe and block the WM (which also stalls keyboard/buttons). */
+    if (type == WM_EV_MOUSE_MOVE && pipe_avail(w->event_w) > 512)
+        return;
+
     struct wm_event ev;
     ev.type = type;
     ev.code = code;
@@ -147,11 +153,20 @@ static void update_mouse_entered(struct window *target, int mx, int my) {
     if (target) {
         int cx = mx - cli_x(target);
         int cy = my - cli_y(target);
-        send_event(target, WM_EV_MOUSE_ENTER, 0, cx, cy, 0);
+        send_event(target, WM_EV_MOUSE_ENTER, 0, cx, cy, g_mods);
     }
 }
 
 /* ---------- 窗口内容 blit ---------- */
+
+/* 丢弃已发布但未消费的脏区，避免窗口最小化/拖动时把发布通道卡住 */
+static void shm_clear_pub(struct window *w) {
+    if (!w || !w->shm) return;
+    w->shm->pub_x0 = SHM_DIRTY_EMPTY;
+    w->shm->pub_y0 = 0;
+    w->shm->pub_x1 = 0;
+    w->shm->pub_y1 = 0;
+}
 
 static void blit_shm_to_back(struct window *w) {
     int cw = cli_w(w);   /* shm 实际行宽（可能是旧值，大） */
@@ -378,10 +393,27 @@ static const unsigned short cursor_bits[CUR_H] = {
 
 static int mouse_x = 0, mouse_y = 0;
 static int mouse_prev_x = -1, mouse_prev_y = -1;
+static unsigned int mouse_save[CUR_W * CUR_H];
 
+static int mouse_intersects_rect(int x0, int y0, int x1, int y1) {
+    return x1 > mouse_x && x0 < mouse_x + CUR_W &&
+           y1 > mouse_y && y0 < mouse_y + CUR_H;
+}
+
+/* The stdvga front buffer doubles as the render target, so the cursor
+ * must save/restore the VRAM pixels directly instead of relying on a
+ * separate system-RAM composition buffer. */
 static void mouse_restore(void) {
     if (mouse_prev_x < 0) return;
-    fb_restore_region(mouse_prev_x, mouse_prev_y, CUR_W, CUR_H);
+    for (int j = 0; j < CUR_H; j++) {
+        int py = mouse_prev_y + j;
+        if (py < 0 || py >= (int)g_H) continue;
+        for (int i = 0; i < CUR_W; i++) {
+            int px = mouse_prev_x + i;
+            if (px < 0 || px >= (int)g_W) continue;
+            g_fb[py * g_pitch_px + px] = mouse_save[j * CUR_W + i];
+        }
+    }
     mouse_prev_x = -1;
     mouse_prev_y = -1;
 }
@@ -392,10 +424,11 @@ static void mouse_draw(void) {
         int py = mouse_y + j;
         if (py < 0 || py >= (int)g_H) continue;
         for (int i = 0; i < CUR_W; i++) {
-            if (!(row & (0x8000 >> i))) continue;
             int px = mouse_x + i;
             if (px < 0 || px >= (int)g_W) continue;
-            g_fb[py * g_pitch_px + px] = 0xFFFFFF;
+            int off = py * g_pitch_px + px;
+            mouse_save[j * CUR_W + i] = g_fb[off];
+            if (row & (0x8000 >> i)) g_fb[off] = 0xFFFFFF;
         }
     }
     mouse_prev_x = mouse_x;
@@ -529,7 +562,9 @@ static struct window *make_app_window(struct wm_request *req) {
     w->map_size = shm_size;
     w->counter = &w->shm->counter;
     w->pixels = (unsigned int*)(addr + SHM_HDR_SIZE);
-    w->last_seen = *w->counter;
+    /* 创建窗口时不要把桌面已发布的 counter 当成“已处理”，
+     * 否则首次显示可能被跳过（窗口空白）。 */
+    w->last_seen = (*w->counter == 0) ? 0 : *w->counter - 1;
 
     int ev_w = pipe_open(req->ev_name, 1);
     if (ev_w < 0) { w->used = 0; return NULL; }
@@ -540,8 +575,17 @@ static struct window *make_app_window(struct wm_request *req) {
     win_bbox(w, &bx0, &by0, &bx1, &by1);
     redraw_region(bx0, by0, bx1, by1);
     mouse_draw();
+    /* 新建的普通窗口直接拿焦点，键盘操作（Enter/Del/输入）无需先点一下 */
+    if (w->kind == WM_KIND_NORMAL) set_focus(w);
     push_window_list();
     return w;
+}
+
+/* 窗口销毁/最小化时清理对应的按钮按下记录 */
+static void forget_window_buttons(struct window *w) {
+    for (int bi = 0; bi < 3; bi++) {
+        if (g_mouse_down_win[bi] == w) g_mouse_down_win[bi] = NULL;
+    }
 }
 
 static void minimize_window(struct window *w) {
@@ -551,7 +595,7 @@ static void minimize_window(struct window *w) {
     w->minimized = 1;
     if (g_focus == w) set_focus(NULL);
     if (g_mouse_entered == w) g_mouse_entered = NULL;
-    if (g_mouse_down_win == w) g_mouse_down_win = NULL;
+    forget_window_buttons(w);
     mouse_restore();
     redraw_region(x0, y0, x1, y1);
     mouse_draw();
@@ -562,6 +606,7 @@ static void restore_window(struct window *w) {
     if (!w || !w->minimized) return;
     w->minimized = 0;
     w->z = g_next_z++;
+    shm_clear_pub(w);
     set_focus(w);
     mouse_restore();
     int x0, y0, x1, y1;
@@ -661,7 +706,7 @@ static void destroy_window(struct window *w) {
     w->event_w = -1;
     if (g_focus == w) set_focus(NULL);
     if (g_mouse_entered == w) g_mouse_entered = NULL;
-    if (g_mouse_down_win == w) g_mouse_down_win = NULL;
+    forget_window_buttons(w);
 
     mouse_restore();
     redraw_region(x0, y0, x1, y1);
@@ -801,7 +846,7 @@ static void route_mouse_move(int mx, int my) {
     if (target) {
         int cx = mx - cli_x(target);
         int cy = my - cli_y(target);
-        send_event(target, WM_EV_MOUSE_MOVE, 0, cx, cy, 0);
+        send_event(target, WM_EV_MOUSE_MOVE, g_btn_state, cx, cy, g_mods);
     }
 }
 
@@ -814,8 +859,8 @@ static void handle_mouse_press(int mx, int my,
             my >= popup->y && my < popup->y + popup->h) {
             int cx = mx - cli_x(popup);
             int cy = my - cli_y(popup);
-            g_mouse_down_win = popup;
-            send_event(popup, WM_EV_MOUSE_DOWN, WM_BTN_LEFT, cx, cy, 0);
+            g_mouse_down_win[0] = popup;
+            send_event(popup, WM_EV_MOUSE_DOWN, WM_BTN_LEFT, cx, cy, g_mods);
             return;
         }
         destroy_window(popup);
@@ -826,8 +871,8 @@ static void handle_mouse_press(int mx, int my,
         my >= dock->y && my < dock->y + dock->h) {
         int cx = mx - cli_x(dock);
         int cy = my - cli_y(dock);
-        g_mouse_down_win = dock;
-        send_event(dock, WM_EV_MOUSE_DOWN, WM_BTN_LEFT, cx, cy, 0);
+        g_mouse_down_win[0] = dock;
+        send_event(dock, WM_EV_MOUSE_DOWN, WM_BTN_LEFT, cx, cy, g_mods);
         return;
     }
 
@@ -895,8 +940,8 @@ static void handle_mouse_press(int mx, int my,
         int cx = mx - cli_x(hit);
         int cy = my - cli_y(hit);
         if (cx >= 0 && cx < hit->cw && cy >= 0 && cy < hit->ch) {
-            g_mouse_down_win = hit;
-            send_event(hit, WM_EV_MOUSE_DOWN, WM_BTN_LEFT, cx, cy, 0);
+            g_mouse_down_win[0] = hit;
+            send_event(hit, WM_EV_MOUSE_DOWN, WM_BTN_LEFT, cx, cy, g_mods);
         }
         if (need_full) {
             mouse_restore();
@@ -908,11 +953,119 @@ static void handle_mouse_press(int mx, int my,
 
     struct window *wall = find_by_kind(WM_KIND_WALLPAPER);
     if (wall) {
+        /* 点桌面：取消应用窗口焦点，键盘事件转给壁纸 */
+        set_focus(NULL);
         int cx = mx - cli_x(wall);
         int cy = my - cli_y(wall);
-        g_mouse_down_win = wall;
-        send_event(wall, WM_EV_MOUSE_DOWN, WM_BTN_LEFT, cx, cy, 0);
+        g_mouse_down_win[0] = wall;
+        send_event(wall, WM_EV_MOUSE_DOWN, WM_BTN_LEFT, cx, cy, g_mods);
     }
+}
+
+/* 找出 mx,my 处最上层的普通窗口 */
+static struct window *find_top_normal_window(int mx, int my) {
+    struct window *hit = NULL;
+    int best_z = -1;
+    for (int i = 0; i < MAX_WINDOWS; i++) {
+        struct window *w = &g_wins[i];
+        if (!w->used || w->minimized || w->kind != WM_KIND_NORMAL) continue;
+        if (mx >= w->x && mx < w->x + w->w &&
+            my >= w->y && my < w->y + w->h) {
+            if (w->z > best_z) { best_z = w->z; hit = w; }
+        }
+    }
+    return hit;
+}
+
+/* 屏幕坐标处的窗口（滚轮 / 拖放目标；popup > dock > normal > wallpaper） */
+static struct window *window_at(int mx, int my) {
+    struct window *popup = find_by_kind(WM_KIND_POPUP);
+    if (popup && mx >= popup->x && mx < popup->x + popup->w &&
+        my >= popup->y && my < popup->y + popup->h)
+        return popup;
+
+    struct window *dock = find_by_kind(WM_KIND_DOCK);
+    if (dock && mx >= dock->x && mx < dock->x + dock->w &&
+        my >= dock->y && my < dock->y + dock->h)
+        return dock;
+
+    struct window *n = find_top_normal_window(mx, my);
+    if (n) return n;
+
+    return find_by_kind(WM_KIND_WALLPAPER);
+}
+
+/* 右键/中键按下。btn_idx: 1=右, 2=中。 */
+static void handle_other_button_press(int mx, int my,
+                                       uint32_t btn_mask, int btn_idx) {
+    /* popup：点内部发事件，点外部关闭（与左键行为一致） */
+    struct window *popup = find_by_kind(WM_KIND_POPUP);
+    if (popup) {
+        if (mx >= popup->x && mx < popup->x + popup->w &&
+            my >= popup->y && my < popup->y + popup->h) {
+            int cx = mx - cli_x(popup);
+            int cy = my - cli_y(popup);
+            g_mouse_down_win[btn_idx] = popup;
+            send_event(popup, WM_EV_MOUSE_DOWN, btn_mask, cx, cy, g_mods);
+            return;
+        }
+        destroy_window(popup);
+    }
+
+    /* dock */
+    struct window *dock = find_by_kind(WM_KIND_DOCK);
+    if (dock && mx >= dock->x && mx < dock->x + dock->w &&
+        my >= dock->y && my < dock->y + dock->h) {
+        int cx = mx - cli_x(dock);
+        int cy = my - cli_y(dock);
+        g_mouse_down_win[btn_idx] = dock;
+        send_event(dock, WM_EV_MOUSE_DOWN, btn_mask, cx, cy, g_mods);
+        return;
+    }
+
+    /* 普通窗口：右键/中键也激活窗口并置顶 */
+    struct window *hit = find_top_normal_window(mx, my);
+    if (hit) {
+        int need_full = (hit != g_focus);
+        set_focus(hit);
+        hit->z = g_next_z++;
+
+        int cx = mx - cli_x(hit);
+        int cy = my - cli_y(hit);
+        if (cx >= 0 && cx < hit->cw && cy >= 0 && cy < hit->ch) {
+            g_mouse_down_win[btn_idx] = hit;
+            send_event(hit, WM_EV_MOUSE_DOWN, btn_mask, cx, cy, g_mods);
+        }
+        if (need_full) {
+            mouse_restore();
+            redraw_region(0, 0, g_W, g_H);
+            mouse_draw();
+        }
+        return;
+    }
+
+    /* 壁纸 */
+    struct window *wall = find_by_kind(WM_KIND_WALLPAPER);
+    if (wall) {
+        set_focus(NULL);
+        int cx = mx - cli_x(wall);
+        int cy = my - cli_y(wall);
+        g_mouse_down_win[btn_idx] = wall;
+        send_event(wall, WM_EV_MOUSE_DOWN, btn_mask, cx, cy, g_mods);
+    }
+}
+
+/* 右键/中键释放 */
+static void handle_other_button_release(int mx, int my,
+                                         uint32_t btn_mask, int btn_idx) {
+    struct window *w = g_mouse_down_win[btn_idx];
+    if (!w) return;
+    g_mouse_down_win[btn_idx] = NULL;
+    if (!w->used) return;
+
+    int cx = mx - cli_x(w);
+    int cy = my - cli_y(w);
+    send_event(w, WM_EV_MOUSE_UP, btn_mask, cx, cy, g_mods);
 }
 
 /* ==================== inbox ==================== */
@@ -1012,13 +1165,10 @@ int main(int argc, char **argv) {
     g_H  = info.height;
     g_pitch_px = info.pitch / 4;
 
-    unsigned int back_size = info.pitch * info.height;
-    unsigned int back_addr = mmap(0, back_size,
-                                  PROT_READ | PROT_WRITE,
-                                  MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if ((int)back_addr <= 0) { printf("wm: back mmap failed\n"); return 1; }
-    g_back = (unsigned int*)back_addr;
-    memset(g_back, 0, back_size);
+    /* Render directly into the stdvga VRAM mapping.  The display engine
+     * scans this buffer out; there is no system-RAM back buffer or final
+     * framebuffer copy. */
+    g_back = g_fb;
     fill_rect_buf(g_back, 0, 0, g_W, g_H, COL_BG);
 
     wm_font_load();
@@ -1047,31 +1197,86 @@ int main(int argc, char **argv) {
         int last_mx = 0, last_my = 0;
 
         while (input_poll(&ev) == 0) {
+            g_mods = ev.mods;
+
             if (ev.type == INPUT_KEY) {
-                if (g_focus && g_focus->event_w >= 0) {
-                    send_event(g_focus, WM_EV_KEY, ev.code, 0, 0, 0);
+                /* 没有焦点窗口时把键盘交给壁纸（桌面图标选择/Enter/Del） */
+                struct window *kt = g_focus;
+                if (!kt) kt = find_by_kind(WM_KIND_WALLPAPER);
+                if (kt && kt->event_w >= 0) {
+                    send_event(kt, WM_EV_KEY, ev.code, 0, 0, g_mods);
+                }
+            } else if (ev.type == INPUT_WHEEL) {
+                struct window *wt = window_at(ev.x, ev.y);
+                if (wt && wt->event_w >= 0) {
+                    int cx = ev.x - cli_x(wt);
+                    int cy = ev.y - cli_y(wt);
+                    send_event(wt, WM_EV_WHEEL, ev.code, cx, cy, g_mods);
                 }
             } else if (ev.type == INPUT_MOUSE_MOVE) {
                 last_mx = ev.x;
                 last_my = ev.y;
                 have_last_mouse = 1;
             } else if (ev.type == INPUT_MOUSE_BTN) {
-                int pressed = (ev.code & 0x01) != 0;
-                if (pressed) {
+                /* ev.code 是完整按钮掩码：bit0=左 bit1=右 bit2=中。
+                 * 与旧状态相与，算出新按下和释放的位。 */
+                uint32_t old = g_btn_state;
+                uint32_t now = ev.code & 0x07;
+                uint32_t pressed  = now & ~old;
+                uint32_t released = old & ~now;
+                g_btn_state = now;
+
+                /* --- 左键：维持原有拖动 / 控制按钮 / 焦点逻辑 --- */
+                if (pressed & WM_BTN_LEFT) {
                     handle_mouse_press(ev.x, ev.y,
                                        &drag_win, &drag_dx, &drag_dy);
-                } else {
+                }
+                if (released & WM_BTN_LEFT) {
                     if (drag_win) {
                         drag_win = NULL;
-                    } else if (g_mouse_down_win) {
-                        if (g_mouse_down_win->used) {
-                            int cx = ev.x - cli_x(g_mouse_down_win);
-                            int cy = ev.y - cli_y(g_mouse_down_win);
-                            send_event(g_mouse_down_win, WM_EV_MOUSE_UP,
-                                       WM_BTN_LEFT, cx, cy, 0);
+                    } else if (g_mouse_down_win[0]) {
+                        struct window *src = g_mouse_down_win[0];
+                        struct window *dst = window_at(ev.x, ev.y);
+                        uint32_t up_extra = g_mods;
+                        if (dst && dst != src) up_extra |= WM_MOD_DROP_OUTSIDE;
+
+                        if (src->used) {
+                            int cx = ev.x - cli_x(src);
+                            int cy = ev.y - cli_y(src);
+                            send_event(src, WM_EV_MOUSE_UP,
+                                       WM_BTN_LEFT, cx, cy, up_extra);
                         }
-                        g_mouse_down_win = NULL;
+                        g_mouse_down_win[0] = NULL;
+
+                        /* 拖放：释放位置落在另一个窗口上 → 给目标发 DROP */
+                        if (dst && dst != src && dst->used &&
+                            (dst->kind == WM_KIND_NORMAL ||
+                             dst->kind == WM_KIND_WALLPAPER)) {
+                            int dx = ev.x - cli_x(dst);
+                            int dy = ev.y - cli_y(dst);
+                            send_event(dst, WM_EV_DROP, 0, dx, dy, g_mods);
+                        }
                     }
+                }
+
+                /* --- 右键 --- */
+                if (pressed & WM_BTN_RIGHT) {
+                    handle_other_button_press(ev.x, ev.y,
+                                              WM_BTN_RIGHT, 1);
+                }
+                if (released & WM_BTN_RIGHT) {
+                    handle_other_button_release(ev.x, ev.y,
+                                                WM_BTN_RIGHT, 1);
+                }
+
+                /* --- 中键 --- */
+                if (pressed & WM_BTN_MIDDLE) {
+                    handle_other_button_press(ev.x, ev.y,
+                                              WM_BTN_MIDDLE, 2);
+                }
+                if (released & WM_BTN_MIDDLE) {
+                    handle_other_button_release(ev.x, ev.y,
+                                                WM_BTN_MIDDLE, 2);
                 }
             }
         }
@@ -1127,14 +1332,21 @@ int main(int argc, char **argv) {
         }
 
         /* 窗口 shm 更新 */
+        int mouse_hidden = (mouse_prev_x < 0);
         for (int i = 0; i < MAX_WINDOWS; i++) {
             struct window *w = &g_wins[i];
             if (!w->used) continue;
-            if (w->minimized) { w->last_seen = *w->counter; continue; }
+            if (w->minimized) { w->last_seen = *w->counter; shm_clear_pub(w); continue; }
 
             uint64_t c = *w->counter;
-            if (drag_win) { w->last_seen = c; continue; }
-            if (c == w->last_seen) continue;
+            if (drag_win) { w->last_seen = c; shm_clear_pub(w); continue; }
+
+            /* counter 相同但仍有未消费的 pub（如窗口创建时应用已先绘制并发布）
+             * 也要处理，否则发布通道会永久卡住。 */
+            int pub_empty = 1;
+            if (w->shm)
+                pub_empty = (w->shm->pub_x0 == SHM_DIRTY_EMPTY);
+            if (c == w->last_seen && pub_empty) continue;
             w->last_seen = c;
             if (!w->shm) continue;
 
@@ -1177,7 +1389,14 @@ int main(int argc, char **argv) {
                 break;
             }
 
-            mouse_restore();
+            /* 只有更新区域覆盖鼠标时才需要暂时隐藏光标；
+             * 一轮内只隐藏一次，循环结束后统一重画，避免闪烁。 */
+            if (!mouse_hidden && mouse_prev_x >= 0 &&
+                mouse_intersects_rect(sx0, sy0, sx1, sy1)) {
+                mouse_restore();
+                mouse_hidden = 1;
+            }
+
             if (occluded) {
                 redraw_region(sx0, sy0, sx1, sy1);
             } else {
@@ -1189,13 +1408,14 @@ int main(int argc, char **argv) {
                 }
                 blit_back_to_fb(sx0, sy0, sx1, sy1);
             }
-            mouse_draw();
 
             w->shm->pub_x0 = SHM_DIRTY_EMPTY;
             w->shm->pub_y0 = 0;
             w->shm->pub_x1 = 0;
             w->shm->pub_y1 = 0;
         }
+
+        if (mouse_hidden) mouse_draw();
 
         static int check_cnt = 0;
         if (++check_cnt >= 100) {

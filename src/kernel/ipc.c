@@ -183,32 +183,35 @@ int pipe_write(struct pipe *p, const uint8_t *buf, uint32_t n) {
     if (!p || !buf) return EINVAL;
     if (n == 0) return 0;
 
-    while (1) {
-        /* 有空间 */
-        if (p->count < PIPE_BUF_SIZE) {
-            uint32_t space = PIPE_BUF_SIZE - p->count;
-            uint32_t to_write = n < space ? n : space;
+    uint32_t written = 0;
+    while (written < n) {
+        uint32_t remaining = n - written;
+        uint32_t space = PIPE_BUF_SIZE - p->count;
+
+        /* Keep small messages atomic.  WM/IPC protocols read fixed-size
+         * records, so a short write would permanently desynchronise the
+         * byte stream and can make a client consume garbage events. */
+        if (remaining <= PIPE_BUF_SIZE && space < remaining) {
+            /* Wait below until the whole record fits. */
+        } else if (space > 0) {
+            uint32_t to_write = remaining;
+            if (to_write > space) to_write = space;
             for (uint32_t i = 0; i < to_write; i++) {
-                p->buf[p->write_pos] = buf[i];
+                p->buf[p->write_pos] = buf[written + i];
                 p->write_pos = (p->write_pos + 1) % PIPE_BUF_SIZE;
             }
             p->count += to_write;
-
-            /* 写完——唤醒等读的人 */
+            written += to_write;
             pipe_wakeup_all(p);
-            return (int)to_write;
+            continue;
         }
 
-        /* 无空间且没有读端 → EPIPE */
-        if (p->readers == 0) {
-            return EPIPE;
-        }
+        if (p->readers == 0) return written ? (int)written : EPIPE;
 
-        /* 阻塞前检查信号 */
         struct task *cur = get_current_task();
         if (!cur) return EINVAL;
         if (cur->pending_signals & ~cur->blocked_signals) {
-            return EINTR;
+            return written ? (int)written : EINTR;
         }
 
         cur->wait_pipe = p;
@@ -216,6 +219,7 @@ int pipe_write(struct pipe *p, const uint8_t *buf, uint32_t n) {
         schedule();
         cur->wait_pipe = NULL;
     }
+    return (int)written;
 }
 
 /* ---------- spawn 用：复制句柄 ---------- */

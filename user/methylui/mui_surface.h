@@ -11,6 +11,10 @@ struct mui_surface {
     unsigned int    *pixels;
     int              w, h;
     struct shm_hdr  *hdr;     /* 脏区标记用；NULL 表示不标 */
+
+    /* 矩形裁剪区；clip_on == 0 表示整个 surface。见 mui_clip.h */
+    int              clip_on;
+    int              clip_x0, clip_y0, clip_x1, clip_y1;
 };
 
 /* 标记脏区 [x0, x1) × [y0, y1)。内部夹紧到 surface 边界。 */

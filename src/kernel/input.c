@@ -8,10 +8,20 @@ static struct input_event g_queue[INPUT_QUEUE_SIZE];
 static volatile int g_head = 0;
 static volatile int g_tail = 0;
 static volatile uint32_t g_owner_pid = 0;
+static volatile uint32_t g_mods = 0;
 
 void input_init(void) {
     g_head = g_tail = 0;
     g_owner_pid = 0;
+    g_mods = 0;
+}
+
+void input_set_mods(uint32_t mods) {
+    g_mods = mods;
+}
+
+uint32_t input_get_mods(void) {
+    return g_mods;
 }
 
 void input_post(const struct input_event *ev) {

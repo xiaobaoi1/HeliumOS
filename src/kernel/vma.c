@@ -10,11 +10,26 @@
 static uint32_t page_align_down(uint32_t addr) { return addr & ~0xFFFu; }
 static uint32_t page_align_up(uint32_t addr)   { return (addr + 0xFFF) & ~0xFFFu; }
 
+/* 防止已损坏的 vma_list 指针被解引用导致内核 panic。 */
+static int vma_node_bad(const struct vma *v) {
+    uint32_t p = (uint32_t)v;
+    if (p < 0x00100000u || p >= 0x10000000u || (p & 3u)) return 1;
+    if (v->start >= v->end || v->end > 0xC0000000u) return 1;
+    return 0;
+}
+
 void vma_init(void) {}
 
 struct vma *vma_find(struct task *t, uint32_t addr) {
     if (!t) return NULL;
-    for (struct vma *v = t->vma_list; v; v = v->next) {
+    struct vma *prev = NULL;
+    for (struct vma *v = t->vma_list; v; prev = v, v = v->next) {
+        if (vma_node_bad(v)) {
+            /* 只切断损坏节点，保留前面仍然有效的映射。 */
+            if (prev) prev->next = NULL;
+            else t->vma_list = NULL;
+            return NULL;
+        }
         if (addr >= v->start && addr < v->end) return v;
         if (addr < v->start) break;
     }
@@ -31,6 +46,7 @@ int vma_insert(struct task *t, uint32_t start, uint32_t end,
     if (start >= end) return EINVAL;
 
     for (struct vma *v = t->vma_list; v; v = v->next) {
+        if (vma_node_bad(v)) { t->vma_list = NULL; break; }
         if (v->start >= end) break;
         if (start < v->end && end > v->start) return EEXIST;
     }
@@ -74,6 +90,7 @@ void vma_remove_range(struct task *t, uint32_t start, uint32_t end) {
     struct vma **pp = &t->vma_list;
     while (*pp) {
         struct vma *v = *pp;
+        if (vma_node_bad(v)) { *pp = NULL; return; }
         if (v->end <= start || v->start >= end) {
             pp = &v->next;
             continue;
@@ -135,6 +152,7 @@ void vma_free_all(struct task *t) {
     if (!t) return;
     struct vma *v = t->vma_list;
     while (v) {
+        if (vma_node_bad(v)) { t->vma_list = NULL; return; }
         struct vma *next = v->next;
         if (v->shm) shm_unref(v->shm);
         if (v->filemap) file_map_unref(v->filemap);

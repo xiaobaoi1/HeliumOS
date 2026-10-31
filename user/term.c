@@ -8,6 +8,9 @@
 #include "string.h"
 #include "wm_proto.h"
 #include "shm_layout.h"
+#include "methylui/mui_surface.h"
+#include "methylui/mui_widget.h"
+#include "methylui/mui_scroll.h"
 #include <stdint.h>
 
 static int g_master = -1;
@@ -38,12 +41,9 @@ static void load_font(void) {
         return;
     }
 
-    dprintf(2, "[term] font: alloc ptr/width/data...\n");
     g_glyph_ptr   = (unsigned char**)malloc(MAX_CP * sizeof(unsigned char*));
     g_glyph_width = (unsigned char*)malloc(MAX_CP);
     g_glyph_data  = (unsigned char*)malloc(GLYPH_DATA_MAX);
-    dprintf(2, "[term] font: alloc done %p %p %p\n",
-            g_glyph_ptr, g_glyph_width, g_glyph_data);
     if (!g_glyph_ptr || !g_glyph_width || !g_glyph_data) {
         dprintf(2, "term: font alloc failed\n");
         fs_close(fd);
@@ -118,7 +118,6 @@ static void load_font(void) {
             }
         }
     }
-    dprintf(2, "[term] font: read loop done, %d glyphs\n", loaded);
 
     fs_close(fd);
     dprintf(2, "term: font loaded %d glyphs (%u bytes), skipped %d\n",
@@ -138,8 +137,19 @@ static int g_cursor_visible = 1;
 static int g_cursor_drawn = 0;
 static int g_cursor_drawn_x = 0, g_cursor_drawn_y = 0;
 static uint32_t g_cursor_save[CELL_W * FONT_H];
-static unsigned int *g_pixels;
+static unsigned int *g_pixels;        /* 当前显示（shm） */
 static struct shm_hdr *g_shm = NULL;
+
+/* ---------- 滚动条 + 回滚 ---------- */
+#define TERM_SCROLL_W   8
+#define TERM_HIST_LINES 32            /* 回滚 32 行（每行 FONT_H 像素行） */
+static int g_text_w;                  /* 终端文本区宽度（不含滚动条） */
+static unsigned int *g_live;          /* 滚回时保存的实时屏幕 */
+static unsigned int *g_hist;          /* 历史行环形缓冲：LINES * FONT_H * g_cw */
+static int g_hist_start, g_hist_count;
+static struct mui_scroll g_scroll;
+static int g_scrolled;                /* 当前显示历史视图 */
+static int g_view_dirty;
 
 static const uint32_t ansi_palette[16] = {
     0x000000, 0xAA0000, 0x00AA00, 0xAA5500,
@@ -156,7 +166,7 @@ static int ansi_params[8];
 static int ansi_np = 0;
 static int ansi_cur = -1;
 
-static void mark_dirty(int x0, int y0, int x1, int y1) {
+static void shm_mark_dirty(int x0, int y0, int x1, int y1) {
     if (!g_shm) return;
     if (x1 <= x0 || y1 <= y0) return;
     if (x0 < 0) x0 = 0;
@@ -179,9 +189,21 @@ static void mark_dirty(int x0, int y0, int x1, int y1) {
     }
 }
 
+/* 滚回历史时，实时屏幕的绘制不可见，不标记 shm 脏区 */
+static void mark_dirty(int x0, int y0, int x1, int y1) {
+    if (g_scrolled) return;
+    shm_mark_dirty(x0, y0, x1, y1);
+}
+
+/* 历史视图 / 滚动条本身的绘制需要强制标记 */
+static void view_mark_dirty(int x0, int y0, int x1, int y1) {
+    shm_mark_dirty(x0, y0, x1, y1);
+}
+
 static void put_pixel(int x, int y, unsigned int rgb) {
     if (x < 0 || y < 0 || x >= g_cw || y >= g_ch) return;
-    g_pixels[y * g_cw + x] = rgb;
+    unsigned int *dst = (g_scrolled && g_live) ? g_live : g_pixels;
+    dst[y * g_cw + x] = rgb;
 }
 
 static void fill_rect(int x, int y, int w, int h, unsigned int rgb) {
@@ -224,15 +246,50 @@ static void draw_char_at(int px, int py, uint32_t cp,
     }
 }
 
+static unsigned int *hist_line(int i) {
+    int slot = (g_hist_start + i) % TERM_HIST_LINES;
+    return g_hist + (size_t)slot * FONT_H * g_cw;
+}
+
+static void hist_push_line(unsigned int *src) {
+    if (!g_hist || !src) return;
+    if (g_hist_count >= TERM_HIST_LINES) {
+        g_hist_start = (g_hist_start + 1) % TERM_HIST_LINES;
+        g_hist_count = TERM_HIST_LINES - 1;
+    }
+    int slot = (g_hist_start + g_hist_count) % TERM_HIST_LINES;
+    memcpy(g_hist + (size_t)slot * FONT_H * g_cw, src,
+           (size_t)FONT_H * g_cw * 4);
+    g_hist_count++;
+}
+
 static void scroll(void) {
     g_cursor_drawn = 0;
+
+    unsigned int *src = (g_scrolled && g_live) ? g_live : g_pixels;
+    int at_bottom = (g_scroll.value >= g_hist_count);
+
+    /* 即将滚出的顶部一行进入历史 */
+    hist_push_line(src);
+
     for (int y = 0; y < g_ch - FONT_H; y++) {
-        unsigned int *dst = g_pixels + y * g_cw;
-        unsigned int *src = g_pixels + (y + FONT_H) * g_cw;
-        memcpy(dst, src, g_cw * 4);
+        unsigned int *dst = src + y * g_cw;
+        unsigned int *s = src + (y + FONT_H) * g_cw;
+        memcpy(dst, s, g_cw * 4);
     }
-    fill_rect(0, g_ch - FONT_H, g_cw, FONT_H, g_bg);
-    mark_dirty(0, 0, g_cw, g_ch);
+    for (int y = g_ch - FONT_H; y < g_ch; y++) {
+        unsigned int *dst = src + y * g_cw;
+        for (int x = 0; x < g_cw; x++) dst[x] = g_bg;
+    }
+
+    mui_scroll_set_range(&g_scroll, g_hist_count + g_rows, g_rows);
+    if (at_bottom)
+        g_scroll.value = g_hist_count;
+    else if (g_scroll.value > g_hist_count)
+        g_scroll.value = g_hist_count;
+    g_scroll.base.dirty = 1;
+
+    if (!g_scrolled) mark_dirty(0, 0, g_cw, g_ch);
 }
 
 static void newline(void) {
@@ -301,6 +358,7 @@ static void render_cp(uint32_t cp) {
 }
 
 static void cursor_restore(void) {
+    if (g_scrolled) { g_cursor_drawn = 0; return; }
     if (!g_cursor_drawn || !g_shm) return;
     int px = g_cursor_drawn_x * CELL_W;
     int py = g_cursor_drawn_y * FONT_H;
@@ -320,6 +378,7 @@ static void cursor_restore(void) {
 }
 
 static void cursor_draw(void) {
+    if (g_scrolled) return;
     if (!g_cursor_visible || !g_shm) return;
 
     int px = g_cx * CELL_W;
@@ -344,6 +403,122 @@ static void cursor_draw(void) {
     }
 
     mark_dirty(px, py + FONT_H - 2, px + CELL_W, py + FONT_H);
+}
+
+/* ---------- 滚动条 / 回滚视图 ---------- */
+
+static void term_scroll_on_change(struct mui_scroll *s) {
+    (void)s;
+    g_view_dirty = 1;
+}
+
+static void term_scrollbar_paint(void) {
+    if (!g_pixels || !g_shm) return;
+
+    g_scroll.base.x = g_cw - TERM_SCROLL_W;
+    g_scroll.base.y = 0;
+    g_scroll.base.w = TERM_SCROLL_W;
+    g_scroll.base.h = g_ch;
+    if (g_scroll.base.w < 4) g_scroll.base.w = 4;
+    if (g_scroll.base.h < 4) g_scroll.base.h = 4;
+    g_scroll.base.dirty = 1;
+
+    struct mui_surface s;
+    memset(&s, 0, sizeof(s));
+    s.pixels = g_pixels;
+    s.w = g_cw;
+    s.h = g_ch;
+    s.hdr = g_shm;
+
+    mui_widget_paint(&g_scroll.base, &s, g_scroll.base.x, 0);
+    view_mark_dirty(g_scroll.base.x, 0, g_cw, g_ch);
+}
+
+static void term_scroll_init(void) {
+    mui_scroll_init(&g_scroll, g_cw - TERM_SCROLL_W, 0,
+                    TERM_SCROLL_W, g_ch);
+    g_scroll.on_change = term_scroll_on_change;
+    mui_scroll_set_range(&g_scroll, g_hist_count + g_rows, g_rows);
+    g_scroll.value = g_hist_count;
+    g_scroll.base.dirty = 1;
+}
+
+static void term_compose_view(int v) {
+    if (!g_live || !g_pixels) return;
+
+    int hist = g_hist_count;
+    if (v < 0) v = 0;
+    if (v > hist) v = hist;
+
+    for (int sy = 0; sy < g_rows; sy++) {
+        int idx = v + sy;
+        unsigned int *src = NULL;
+        if (idx < hist) {
+            src = hist_line(idx);
+        } else if (idx < hist + g_rows) {
+            src = g_live + (size_t)(idx - hist) * FONT_H * g_cw;
+        }
+
+        unsigned int *dst = g_pixels + (size_t)sy * FONT_H * g_cw;
+        if (src) {
+            for (int r = 0; r < FONT_H; r++) {
+                memcpy(dst + r * g_cw, src + r * g_cw,
+                       (size_t)g_text_w * 4);
+                for (int x = g_text_w; x < g_cw; x++)
+                    dst[r * g_cw + x] = g_bg;
+            }
+        } else {
+            for (int r = 0; r < FONT_H; r++) {
+                for (int x = 0; x < g_cw; x++)
+                    dst[r * g_cw + x] = g_bg;
+            }
+        }
+    }
+
+    for (int y = g_rows * FONT_H; y < g_ch; y++) {
+        unsigned int *dst = g_pixels + y * g_cw;
+        for (int x = 0; x < g_cw; x++) dst[x] = g_bg;
+    }
+
+    view_mark_dirty(0, 0, g_cw, g_ch);
+}
+
+static void term_view_update(void) {
+    int hist = g_hist_count;
+    int v = mui_scroll_value(&g_scroll);
+    if (v < 0) v = 0;
+    if (v > hist) v = hist;
+    int want = (v < hist);
+
+    if (want && !g_scrolled) {
+        if (g_live) {
+            cursor_restore();
+            memcpy(g_live, g_pixels, (size_t)g_cw * g_ch * 4);
+            g_scrolled = 1;
+        }
+    } else if (!want && g_scrolled) {
+        if (g_live)
+            memcpy(g_pixels, g_live, (size_t)g_cw * g_ch * 4);
+        g_scrolled = 0;
+        g_cursor_drawn = 0;
+        cursor_draw();
+    }
+
+    if (g_scrolled) {
+        term_compose_view(v);
+    } else if (!g_cursor_drawn) {
+        cursor_draw();
+    }
+
+    term_scrollbar_paint();
+    g_view_dirty = 0;
+}
+
+static void term_present(void) {
+    if (g_scrolled)
+        term_view_update();
+    else
+        term_scrollbar_paint();
 }
 
 /* ---------- ANSI ---------- */
@@ -545,29 +720,51 @@ static int term_resize(int new_w, int new_h) {
     snprintf(new_shm, sizeof(new_shm), "term-%d-r%d",
              (int)g_my_ev_name[8] - '0', g_resize_gen);
 
+    size_t new_live_size = (size_t)new_w * (size_t)new_h * 4;
+    unsigned int *new_live = (unsigned int*)malloc(new_live_size);
+    if (new_live) memset(new_live, 0, new_live_size);
+
+    /* 回滚缓冲是可选优化：分配失败不应阻止 canvas 跟随窗口 resize。 */
+    size_t new_hist_size = (size_t)TERM_HIST_LINES * FONT_H *
+                           (size_t)new_w * 4;
+    unsigned int *new_hist = (unsigned int*)malloc(new_hist_size);
+    if (new_hist) memset(new_hist, 0, new_hist_size);
+
     int new_shm_size = shm_total_size(new_w, new_h);
     int new_id = shm_open(new_shm, new_shm_size, 0);
-    if (new_id < 0) return -1;
+    if (new_id < 0) { free(new_live); free(new_hist); return -1; }
 
     unsigned int new_addr = mmap(0, new_shm_size,
                                  PROT_READ | PROT_WRITE,
                                  MAP_SHARED, new_id, 0);
-    if ((int)new_addr <= 0) return -1;
+    if ((int)new_addr <= 0) { free(new_live); free(new_hist); return -1; }
 
     struct shm_hdr *new_hdr = (struct shm_hdr*)new_addr;
     unsigned int *new_pixels = (unsigned int*)(new_addr + SHM_HDR_SIZE);
-    memset(new_pixels, 0, new_w * new_h * 4);
 
-    /* 保留旧内容：按 min 尺寸逐行拷贝，左上角对齐 */
-    if (g_pixels) {
-        int copy_w = (g_cw < new_w) ? g_cw : new_w;
+    /* 保留旧内容：按 min 尺寸逐行拷贝，左上角对齐。
+     * 滚回历史时实时屏幕在 g_live；否则在 shm 中（先擦掉光标）。 */
+    if (!g_scrolled) cursor_restore();
+    unsigned int *old_src = (g_scrolled && g_live) ? g_live : g_pixels;
+
+    unsigned int *live_dst = new_live ? new_live : new_pixels;
+    for (size_t i = 0; i < new_live_size / 4; i++)
+        live_dst[i] = g_bg;
+
+    if (old_src) {
+        /* 只复制旧文本区，不要复制旧的滚动条列——
+         * 否则 resize 后窗口中间会留下一条旧滚动条。 */
+        int copy_w = (g_text_w < new_w) ? g_text_w : new_w;
         int copy_h = (g_ch < new_h) ? g_ch : new_h;
         for (int y = 0; y < copy_h; y++) {
-            memcpy(new_pixels + y * new_w,
-                   g_pixels   + y * g_cw,
-                   copy_w * 4);
+            memcpy(live_dst + y * new_w,
+                   old_src + y * g_cw,
+                   (size_t)copy_w * 4);
         }
     }
+    if (new_live)
+        memcpy(new_pixels, new_live, new_live_size);
+
     new_hdr->counter = 0;
     new_hdr->cur_x0 = SHM_DIRTY_EMPTY; new_hdr->cur_y0 = 0;
     new_hdr->cur_x1 = 0; new_hdr->cur_y1 = 0;
@@ -586,21 +783,37 @@ static int term_resize(int new_w, int new_h) {
     req.new_h = new_h;
 
     if (pipe_write(g_inbox_w, &req, sizeof(req)) != sizeof(req)) {
+        free(new_live);
+        free(new_hist);
         return -1;
     }
 
     /* 切换 shm */
     munmap((unsigned int)g_shm, shm_total_size(g_cw, g_ch));
 
+    if (g_live) free(g_live);
+    if (g_hist) free(g_hist);
+
     g_shm = new_hdr;
     g_pixels = new_pixels;
+    g_live = new_live;
+    g_hist = new_hist;
+    g_hist_start = g_hist_count = 0;
+    g_scrolled = 0;
+
     g_cw = new_w;
     g_ch = new_h;
-    g_cols = new_w / CELL_W;
+    g_text_w = new_w - TERM_SCROLL_W;
+    if (g_text_w < CELL_W) g_text_w = CELL_W;
+    g_cols = g_text_w / CELL_W;
     g_rows = new_h / FONT_H;
     g_cursor_drawn = 0;
     if (g_cx >= g_cols) g_cx = g_cols - 1;
     if (g_cy >= g_rows) g_cy = g_rows - 1;
+
+    term_scroll_init();
+    term_scrollbar_paint();
+    if (!g_scrolled) cursor_draw();
 
     /* 全屏脏区——首帧全绘 */
     g_shm->cur_x0 = 0;
@@ -614,6 +827,13 @@ static int term_resize(int new_w, int new_h) {
             g_cols, g_rows, g_ch);
     pty_set_winsize(g_master, g_cols, g_rows);
 
+    /* 通知前台应用窗口尺寸已变化：kilo 识别 ESC W 后重新查询尺寸并重绘。
+     * cooked 模式下这个序列会被行规程过滤掉，对 shell 无影响。 */
+    if (g_master >= 0) {
+        char note[2] = { 0x1B, 'W' };
+        pty_write(g_master, note, 2);
+    }
+
     return 0;
 }
 
@@ -621,7 +841,7 @@ static int term_resize(int new_w, int new_h) {
 
 int main(int argc, char **argv) {
     if (argc < 5) {
-        dprintf(2, "usage: TERM <shm_name> <w> <h> <event_pipe>\n");
+        dprintf(2, "usage: TERM <shm_name> <w> <h> <event_pipe> [prog [args...]]\n");
         return 1;
     }
 
@@ -659,8 +879,23 @@ int main(int argc, char **argv) {
     g_shm->pub_x0 = SHM_DIRTY_EMPTY; g_shm->pub_y0 = 0;
     g_shm->pub_x1 = 0; g_shm->pub_y1 = 0;
 
-    g_cols = g_cw / CELL_W;
+    g_text_w = g_cw - TERM_SCROLL_W;
+    if (g_text_w < CELL_W) g_text_w = CELL_W;
+    g_cols = g_text_w / CELL_W;
     g_rows = g_ch / FONT_H;
+
+    size_t live_size = (size_t)g_cw * (size_t)g_ch * 4;
+    g_live = (unsigned int*)malloc(live_size);
+    if (g_live) memset(g_live, 0, live_size);
+
+    size_t hist_size = (size_t)TERM_HIST_LINES * FONT_H * (size_t)g_cw * 4;
+    g_hist = (unsigned int*)malloc(hist_size);
+    if (g_hist) memset(g_hist, 0, hist_size);
+    g_hist_start = g_hist_count = 0;
+    g_scrolled = 0;
+
+    term_scroll_init();
+    term_scrollbar_paint();
 
     g_inbox_w = pipe_open(WM_INBOX_NAME, 1);
     if (g_inbox_w < 0) {
@@ -676,6 +911,10 @@ int main(int argc, char **argv) {
     g_master = fds[0];
     int slave  = fds[1];
 
+    /* 先设好窗口大小再起子进程：kilo 启动时立刻 ioctl(TIOCGWINSZ)，
+     * 此时若还是 0x0 会退化成 DSR 查询（终端不响应）而启动失败。 */
+    pty_set_winsize(g_master, g_cols, g_rows);
+
     struct spawn_params sp = {
         .size = sizeof(sp),
         .in_fd = SPAWN_FD_INHERIT,
@@ -685,10 +924,22 @@ int main(int argc, char **argv) {
         .in_pty = slave, .out_pty = slave, .err_pty = slave,
         .flags = 0, .envp = 0, .out_pid = 0,
     };
-    int sh = spawn("SHELL", NULL, &sp);
+    /* 默认在 pty 上起交互 shell；若带第 6 个及以后的参数，
+     * 则直接运行该命令 —— 桌面用 "TERM ... KILO SYS:\kmain.c"
+     * 就能在终端里打开 kilo。 */
+    int sh;
+    if (argc >= 6) {
+        char *cmd_argv[8];
+        int cmd_argc = 0;
+        for (int i = 5; i < argc && cmd_argc < 7; i++)
+            cmd_argv[cmd_argc++] = argv[i];
+        cmd_argv[cmd_argc] = NULL;
+        sh = spawn(argv[5], cmd_argv, &sp);
+    } else {
+        sh = spawn("SHELL", NULL, &sp);
+    }
     dprintf(2, "term: cols=%d rows=%d ch=%d\n", g_cols, g_rows, g_ch);
-    pty_set_winsize(g_master, g_cols, g_rows);
-    if (sh < 0) { dprintf(2, "term: spawn SHELL %d\n", sh); return 1; }
+    if (sh < 0) { dprintf(2, "term: spawn %s %d\n", argc >= 6 ? argv[5] : "SHELL", sh); return 1; }
     pty_set_fg(g_master, sp.out_pid);
 
     for (;;) {
@@ -698,6 +949,11 @@ int main(int argc, char **argv) {
             if (n != sizeof(ev)) break;
 
             if (ev.type == WM_EV_KEY) {
+                /* 滚回历史时按任意键回到实时屏幕（与常见终端一致） */
+                if (g_scrolled) {
+                    mui_scroll_end(&g_scroll);
+                    term_view_update();
+                }
                 char c = (char)ev.code;
                 pty_write(g_master, &c, 1);
             } else if (ev.type == WM_EV_RESIZE) {
@@ -712,6 +968,48 @@ int main(int argc, char **argv) {
                 strncpy(dr.shm_name, g_my_shm_name, sizeof(dr.shm_name) - 1);
                 pipe_write(g_inbox_w, &dr, sizeof(dr));
                 return 0;
+            } else if (ev.type == WM_EV_MOUSE_MOVE) {
+                int over = (ev.x >= g_cw - TERM_SCROLL_W);
+                if (over || g_scroll.dragging) {
+                    if (over && !g_scroll.base.hover) {
+                        g_scroll.base.hover = 1;
+                        term_view_update();
+                    }
+                    if (g_scroll.base.on_mouse_move)
+                        g_scroll.base.on_mouse_move(&g_scroll.base,
+                                                    ev.x - g_scroll.base.x,
+                                                    ev.y - g_scroll.base.y);
+                    if (g_view_dirty)
+                        term_view_update();
+                } else if (g_scroll.base.hover) {
+                    g_scroll.base.hover = 0;
+                    term_view_update();
+                }
+            } else if (ev.type == WM_EV_MOUSE_LEAVE) {
+                if (g_scroll.base.hover && !g_scroll.dragging) {
+                    g_scroll.base.hover = 0;
+                    term_view_update();
+                }
+            } else if (ev.type == WM_EV_MOUSE_DOWN &&
+                       (ev.code & WM_BTN_LEFT) &&
+                       ev.x >= g_cw - TERM_SCROLL_W) {
+                g_scroll.base.hover = 1;
+                if (g_scroll.base.on_mouse_down)
+                    g_scroll.base.on_mouse_down(&g_scroll.base,
+                                                ev.x - g_scroll.base.x,
+                                                ev.y - g_scroll.base.y, 1);
+                term_view_update();
+            } else if (ev.type == WM_EV_MOUSE_UP) {
+                if (g_scroll.dragging) {
+                    if (g_scroll.base.on_mouse_up)
+                        g_scroll.base.on_mouse_up(&g_scroll.base,
+                                                  ev.x - g_scroll.base.x,
+                                                  ev.y - g_scroll.base.y, 1);
+                    term_view_update();
+                }
+            } else if (ev.type == WM_EV_WHEEL) {
+                mui_scroll_by(&g_scroll, -(int)ev.code);
+                term_view_update();
             }
             /* 鼠标 / 焦点事件忽略 */
         }
@@ -726,7 +1024,8 @@ int main(int argc, char **argv) {
                     process_byte((unsigned char)buf[i]);
             }
 
-            cursor_draw();
+            term_present();
+            if (!g_scrolled) cursor_draw();
         }
 
         if (g_shm && (g_shm->pub_x0 == SHM_DIRTY_EMPTY ||

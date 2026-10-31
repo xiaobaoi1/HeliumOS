@@ -348,7 +348,15 @@ static uint32_t mmap_find_free(struct task *t, uint32_t len) {
     uint32_t addr = MMAP_BASE;
     while (addr + len <= MMAP_END) {
         int free_here = 1;
-        for (struct vma *v = t->vma_list; v; v = v->next) {
+        struct vma *prev = NULL;
+        for (struct vma *v = t->vma_list; v; prev = v, v = v->next) {
+            uint32_t vp = (uint32_t)v;
+            if (vp < 0x00100000u || vp >= 0x10000000u || (vp & 3u) ||
+                v->start >= v->end) {
+                if (prev) prev->next = NULL;
+                else t->vma_list = NULL;
+                return 0;
+            }
             if (v->start < addr + len && v->end > addr) {
                 free_here = 0;
                 addr = v->end;
@@ -448,8 +456,9 @@ static int sys_munmap(uint32_t addr, uint32_t length) {
         uint32_t phys = vmm_get_phys(cur->pgd, page);
         if (phys) {
             struct vma *v = vma_find(cur, page);
-            /* 共享页由 shm 对象管理，不释放；只解映射 */
-            int is_shared = (v && v->shm);
+            /* 共享页由 shm 对象管理，不释放；只解映射。
+             * VMA 链表损坏时按共享页保守处理，避免错误释放物理页。 */
+            int is_shared = (!v || v->shm);
             vmm_unmap_user_page(cur->pgd, page);
             if (!is_shared) pmm_free_page(phys & ~0xFFF);
         }

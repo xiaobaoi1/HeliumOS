@@ -3,6 +3,10 @@
 
 static void put_pixel(struct mui_surface *s, int x, int y, unsigned int rgb) {
     if (x < 0 || y < 0 || x >= s->w || y >= s->h) return;
+    if (s->clip_on) {
+        if (x < s->clip_x0 || y < s->clip_y0 ||
+            x >= s->clip_x1 || y >= s->clip_y1) return;
+    }
     s->pixels[y * s->w + x] = rgb;
 }
 
@@ -14,6 +18,12 @@ void mui_mark_dirty(struct mui_surface *s,
     if (y0 < 0) y0 = 0;
     if (x1 > s->w) x1 = s->w;
     if (y1 > s->h) y1 = s->h;
+    if (s->clip_on) {
+        if (x0 < s->clip_x0) x0 = s->clip_x0;
+        if (y0 < s->clip_y0) y0 = s->clip_y0;
+        if (x1 > s->clip_x1) x1 = s->clip_x1;
+        if (y1 > s->clip_y1) y1 = s->clip_y1;
+    }
     if (x1 <= x0 || y1 <= y0) return;
 
     uint32_t ux0 = (uint32_t)x0, uy0 = (uint32_t)y0;

@@ -17,8 +17,9 @@
 
 static struct mouse_state g_mouse = { 0, 0, 0, 0 };
 
-static uint8_t g_packet[3];
+static uint8_t g_packet[4];
 static int     g_packet_idx = 0;
+static int     g_packet_size = 3;   /* IntelliMouse（滚轮）为 4 */
 
 /* ---------- 8042 通信 ---------- */
 
@@ -51,6 +52,13 @@ static uint8_t ps2_read_data(void) {
 
 /* ---------- 初始化 ---------- */
 
+/* 向鼠标发命令并读 ACK */
+static void mouse_cmd(uint8_t cmd) {
+    ps2_write_cmd(0xD4);
+    ps2_write_data(cmd);
+    (void)ps2_read_data();   /* 0xFA */
+}
+
 void mouse_init(void) {
     /* 1. 启用 auxiliary device（鼠标） */
     ps2_write_cmd(0xA8);
@@ -67,12 +75,20 @@ void mouse_init(void) {
     ps2_write_cmd(0x60);
     ps2_write_data(cfg);
 
-    /* 5. 告诉鼠标启用数据报告 */
-    ps2_write_cmd(0xD4);
-    ps2_write_data(0xF4);
-    ps2_read_data();   /* ACK */
+    /* 5. 尝试进入 IntelliMouse 模式（滚轮）：采样率 200/100/80 → 设备 ID 3。
+     *    失败则退回 3 字节包（无滚轮），不影响普通移动/按键。 */
+    mouse_cmd(0xF3); mouse_cmd(0xC8);   /* 200 */
+    mouse_cmd(0xF3); mouse_cmd(0x64);   /* 100 */
+    mouse_cmd(0xF3); mouse_cmd(0x50);   /* 80  */
+    mouse_cmd(0xF2);                    /* get device ID */
+    (void)ps2_read_data();              /* ACK */
+    uint8_t id = ps2_read_data();
+    g_packet_size = (id == 0x03) ? 4 : 3;
 
-    /* 6. 注册 IRQ 12 */
+    /* 6. 启用数据报告 */
+    mouse_cmd(0xF4);
+
+    /* 7. 注册 IRQ 12 */
     irq_register(12, mouse_handle_irq, "mouse");
 
     /* 初始位置——屏幕中心 */
@@ -82,8 +98,8 @@ void mouse_init(void) {
         g_mouse.y = fb->height / 2;
     }
 
-    kprintf("[MOUSE] Initialized, cursor at (%d, %d)\n",
-            g_mouse.x, g_mouse.y);
+    kprintf("[MOUSE] Initialized, cursor at (%d, %d), wheel=%d\n",
+            g_mouse.x, g_mouse.y, g_packet_size == 4);
 }
 
 struct mouse_state *mouse_get(void) { return &g_mouse; }
@@ -101,7 +117,7 @@ void mouse_handle_irq(void) {
     if (g_packet_idx == 0 && !(b & 0x08)) return;
 
     g_packet[g_packet_idx++] = b;
-    if (g_packet_idx < 3) return;
+    if (g_packet_idx < g_packet_size) return;
     g_packet_idx = 0;
 
     uint8_t flags = g_packet[0];
@@ -139,6 +155,7 @@ void mouse_handle_irq(void) {
         .code = 0,
         .x = g_mouse.x,
         .y = g_mouse.y,
+        .mods = input_get_mods(),
     };
     input_post(&ev_move);
 
@@ -149,7 +166,24 @@ void mouse_handle_irq(void) {
             .code = g_mouse.buttons,
             .x = g_mouse.x,
             .y = g_mouse.y,
+            .mods = input_get_mods(),
         };
         input_post(&ev_btn);
+    }
+
+    /* IntelliMouse 第 4 字节：低 4 位是有符号滚轮增量 */
+    if (g_packet_size == 4) {
+        int wheel = (int8_t)(g_packet[3] << 4);
+        wheel >>= 4;
+        if (wheel != 0) {
+            struct input_event ev_wheel = {
+                .type = INPUT_WHEEL,
+                .code = (uint32_t)wheel,
+                .x = g_mouse.x,
+                .y = g_mouse.y,
+                .mods = input_get_mods(),
+            };
+            input_post(&ev_wheel);
+        }
     }
 }

@@ -145,10 +145,12 @@ enum KEY_ACTION{
         HOME_KEY,
         END_KEY,
         PAGE_UP,
-        PAGE_DOWN
+        PAGE_DOWN,
+        RESIZE_KEY      /* TERM 通知窗口尺寸变化（ESC W） */
 };
 
 void editorSetStatusMessage(const char *fmt, ...);
+void updateWindowSize(void);
 
 /* =========================== Syntax highlights DB =========================
  *
@@ -305,6 +307,10 @@ int editorReadKey(int fd) {
                 case 'H': return HOME_KEY;
                 case 'F': return END_KEY;
                 }
+            }
+            else if (seq[0] == 'W') {
+                /* TERM 在窗口 resize 后写入 ESC W（raw 模式直达 stdin） */
+                return RESIZE_KEY;
             }
             break;
         default:
@@ -1065,6 +1071,12 @@ void editorFind(int fd) {
         editorRefreshScreen();
 
         int c = editorReadKey(fd);
+        if (c == RESIZE_KEY) {
+            updateWindowSize();
+            if (E.screenrows < 1) E.screenrows = 1;
+            if (E.screencols < 1) E.screencols = 1;
+            continue;
+        }
         if (c == DEL_KEY || c == CTRL_H || c == BACKSPACE) {
             if (qlen != 0) query[--qlen] = '\0';
             last_match = -1;
@@ -1219,6 +1231,19 @@ void editorProcessKeypress(int fd) {
     static int quit_times = KILO_QUIT_TIMES;
 
     int c = editorReadKey(fd);
+
+    /* 终端窗口尺寸变化：重新查询行列数，下一帧按新尺寸重绘 */
+    if (c == RESIZE_KEY) {
+        updateWindowSize();
+        if (E.screenrows < 1) E.screenrows = 1;
+        if (E.screencols < 1) E.screencols = 1;
+        if (E.cy > E.screenrows - 1) E.cy = E.screenrows - 1;
+        if (E.cx > E.screencols - 1) E.cx = E.screencols - 1;
+        if (E.cy < 0) E.cy = 0;
+        if (E.cx < 0) E.cx = 0;
+        return;
+    }
+
     switch(c) {
     case ENTER:         /* Enter */
         editorInsertNewline();

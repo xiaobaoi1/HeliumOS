@@ -28,6 +28,7 @@
 #include <shm.h>
 #include <net.h>
 #include <rtl8139.h>
+#include "graphic/graphic.h"
 #include <net_proto.h>
 #include <io.h>
 #include <net_sock.h>
@@ -175,6 +176,7 @@ void kmain(uint32_t magic, uint32_t addr) {
     serial_register_dev();
 
     pci_init();
+    graphic_init();
     ata_init();
     net_init();
 
