@@ -32,15 +32,18 @@ static int hexval(char c) {
 }
 
 static void load_font(void) {
-    int fd = fs_open("SYS:/UNICODE.HEX", FS_O_RDONLY);
+    int fd = fs_open("SYS:/UNIFONT.HEX", FS_O_RDONLY);
     if (fd < 0) {
         dprintf(2, "term: font open failed %d\n", fd);
         return;
     }
 
+    dprintf(2, "[term] font: alloc ptr/width/data...\n");
     g_glyph_ptr   = (unsigned char**)malloc(MAX_CP * sizeof(unsigned char*));
     g_glyph_width = (unsigned char*)malloc(MAX_CP);
     g_glyph_data  = (unsigned char*)malloc(GLYPH_DATA_MAX);
+    dprintf(2, "[term] font: alloc done %p %p %p\n",
+            g_glyph_ptr, g_glyph_width, g_glyph_data);
     if (!g_glyph_ptr || !g_glyph_width || !g_glyph_data) {
         dprintf(2, "term: font alloc failed\n");
         fs_close(fd);
@@ -48,7 +51,7 @@ static void load_font(void) {
     }
     g_glyph_data_used = 0;
 
-    char buf[4096];
+    static char buf[65536];   /* 64KB，跨越多个簇，触发合并读 */
     char line[128];
     int line_len = 0;
     int loaded = 0, skipped = 0;
@@ -115,6 +118,7 @@ static void load_font(void) {
             }
         }
     }
+    dprintf(2, "[term] font: read loop done, %d glyphs\n", loaded);
 
     fs_close(fd);
     dprintf(2, "term: font loaded %d glyphs (%u bytes), skipped %d\n",

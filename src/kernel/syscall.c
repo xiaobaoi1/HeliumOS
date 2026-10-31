@@ -188,10 +188,16 @@ static int wait_impl(struct task *cur, struct task *target,
     if (timeout_ms > 0) deadline = get_ticks() + timeout_ms;
 
     while (1) {
-        /* 被信号打断 */
-        if (cur->pending_signals & ~cur->blocked_signals) {
-            return EINTR;
+        /* 先清理 SIG_IGN 的 pending 信号——它们不该打断 wait */
+        uint32_t pending = cur->pending_signals & ~cur->blocked_signals;
+        for (int i = 1; i < 32; i++) {
+            if ((pending & (1u << i)) &&
+                cur->sig_actions[i].handler == SIG_IGN) {
+                cur->pending_signals &= ~(1u << i);
+                pending &= ~(1u << i);
+            }
         }
+        if (pending) return EINTR;
         /* 1. 目标已退出 */
         if (target) {
             if (target->zombie) {

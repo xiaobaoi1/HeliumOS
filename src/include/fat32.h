@@ -73,6 +73,9 @@ struct fat32_file {
     uint16_t create_date;
     uint16_t mod_time;
     uint16_t mod_date;
+
+    uint32_t cached_cluster;        /* 缓存指向的簇号，0 = 无效 */
+    uint32_t cached_cluster_offset; /* cached_cluster 是文件第几个簇 */
 };
 
 /* ★ 新增：FAT32 卷上下文。每个挂载点一个 */

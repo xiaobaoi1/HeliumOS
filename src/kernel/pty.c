@@ -476,12 +476,24 @@ int pty_dup_handle(struct task *parent, int parent_h,
 int sys_pty_set_fg(int h, uint32_t pid) {
     struct task *cur = get_current_task();
     if (!cur) return EINVAL;
-    if (h < 0 || h >= PTY_MAX_HANDLES) return EINVAL;
-    if (!cur->pty_handles[h].used) return EINVAL;
 
-    struct pty_pair *p = cur->pty_handles[h].pair;
+    struct pty_pair *p = NULL;
+    if (h == -1) {
+        /* 用当前进程 stdin slot 的 pty */
+        struct io_slot *slot = &cur->stdin_slot;
+        if (slot->type != IO_SLOT_PTY_SLAVE &&
+            slot->type != IO_SLOT_PTY_MASTER)
+            return EINVAL;
+        int ph = slot->fd;
+        if (ph < 0 || ph >= PTY_MAX_HANDLES) return EINVAL;
+        if (!cur->pty_handles[ph].used) return EINVAL;
+        p = cur->pty_handles[ph].pair;
+    } else {
+        if (h < 0 || h >= PTY_MAX_HANDLES) return EINVAL;
+        if (!cur->pty_handles[h].used) return EINVAL;
+        p = cur->pty_handles[h].pair;
+    }
     if (!p) return EINVAL;
-
     p->fg_pid = pid;
     return OK;
 }

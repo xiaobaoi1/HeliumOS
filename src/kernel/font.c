@@ -20,8 +20,8 @@ void font_init(struct fat32_volume *vol) {
     if (!vol) { kprintf("[FONT] no volume\n"); return; }
 
     struct fat32_file file;
-    if (fat32_open_file(vol, "/UNICODE.HEX", &file) != OK) {
-        kprintf("[FONT] cannot open /UNICODE.HEX\n");
+    if (fat32_open_file(vol, "/UNIFONT.HEX", &file) != OK) {
+        kprintf("[FONT] cannot open /UNIFONT.HEX\n");
         return;
     }
 

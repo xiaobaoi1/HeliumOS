@@ -14,7 +14,7 @@ static int hexval(char c) {
 void mui_font_load(void) {
     if (g_ok) return;
 
-    int fd = fs_open("SYS:/UNICODE.HEX", FS_O_RDONLY);
+    int fd = fs_open("SYS:/UNIFONT.HEX", FS_O_RDONLY);
     if (fd < 0) return;
 
     char buf[512], line[128];

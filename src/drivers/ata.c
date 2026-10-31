@@ -163,6 +163,43 @@ int ata_read_sector(const struct ata_device *dev, uint32_t lba, uint8_t *buffer)
     return -1;
 }
 
+int ata_read_sectors(const struct ata_device *dev, uint32_t lba,
+                     uint32_t count, uint8_t *buffer) {
+    if (!dev || !dev->present || !buffer || count == 0 || count > 256) {
+        if (buffer && count > 0) memset(buffer, 0, count * 512);
+        return -1;
+    }
+
+    uint16_t io = dev->io_base;
+    uint8_t drive_sel = 0xE0 | (dev->drive << 4) | ((lba >> 24) & 0x0F);
+
+    for (int retry = 0; retry < 3; retry++) {
+        outb(io + ATA_REG_DRIVE, drive_sel);
+        outb(io + ATA_REG_SECTOR_COUNT, (count == 256) ? 0 : (uint8_t)count);
+        outb(io + ATA_REG_LBA_LOW,  (lba)       & 0xFF);
+        outb(io + ATA_REG_LBA_MID,  (lba >> 8)  & 0xFF);
+        outb(io + ATA_REG_LBA_HIGH, (lba >> 16) & 0xFF);
+        outb(io + ATA_REG_COMMAND, ATA_CMD_READ_PIO);
+
+        int ok = 1;
+        for (uint32_t s = 0; s < count; s++) {
+            if (!ata_wait_bsy(io)) { ok = 0; break; }
+            if (!ata_wait_drq(io)) { ok = 0; break; }
+            uint16_t *p = (uint16_t*)(buffer + s * 512);
+            for (int i = 0; i < 256; i++)
+                p[i] = inw(io + ATA_REG_DATA);
+        }
+        if (!ok) continue;
+        if (!ata_wait_bsy(io)) continue;
+        uint8_t status = inb(io + ATA_REG_STATUS);
+        if (status & ATA_SR_ERR) continue;
+        return 0;
+    }
+
+    memset(buffer, 0, count * 512);
+    return -1;
+}
+
 int ata_write_sector(const struct ata_device *dev, uint32_t lba, const uint8_t *buffer) {
     if (!dev || !dev->present || !buffer) return -1;
     uint16_t io = dev->io_base;
