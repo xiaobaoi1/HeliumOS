@@ -1,5 +1,7 @@
 #include "methylui/mui_list.h"
 #include "string.h"
+#include "unicode_font.h"
+#include "methylui/mui_font.h"
 
 #define LIST_ICON_W 16
 #define LIST_TEXT_X 24
@@ -148,10 +150,17 @@ static void list_paint_row(struct mui_list *l, struct mui_surface *s,
     if (text_w < MUI_FONT_W) text_w = MUI_FONT_W;
     int ty = y + (l->row_h - MUI_FONT_H) / 2;
     int tx = ax + LIST_TEXT_X;
-    int max_chars = text_w / MUI_FONT_W;
-    for (int k = 0; k < max_chars && l->items[idx].text[k]; k++) {
-        mui_draw_char(s, tx + k * MUI_FONT_W, ty,
-                      (unsigned char)l->items[idx].text[k], l->fg, bg);
+    int limit_x = tx + text_w;
+    const unsigned char *p = (const unsigned char*)l->items[idx].text;
+    while (*p) {
+        uint32_t cp;
+        int n = ufont_utf8_decode(p, &cp);
+        int cw = mui_font_width((int)cp);
+        if (!cw) cw = MUI_FONT_W;
+        if (tx + cw > limit_x) break;
+        mui_draw_char(s, tx, ty, cp, l->fg, bg);
+        tx += cw;
+        p += n;
     }
 }
 
