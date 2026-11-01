@@ -35,10 +35,36 @@ static void putc_str(char c, void *ctx) {
 
 /* ---------- 无符号整数 ---------- */
 
-static void print_uint(putc_fn putc, void *ctx, uint32_t v,
-                       int base, int uppercase,
-                       int width, int zero_pad, int left_align) {
-    char buf[32];
+/* 64 位除以小整数（base ≤ 16），只用 32 位运算。
+ * 返回余数；*v 被更新为商。
+ * 这样避免在 -nostdlib 链接下产生 __udivdi3 / __umoddi3 依赖。 */
+static uint32_t divmod64(uint64_t *v, uint32_t base) {
+    uint64_t x = *v;
+    uint64_t q = 0;
+    uint32_t r = 0;
+
+    /* 跳过前导零 */
+    int top = -1;
+    for (int i = 63; i >= 0; i--) {
+        if ((x >> i) & 1u) { top = i; break; }
+    }
+
+    for (int i = top; i >= 0; i--) {
+        r = (r << 1) | (uint32_t)((x >> i) & 1u);
+        q <<= 1;
+        if (r >= base) {
+            r -= base;
+            q |= 1;
+        }
+    }
+
+    *v = q;
+    return r;
+}
+
+static void print_uint(putc_fn putc, void *ctx, uint64_t v, int base,
+                       int uppercase, int width, int zero_pad, int left_align) {
+    char buf[24];
     int len = 0;
     const char *digits = uppercase ? "0123456789ABCDEF"
                                    : "0123456789abcdef";
@@ -47,8 +73,8 @@ static void print_uint(putc_fn putc, void *ctx, uint32_t v,
         buf[len++] = '0';
     } else {
         while (v > 0) {
-            buf[len++] = digits[v % base];
-            v /= base;
+            uint32_t d = divmod64(&v, (uint32_t)base);
+            buf[len++] = digits[d];
         }
     }
 
@@ -71,21 +97,21 @@ static void print_int(putc_fn putc, void *ctx, int64_t v,
     char buf[24];
     int len = 0;
     int neg = 0;
-    uint32_t u;
+    uint64_t u;
 
     if (v < 0) {
         neg = 1;
-        u = (uint32_t)(-v);
+        u = ~(uint64_t)v + 1;
     } else {
-        u = (uint32_t)v;
+        u = (uint64_t)v;
     }
 
     if (u == 0) {
         buf[len++] = '0';
     } else {
         while (u > 0) {
-            buf[len++] = '0' + (u % 10);
-            u /= 10;
+            uint32_t d = divmod64(&u, 10);
+            buf[len++] = '0' + d;
         }
     }
 
@@ -159,35 +185,59 @@ static void vformat(putc_fn putc, void *ctx, const char *fmt, va_list ap) {
             }
         }
 
+        /* 长度修饰符：l / ll / h / hh / z / j
+         * 32 位下 size_t = unsigned int，intmax_t = long long。
+         * 必须消费正确的字节数，否则 va_arg 栈错位。 */
         int is_long = 0;
-        if (*fmt == 'l') { is_long = 1; fmt++; }
+        int is_long_long = 0;
+        int is_size = 0;
+
+        if (*fmt == 'l') {
+            fmt++;
+            if (*fmt == 'l') { is_long_long = 1; fmt++; }
+            else             { is_long = 1; }
+        } else if (*fmt == 'h') {
+            fmt++;
+            if (*fmt == 'h') fmt++;   /* hh 和 h 在 32 位下 va_arg 都是 int（提升） */
+            /* short 在变参中被提升为 int，无需特殊处理 */
+        } else if (*fmt == 'z') {
+            is_size = 1; fmt++;
+        } else if (*fmt == 'j') {
+            is_long_long = 1; fmt++;
+        }
 
         switch (*fmt) {
-            case 'd':
+                        case 'd':
             case 'i': {
-                int64_t v = is_long ? (int64_t)va_arg(ap, long)
-                                    : (int64_t)va_arg(ap, int);
+                int64_t v;
+                if (is_long_long)      v = va_arg(ap, long long);
+                else if (is_long)      v = va_arg(ap, long);
+                else if (is_size)      v = (int64_t)va_arg(ap, unsigned int);
+                else                   v = va_arg(ap, int);
                 print_int(putc, ctx, v, width, zero_pad, left_align);
                 break;
             }
             case 'u': {
-                uint32_t v = is_long
-                    ? (uint32_t)va_arg(ap, unsigned long)
-                    : va_arg(ap, unsigned int);
+                uint64_t v;
+                if (is_long_long)      v = va_arg(ap, unsigned long long);
+                else if (is_long)      v = (uint64_t)va_arg(ap, unsigned long);
+                else                   v = va_arg(ap, unsigned int);
                 print_uint(putc, ctx, v, 10, 0, width, zero_pad, left_align);
                 break;
             }
             case 'x': {
-                uint32_t v = is_long
-                    ? (uint32_t)va_arg(ap, unsigned long)
-                    : va_arg(ap, unsigned int);
+                uint64_t v;
+                if (is_long_long)      v = va_arg(ap, unsigned long long);
+                else if (is_long)      v = (uint64_t)va_arg(ap, unsigned long);
+                else                   v = va_arg(ap, unsigned int);
                 print_uint(putc, ctx, v, 16, 0, width, zero_pad, left_align);
                 break;
             }
             case 'X': {
-                uint32_t v = is_long
-                    ? (uint32_t)va_arg(ap, unsigned long)
-                    : va_arg(ap, unsigned int);
+                uint64_t v;
+                if (is_long_long)      v = va_arg(ap, unsigned long long);
+                else if (is_long)      v = (uint64_t)va_arg(ap, unsigned long);
+                else                   v = va_arg(ap, unsigned int);
                 print_uint(putc, ctx, v, 16, 1, width, zero_pad, left_align);
                 break;
             }

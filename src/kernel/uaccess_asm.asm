@@ -67,3 +67,6 @@ section __ex_table progbits alloc noexec nowrite
     dd __uaccess_fu_write, __copy_user_fixup
     dd __uaccess_tu_read,  __copy_user_fixup
     dd __uaccess_tu_write, __copy_user_fixup
+
+
+section .note.GNU-stack noalloc noexec nowrite progbits

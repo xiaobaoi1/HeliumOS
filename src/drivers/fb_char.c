@@ -90,9 +90,6 @@ static void fbc_scroll(uint8_t attr) {
     for (uint32_t i = 0; i < shift / 4; i++) last[i] = bg;
 }
 
-static int cur_x = -1;
-static int cur_y = -1;
-
 static void fbc_draw_cursor(int x, int y) {
     struct fb_info *fb = fb_get();
     if (!fb || !fb->valid) return;

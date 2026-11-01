@@ -1,3 +1,4 @@
+/* 第 1 步：别名 syscall.h 的原生 read/write，避免与 POSIX 的 read/write 冲突 */
 #define read  helio_raw_read
 #define write helio_raw_write
 #include <fcntl.h>
@@ -5,15 +6,22 @@
 #include "posix_internal.h"
 #include "syscall.h"
 #include "stdio.h"
-#include "unistd.h"
-#include <stdlib.h>
-
 #undef read
 #undef write
 
+/* 第 2 步：引入 unistd.h——它内部 #define read posix_read，
+ * 立刻 undef，避免宏污染后续定义。 */
+#include "unistd.h"
+#undef read
+#undef write
+
+#include <stdlib.h>
+
+/* ---------- 以下代码不会再被 read/write 宏污染 ---------- */
+
 /* 1. read */
 long read(int fd, void *buf, size_t count) {
-    if (count == 0) return 0; /* 补上这一行 */
+    if (count == 0) return 0;
     if (fd == 0) return helio_raw_read(0, buf, (unsigned int)count);
     struct posix_fd *pfd = posix_get_fd(fd);
     if (!pfd) return -1;
@@ -45,15 +53,13 @@ int open(const char *path, int flags, ...) {
     else if ((flags & 3) == O_RDWR)   helio_flags |= FS_O_RDWR;
 
     if (flags & O_CREAT)  helio_flags |= FS_O_CREAT;
-    /* 不在标志里带 O_TRUNC，手动处理更稳妥 */
-    // if (flags & O_TRUNC)  helio_flags |= FS_O_TRUNC;
 
     int h = fs_open(path, helio_flags);
     if (h < 0) return -1;
-    
+
     int fd = posix_alloc_fd(FD_TYPE_FILE, h);
     if (fd >= 0 && (flags & O_TRUNC)) {
-        ftruncate(fd, 0); /* 手动截断 */
+        ftruncate(fd, 0);
     }
     return fd;
 }
@@ -82,7 +88,7 @@ long lseek(int fd, long offset, int whence) {
         new_off = st.size + offset;
     }
     else if (whence != 0) return -1;
-    
+
     if (new_off < 0) return -1;
     if (fs_seek(pfd->handle, new_off) < 0) return -1;
     pfd->offset = new_off;
@@ -97,7 +103,8 @@ int ftruncate(int fd, long length) {
     return fs_truncate(pfd->handle);
 }
 
-/* 给应用层（kilo 等）用的宏包装 */
+/* 应用层包装：unistd.h 的宏把 read/write 改成 posix_read/posix_write，
+ * 这两个包装把调用转回真正的 read/write。 */
 long posix_read(int fd, void *buf, size_t count) {
     return read(fd, buf, count);
 }
@@ -106,19 +113,10 @@ long posix_write(int fd, const void *buf, size_t count) {
     return write(fd, buf, count);
 }
 
-
-
-
-
-
-
-
-
+/* fdopen */
 FILE *fdopen(int fd, const char *mode) {
     (void)mode;
     struct posix_fd *pfd = posix_get_fd(fd);
     if (!pfd) return NULL;
-    
-    /* 调用底层 stdio 的工厂函数，把真实的 fs_handle 传进去 */
     return __stdio_create_from_handle(pfd->handle, pfd->offset);
 }

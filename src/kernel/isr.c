@@ -135,8 +135,8 @@ void isr_handler(struct registers *regs) {
         }
     }
 
-    panic_regs(regs, "kernel exception int=%d err=%p",
-               (int)regs->int_no, regs->err_code);
+    panic_regs(regs, "kernel exception int=%d err=0x%x",
+               (int)regs->int_no, (unsigned)regs->err_code);
 }
 
 /* 硬件中断处理 */

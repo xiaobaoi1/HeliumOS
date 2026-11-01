@@ -8,7 +8,7 @@ void tss_init(void) {
     kprintf("[TSS] Initializing...\n");
 
     /* 清零 TSS */
-    for (int i = 0; i < sizeof(tss) / 4; i++) {
+    for (unsigned i = 0; i < sizeof(tss) / 4; i++) {
         ((uint32_t*)&tss)[i] = 0;
     }
 

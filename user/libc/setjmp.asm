@@ -36,3 +36,5 @@ longjmp:
 global _setjmp
 _setjmp:
     jmp setjmp
+
+section .note.GNU-stack noalloc noexec nowrite progbits

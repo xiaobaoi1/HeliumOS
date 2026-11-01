@@ -8,6 +8,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <stddef.h>
+#include <driver.h>
 
 #define RTL8139_VENDOR   0x10EC
 #define RTL8139_DEVICE   0x8139
@@ -134,18 +135,18 @@ static void rtl8139_irq(void) {
 
 /* ---------- 初始化 ---------- */
 
-void rtl8139_init(void) {
+int rtl8139_init(void) {
     const struct pci_device *dev = pci_find(RTL8139_VENDOR, RTL8139_DEVICE);
     if (!dev) {
         kprintf("[RTL8139] Not found\n");
-        return;
+        return -1;
     }
 
     /* BAR0 是 I/O 空间（bit 0 = 1） */
     uint32_t bar0 = dev->bar[0];
     if (!(bar0 & 0x1)) {
         kprintf("[RTL8139] BAR0 not I/O space\n");
-        return;
+        return -1;
     }
     g_io = (uint16_t)(bar0 & ~0x3);
     kprintf("[RTL8139] Found at I/O 0x%x irq=%d\n",
@@ -171,7 +172,7 @@ void rtl8139_init(void) {
     g_rx_buf_phys = pmm_alloc_pages(RX_BUF_PAGES);
     if (!g_rx_buf_phys) {
         kprintf("[RTL8139] Failed to alloc rx buffer\n");
-        return;
+        return -1;
     }
     g_rx_buf = (uint8_t*)g_rx_buf_phys;
     memset(g_rx_buf, 0, RX_BUF_SIZE);
@@ -181,7 +182,7 @@ void rtl8139_init(void) {
         g_tx_buf_phys[i] = pmm_alloc_pages(1);
         if (!g_tx_buf_phys[i]) {
             kprintf("[RTL8139] Failed to alloc tx buffer %d\n", i);
-            return;
+            return -1;
         }
         g_tx_buf[i] = (uint8_t*)g_tx_buf_phys[i];
     }
@@ -221,4 +222,6 @@ void rtl8139_init(void) {
     net_register(&ndev);
 
     kprintf("[RTL8139] Ready\n");
+    return 0;
 }
+DRIVER_INIT(rtl8139_init);

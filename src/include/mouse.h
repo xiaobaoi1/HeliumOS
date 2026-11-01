@@ -1,5 +1,5 @@
-#ifndef MOUSE_H
-#define MOUSE_H
+#ifndef MOUSE_H_INCLUDED
+#define MOUSE_H_INCLUDED
 
 #include <stdint.h>
 
@@ -9,7 +9,7 @@ struct mouse_state {
     uint32_t irq_count;
 };
 
-void mouse_init(void);
+int mouse_init(void);
 struct mouse_state *mouse_get(void);
 
 /* 由 irq_dispatch 调用 */

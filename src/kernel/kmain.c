@@ -41,14 +41,10 @@
 #include <e1000.h>
 #include <tty.h>
 #include <file_map.h>
+#include <driver.h>
 
-
-static const char *shell_env[] = {
-    "PATH=SYS:/",
-    "HOME=SYS:/",
-    "TERM=helium",
-    NULL,
-};
+extern driver_init_fn __driver_init_start[];
+extern driver_init_fn __driver_init_end[];
 
 /* ---------- 内部辅助：从一个 ELF 路径创建进程 ---------- */
 
@@ -142,6 +138,7 @@ void create_desktop_task(struct fat32_volume *vol) {
 
 
 void kmain(uint32_t magic, uint32_t addr) {
+    (void)magic;
     dev_init();
     irq_init();
     serial_init();
@@ -176,14 +173,16 @@ void kmain(uint32_t magic, uint32_t addr) {
     serial_register_dev();
 
     pci_init();
-    graphic_init();
-    ata_init();
-    net_init();
+    net_init();   /* 初始化 net 子系统的设备数组（空） */
 
-    /* 优先 e1000（VMware / 现代 QEMU），失败再试 rtl8139（QEMU 默认） */
-    e1000_init();
-    if (!net_get("eth0")) {
-        rtl8139_init();
+    /* 遍历驱动初始化节。每个驱动自行检查 pci_find 等依赖，
+     * 硬件不存在就返回非 0，被跳过。新增驱动不需要改 kmain。 */
+    for (driver_init_fn *fn = __driver_init_start;
+         fn < __driver_init_end; fn++) {
+        int r = (*fn)();
+        if (r != 0) {
+            KLOG_DBG("[DRIVER] init skipped (ret=%d)\n", r);
+        }
     }
 
     net_proto_init();
@@ -237,8 +236,6 @@ void kmain(uint32_t magic, uint32_t addr) {
     if (!sys_vol) {
         panic("no FAT32 volume found");
     }
-
-    mouse_init();
 
     create_idle_task(sys_vol);
     create_wm_task(sys_vol);
