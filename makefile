@@ -109,7 +109,7 @@ all: $(DISK_IMG)
 # ==================== 用户程序变量 ====================
 
 USER_CFLAGS = -m32 -ffreestanding -fno-pic -fno-stack-protector \
-              -Iuser/ -Iuser/libc/include -MMD -MP
+              -Iuser/ -Iuser/libc/include -Iuser/posix/include -MMD -MP
 
 METHYLUI_DIR  = user/methylui
 METHYLUI_OBJS = $(BUILD_DIR)/methylui/mui_font.o \
