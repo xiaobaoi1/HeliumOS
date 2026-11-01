@@ -82,9 +82,22 @@ static int tokenize(char *cmd, char **argv, int max) {
 
 /* ---------- 颜色辅助 ---------- */
 
+/* VGA 颜色编号 → ANSI SGR 前景码。
+ * VGA 0-7 对应标准色 30-37（按 VGA 色序：黑红绿棕蓝紫青灰），
+ * VGA 8-15 对应亮色 90-97。
+ * 注：标准 ANSI 31 是红、34 是蓝，VGA 色序里 1 是蓝、4 是红——映射表按 VGA 色序排。 */
 static void set_color(int fg, int bg) {
-    (void)fg; (void)bg;
-    /* 无内核 tty。将来通过 ANSI 转义输出颜色。 */
+    (void)bg;  /* 背景固定黑，不改 */
+
+    static const int vga_to_sgr[16] = {
+        /* 0-7 标准色 */
+        30, 34, 32, 36, 31, 35, 33, 37,
+        /* 8-15 亮色 */
+        90, 94, 92, 96, 91, 95, 93, 97,
+    };
+
+    int sgr = (fg >= 0 && fg < 16) ? vga_to_sgr[fg] : 37;
+    printf("\033[%dm", sgr);
 }
 
 /* ---------- 内置命令 ---------- */

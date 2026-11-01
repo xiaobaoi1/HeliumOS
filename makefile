@@ -109,10 +109,11 @@ all: $(DISK_IMG)
 # ==================== 用户程序变量 ====================
 
 USER_CFLAGS = -m32 -ffreestanding -fno-pic -fno-stack-protector \
-              -Iuser/ -Iuser/libc/include -MMD -MP
+              -Iuser/ -Iuser/libc/include -Iuser/posix/include -MMD -MP
 
 METHYLUI_DIR  = user/methylui
-METHYLUI_OBJS = $(BUILD_DIR)/methylui/mui_font.o \
+METHYLUI_OBJS = $(BUILD_DIR)/unicode_font.o \
+                $(BUILD_DIR)/methylui/mui_font.o \
                 $(BUILD_DIR)/methylui/mui_surface.o \
                 $(BUILD_DIR)/methylui/mui_clip.o \
                 $(BUILD_DIR)/methylui/mui_widget.o \
@@ -222,7 +223,7 @@ $(ISO): $(KERNEL_ELF)
 	@echo "ISO 镜像生成成功: $(ISO)"
 
 # ==================== 硬盘镜像（用于测试文件系统写入） ====================
-$(DISK_IMG): $(KERNEL_ELF) $(USER_ELFS) $(USER_LIB_SOS)
+$(DISK_IMG): $(KERNEL_ELF) $(USER_ELFS) $(USER_LIB_SOS) tcc-prepare $(BUILD_DIR)/TCC.ELF
 	@echo "正在创建 FAT32 硬盘镜像 (需要 sudo 权限)..."
 	sudo umount /dev/loop23 || true  
 	sudo losetup -d /dev/loop22 || true 
@@ -239,6 +240,7 @@ $(DISK_IMG): $(KERNEL_ELF) $(USER_ELFS) $(USER_LIB_SOS)
 	sudo cp $(KERNEL_ELF) /mnt/build/boot/; \
 	sudo cp tools/unifont.hex /mnt/build/UNIFONT.HEX; \
 	sudo cp tools/unifont-17.0.03.hex /mnt/build/UNIFONT-17.HEX; \
+	sudo cp tools/consola.ttf /mnt/build/CONSOLA.TTF; \
 	for app in $(USER_APPS); do \
 	    sudo cp $(BUILD_DIR)/$$app.ELF /mnt/build/$$app; \
 	done; \
@@ -351,12 +353,12 @@ $(BUILD_DIR)/%.o: user/%.c
 
 $(BUILD_DIR)/posix_%.o: $(POSIX_DIR)/posix_%.c
 	@mkdir -p $(BUILD_DIR)
-	$(CC) $(USER_CFLAGS) $(POSIX_CFLAGS) -c $< -o $@
+	$(CC) $(POSIX_CFLAGS) $(USER_CFLAGS) -c $< -o $@
 
 # POSIX 应用专用编译规则（自动添加头文件路径）
 $(addprefix $(BUILD_DIR)/,$(addsuffix .o,$(POSIX_APPS))): $(BUILD_DIR)/%.o: user/%.c
 	@mkdir -p $(BUILD_DIR)
-	$(CC) $(USER_CFLAGS) $(POSIX_CFLAGS) -c $< -o $@
+	$(CC) $(POSIX_CFLAGS) $(USER_CFLAGS) -c $< -o $@
 
 # 基础库
 # 每个库依赖的其他库（用 -l 指定）
@@ -375,14 +377,15 @@ $(BUILD_DIR)/lib%.so: user/lib/lib%.c
 # ---------- 链接 ----------
 
 # 附加对象映射（只有两个程序需要，直接赋值最清晰）
-EXTRA_OBJS_wm      := $(BUILD_DIR)/wm_font.o
+EXTRA_OBJS_wm      := $(BUILD_DIR)/wm_font.o $(BUILD_DIR)/unicode_font.o
 EXTRA_OBJS_desktop := $(BUILD_DIR)/wm_font.o $(METHYLUI_OBJS)
 EXTRA_OBJS_test_mui_draw := $(METHYLUI_OBJS)
 EXTRA_OBJS_test_mui_button := $(METHYLUI_OBJS)
 EXTRA_OBJS_test_mui_form := $(METHYLUI_OBJS)
 EXTRA_OBJS_kilo := $(POSIX_OBJS)
 EXTRA_OBJS_methylate := $(METHYLUI_OBJS)
-EXTRA_OBJS_term      := $(BUILD_DIR)/methylui/mui_font.o \
+EXTRA_OBJS_term      := $(BUILD_DIR)/ttf.o $(BUILD_DIR)/unicode_font.o \
+                        $(BUILD_DIR)/methylui/mui_font.o \
                         $(BUILD_DIR)/methylui/mui_surface.o \
                         $(BUILD_DIR)/methylui/mui_widget.o \
                         $(BUILD_DIR)/methylui/mui_scroll.o
@@ -407,14 +410,13 @@ tcc-prepare: libc.a
 	# 拷贝 crt0.o 和 libc.a
 	cp $(BUILD_DIR)/crt0.o $(BUILD_DIR)/tcc_sysroot/lib/
 	cp $(BUILD_DIR)/libc.a $(BUILD_DIR)/tcc_sysroot/lib/
+	cp user/libtcc1.a build/tcc_sysroot/lib/
 
 
-tcc-cp:
-	cp ~/桌面/tinycc/libtcc1.a build/tcc_sysroot/lib/
+$(BUILD_DIR)/TCC.ELF: user/tcc.out user/libtcc.a user/libtcc1.a $(BUILD_DIR)/crt0.o libc.a
+	gcc -m32 -static -nostdlib     -Wl,-T,user/linker.ld     -Wl,--start-group     user/tcc.out     user/libtcc.a     $(BUILD_DIR)/crt0.o     $(BUILD_DIR)/libc.a     -Wl,--end-group     /usr/lib/gcc/x86_64-linux-gnu/15/32/libgcc.a     -o $@
 
-
-tcc: 
-	gcc -m32 -static -nostdlib     -Wl,-T,user/linker.ld     -Wl,--start-group     ~/桌面/tinycc/tcc.o     ~/桌面/tinycc/libtcc.a     build/crt0.o     build/libc.a     -Wl,--end-group     /usr/lib/gcc/x86_64-linux-gnu/15/32/libgcc.a     -o build/TCC.ELF
+tcc: $(BUILD_DIR)/TCC.ELF
 
 
 

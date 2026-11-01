@@ -484,8 +484,14 @@ void editorUpdateSyntax(erow *row) {
             }
         }
 
-        /* Handle non printable chars. */
+        /* Preserve UTF-8 high bytes so the terminal can render CJK text. */
         if (!isprint(*p)) {
+            if ((unsigned char)*p >= 0x80) {
+                row->hl[i] = HL_NORMAL;
+                p++; i++;
+                prev_sep = 0;
+                continue;
+            }
             row->hl[i] = HL_NONPRINT;
             p++; i++;
             prev_sep = 0;
@@ -911,6 +917,32 @@ void abFree(struct abuf *ab) {
     free(ab->b);
 }
 
+static int utf8_len_at(const unsigned char *p, int remain) {
+    if (!remain) return 0;
+    if (*p < 0x80) return 1;
+    if ((*p & 0xE0) == 0xC0) return remain >= 2 ? 2 : 1;
+    if ((*p & 0xF0) == 0xE0) return remain >= 3 ? 3 : 1;
+    if ((*p & 0xF8) == 0xF0) return remain >= 4 ? 4 : 1;
+    return 1;
+}
+
+static uint32_t utf8_cp_at(const unsigned char *p, int n) {
+    if (n <= 1) return *p;
+    uint32_t cp = (n == 2) ? (p[0] & 0x1F) :
+                  (n == 3) ? (p[0] & 0x0F) : (p[0] & 0x07);
+    for (int i = 1; i < n; i++) cp = (cp << 6) | (p[i] & 0x3F);
+    return cp;
+}
+
+static int utf8_is_wide(uint32_t cp) {
+    return (cp >= 0x1100 && cp <= 0x115F) ||
+           (cp >= 0x2E80 && cp <= 0xA4CF) ||
+           (cp >= 0xAC00 && cp <= 0xD7A3) ||
+           (cp >= 0xF900 && cp <= 0xFAFF) ||
+           (cp >= 0xFF01 && cp <= 0xFF60) ||
+           (cp >= 0xFFE0 && cp <= 0xFFE6);
+}
+
 /* This function writes the whole screen using VT100 escape characters
  * starting from the logical state of the editor in the global state 'E'. */
 void editorRefreshScreen(void) {
@@ -1019,9 +1051,18 @@ void editorRefreshScreen(void) {
     int filerow = E.rowoff+E.cy;
     erow *row = (filerow >= E.numrows) ? NULL : &E.row[filerow];
     if (row) {
-        for (j = E.coloff; j < (E.cx+E.coloff); j++) {
-            if (j < row->size && row->chars[j] == TAB) cx += 7-((cx)%8);
-            cx++;
+        int end = E.cx + E.coloff;
+        for (j = E.coloff; j < end && j < row->size; ) {
+            if (row->chars[j] == TAB) {
+                cx += 8 - ((cx - 1) % 8);
+                j++;
+            } else {
+                int n = utf8_len_at((const unsigned char*)row->chars + j,
+                                    row->size - j);
+                uint32_t cp = utf8_cp_at((const unsigned char*)row->chars + j, n);
+                cx += utf8_is_wide(cp) ? 2 : 1;
+                j += n;
+            }
         }
     }
     snprintf(buf,sizeof(buf),"\x1b[%d;%dH",E.cy+1,cx);

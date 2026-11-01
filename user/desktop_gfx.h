@@ -2,6 +2,7 @@
 #define DESKTOP_GFX_H
 
 #include "wm_font.h"
+#include "unicode_font.h"
 #include <stdint.h>
 
 static unsigned int gfx_lerp(unsigned int a, unsigned int b, int t, int max) {
@@ -16,21 +17,29 @@ static unsigned int gfx_lerp(unsigned int a, unsigned int b, int t, int max) {
 
 static void gfx_draw_text(unsigned int *pixels, int pw, int px, int py,
                           const char *s, unsigned int fg, unsigned int bg) {
-    for (const char *p = s; *p; p++) {
-        int cp = (unsigned char)*p;
-        if (cp >= 128) cp = '?';
-        const uint8_t *g = wm_font_glyph(cp);
+    const unsigned char *p = (const unsigned char*)s;
+    while (*p) {
+        uint32_t cp;
+        int n = ufont_utf8_decode(p, &cp);
+        const uint8_t *g = wm_font_glyph((int)cp);
+        int gw = wm_font_width((int)cp);
+        if (!g) {
+            g = wm_font_glyph('?');
+            gw = wm_font_width('?');
+        }
+        if (!gw) gw = 8;
         for (int r = 0; r < 16; r++) {
-            unsigned char bits = g ? g[r] : 0;
-            for (int j = 0; j < 8; j++) {
-                int x = px + j;
-                int y = py + r;
+            for (int j = 0; j < gw; j++) {
+                int x = px + j, y = py + r;
                 if (x < 0 || x >= pw) continue;
-                unsigned int c = (bits & (0x80 >> j)) ? fg : bg;
-                pixels[y * pw + x] = c;
+                int bit;
+                if (gw == 16) bit = g ? (g[r * 2 + (j >> 3)] & (0x80 >> (j & 7))) : 0;
+                else          bit = g ? (g[r] & (0x80 >> j)) : 0;
+                pixels[y * pw + x] = bit ? fg : bg;
             }
         }
-        px += 8;
+        px += gw;
+        p += n;
     }
 }
 

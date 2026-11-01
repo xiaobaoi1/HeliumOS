@@ -1,5 +1,6 @@
 #include "methylui/mui_surface.h"
 #include "methylui/mui_font.h"
+#include "unicode_font.h"
 
 static void put_pixel(struct mui_surface *s, int x, int y, unsigned int rgb) {
     if (x < 0 || y < 0 || x >= s->w || y >= s->h) return;
@@ -60,33 +61,50 @@ void mui_border(struct mui_surface *s, int x, int y, int w, int h,
 
 int mui_draw_char(struct mui_surface *s, int x, int y, unsigned int cp,
                   unsigned int fg, unsigned int bg) {
-    if (cp >= 128) cp = '?';
     const uint8_t *g = mui_font_glyph((int)cp);
-
-    mui_fill(s, x, y, MUI_FONT_W, MUI_FONT_H, bg);
-    if (!g) return MUI_FONT_W;
-
+    int w = mui_font_width((int)cp);
+    if (!w) w = MUI_FONT_W;
+    mui_fill(s, x, y, w, MUI_FONT_H, bg);
+    if (!g) return w;
     for (int r = 0; r < MUI_FONT_H; r++) {
-        unsigned char bits = g[r];
-        for (int j = 0; j < 8; j++) {
-            if (bits & (0x80 >> j))
-                put_pixel(s, x + j, y + r, fg);
+        if (w == 16) {
+            unsigned char hi = g[r * 2], lo = g[r * 2 + 1];
+            for (int j = 0; j < 8; j++) {
+                if (hi & (0x80 >> j)) put_pixel(s, x + j, y + r, fg);
+                if (lo & (0x80 >> j)) put_pixel(s, x + 8 + j, y + r, fg);
+            }
+        } else {
+            unsigned char bits = g[r];
+            for (int j = 0; j < 8; j++)
+                if (bits & (0x80 >> j)) put_pixel(s, x + j, y + r, fg);
         }
     }
-    return MUI_FONT_W;
+    return w;
 }
 
 int mui_text(struct mui_surface *s, int x, int y, const char *str,
              unsigned int fg, unsigned int bg) {
     int start_x = x;
-    for (const char *p = str; *p; p++) {
-        x += mui_draw_char(s, x, y, (unsigned char)*p, fg, bg);
+    const unsigned char *p = (const unsigned char*)str;
+    while (*p) {
+        uint32_t cp;
+        int n = ufont_utf8_decode(p, &cp);
+        x += mui_draw_char(s, x, y, cp, fg, bg);
+        p += n;
     }
     return x - start_x;
 }
 
 int mui_text_width(const char *str) {
     int w = 0;
-    for (const char *p = str; *p; p++) w += MUI_FONT_W;
+    const unsigned char *p = (const unsigned char*)str;
+    while (*p) {
+        uint32_t cp;
+        int n = ufont_utf8_decode(p, &cp);
+        int cw = mui_font_width((int)cp);
+        w += cw ? cw : MUI_FONT_W;
+        p += n;
+    }
     return w;
 }
+
