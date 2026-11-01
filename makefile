@@ -407,14 +407,11 @@ tcc-prepare: libc.a
 	# 拷贝 crt0.o 和 libc.a
 	cp $(BUILD_DIR)/crt0.o $(BUILD_DIR)/tcc_sysroot/lib/
 	cp $(BUILD_DIR)/libc.a $(BUILD_DIR)/tcc_sysroot/lib/
-
-
-tcc-cp:
-	cp ~/桌面/tinycc/libtcc1.a build/tcc_sysroot/lib/
+	cp user/libtcc1.a build/tcc_sysroot/lib/
 
 
 tcc: 
-	gcc -m32 -static -nostdlib     -Wl,-T,user/linker.ld     -Wl,--start-group     ~/桌面/tinycc/tcc.o     ~/桌面/tinycc/libtcc.a     build/crt0.o     build/libc.a     -Wl,--end-group     /usr/lib/gcc/x86_64-linux-gnu/15/32/libgcc.a     -o build/TCC.ELF
+	gcc -m32 -static -nostdlib     -Wl,-T,user/linker.ld     -Wl,--start-group     user/tcc.o     user/libtcc.a     build/crt0.o     build/libc.a     -Wl,--end-group     /usr/lib/gcc/x86_64-linux-gnu/15/32/libgcc.a     -o build/TCC.ELF
 
 
 
