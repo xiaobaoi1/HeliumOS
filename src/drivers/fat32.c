@@ -747,17 +747,6 @@ static void fat32_now(uint16_t *out_time, uint16_t *out_date) {
                            (t.day & 0x1F));
 }
 
-/* 8.3 目录项 → 名字字符串 */
-static void dir_entry_to_name(const struct fat32_dir_entry *e, char *out) {
-    int k = 0;
-    for (int i = 0; i < 8 && e->name[i] != ' '; i++) out[k++] = e->name[i];
-    if (e->ext[0] != ' ') {
-        out[k++] = '.';
-        for (int i = 0; i < 3 && e->ext[i] != ' '; i++) out[k++] = e->ext[i];
-    }
-    out[k] = '\0';
-}
-
 /* path → dir_path + name。dir_path 至少 PATH_MAX_LEN 字节，
  * name 至少 64 字节。成功返回 0，失败返回 -1。 */
 static int split_parent_name(const char *path, char *dir_path, char *name) {

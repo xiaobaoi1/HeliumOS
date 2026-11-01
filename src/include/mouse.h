@@ -1,5 +1,5 @@
-#ifndef MOUSE_H
-#define MOUSE_H
+#ifndef MOUSE_H_INCLUDED
+#define MOUSE_H_INCLUDED
 
 #include <stdint.h>
 

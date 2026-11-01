@@ -42,14 +42,6 @@
 #include <tty.h>
 #include <file_map.h>
 
-
-static const char *shell_env[] = {
-    "PATH=SYS:/",
-    "HOME=SYS:/",
-    "TERM=helium",
-    NULL,
-};
-
 /* ---------- 内部辅助：从一个 ELF 路径创建进程 ---------- */
 
 static struct task *create_task_from_elf(struct fat32_volume *vol,
@@ -142,6 +134,7 @@ void create_desktop_task(struct fat32_volume *vol) {
 
 
 void kmain(uint32_t magic, uint32_t addr) {
+    (void)magic;
     dev_init();
     irq_init();
     serial_init();

@@ -95,7 +95,7 @@ struct window {
 
     int shm_idx;
     unsigned int *pixels;
-    uint64_t *counter;
+    volatile uint64_t *counter;
     uint64_t last_seen;
     struct shm_hdr *shm;
 

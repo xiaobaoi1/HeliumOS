@@ -18,7 +18,7 @@ static void dump_regs(const struct registers *r) {
     kprintf("  user_esp=%p user_ss=%x\n",
             r->user_esp, r->user_ss);
 }
-
+static void halt_forever(void) __attribute__((noreturn));
 static void halt_forever(void) {
     for (;;) {
         __asm__ volatile("cli; hlt");
