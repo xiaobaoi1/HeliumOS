@@ -916,6 +916,15 @@ int main(int argc, char **argv) {
      * 此时若还是 0x0 会退化成 DSR 查询（终端不响应）而启动失败。 */
     pty_set_winsize(g_master, g_cols, g_rows);
 
+    /* shell 进程的环境变量。整条链上（kmain → desktop → TERM → SHELL）
+     * 目前都没传 envp，所以 TERM 这里给 shell 一份最低限度的环境。 */
+    static char *shell_envp[] = {
+        "PATH=SYS:/",
+        "HOME=SYS:/",
+        "TERM=helium",
+        NULL,
+    };
+
     struct spawn_params sp = {
         .size = sizeof(sp),
         .in_fd = SPAWN_FD_INHERIT,
@@ -923,7 +932,7 @@ int main(int argc, char **argv) {
         .err_fd = SPAWN_FD_INHERIT,
         .in_pipe = -1, .out_pipe = -1, .err_pipe = -1,
         .in_pty = slave, .out_pty = slave, .err_pty = slave,
-        .flags = 0, .envp = 0, .out_pid = 0,
+        .flags = 0, .envp = (uint32_t)shell_envp, .out_pid = 0,
     };
     /* 默认在 pty 上起交互 shell；若带第 6 个及以后的参数，
      * 则直接运行该命令 —— 桌面用 "TERM ... KILO SYS:\kmain.c"

@@ -13,9 +13,244 @@
 #define VGA_LIGHT_RED    12
 
 #define CMD_MAX          128
-#define ARGV_MAX         16
+#define ARGV_MAX         64
 
 extern char **environ;
+
+/* ---------- 词展开：引号 + $VAR + glob ---------- */
+
+#define WORD_MAX  256
+#define EXPAND_BUF_SIZE  16384
+
+static char g_expand_buf[EXPAND_BUF_SIZE];
+static int  g_expand_pos = 0;
+
+static void expand_buf_reset(void) { g_expand_pos = 0; }
+
+static char *expand_buf_alloc(int size) {
+    if (size <= 0 || g_expand_pos + size > EXPAND_BUF_SIZE) return NULL;
+    char *p = g_expand_buf + g_expand_pos;
+    g_expand_pos += size;
+    return p;
+}
+
+static int glob_match(const char *pat, const char *str) {
+    while (*pat) {
+        if (*pat == '*') {
+            while (*pat == '*') pat++;
+            if (!*pat) return 1;
+            while (*str) {
+                if (glob_match(pat, str)) return 1;
+                str++;
+            }
+            return 0;
+        }
+        if (*pat == '?') {
+            if (!*str) return 0;
+            pat++; str++;
+            continue;
+        }
+        if (*pat != *str) return 0;
+        pat++; str++;
+    }
+    return *str == '\0';
+}
+
+static int glob_expand(const char *pattern, char **out, int out_max) {
+    char dir[256], pat[256];
+    const char *last_slash = NULL;
+    for (const char *p = pattern; *p; p++) {
+        if (*p == '\\' || *p == '/') last_slash = p;
+    }
+
+    if (last_slash) {
+        int dlen = last_slash - pattern;
+        if (dlen >= (int)sizeof(dir)) return 0;
+        if (dlen == 0) { dir[0] = '/'; dir[1] = '\0'; }
+        else {
+            memcpy(dir, pattern, dlen);
+            dir[dlen] = '\0';
+        }
+        strncpy(pat, last_slash + 1, sizeof(pat) - 1);
+        pat[sizeof(pat) - 1] = '\0';
+    } else {
+        if (getcwd(dir, sizeof(dir)) <= 0) return 0;
+        strncpy(pat, pattern, sizeof(pat) - 1);
+        pat[sizeof(pat) - 1] = '\0';
+    }
+
+    int fd = fs_opendir(dir);
+    if (fd < 0) return 0;
+
+    struct dirent ent;
+    int n = 0;
+    while (fs_readdir(fd, &ent) == 1 && n < out_max) {
+        if (ent.name[0] == '.') continue;
+        if (!glob_match(pat, ent.name)) continue;
+
+        char full[256];
+        int dlen = strlen(dir);
+        if (dlen > 0 && (dir[dlen-1] == '/' || dir[dlen-1] == '\\'))
+            snprintf(full, sizeof(full), "%s%s", dir, ent.name);
+        else
+            snprintf(full, sizeof(full), "%s/%s", dir, ent.name);
+
+        char *copy = (char*)malloc(strlen(full) + 1);
+        if (!copy) break;
+        strcpy(copy, full);
+        out[n++] = copy;
+    }
+    fs_closedir(fd);
+
+    /* 字典序排序（插入排序，n 很小） */
+    for (int i = 1; i < n; i++) {
+        for (int j = i; j > 0 && strcmp(out[j-1], out[j]) > 0; j--) {
+            char *tmp = out[j];
+            out[j] = out[j-1];
+            out[j-1] = tmp;
+        }
+    }
+    return n;
+}
+
+/* 展开单个 token：
+ *   '...' → 内容原样
+ *   "..." → 内容里的 $VAR 展开，* ? 不展开
+ *   其他  → $VAR 展开，* ? 标记为 glob 需后续匹配
+ * 引号本身被移除。 */
+static int expand_word(const char *in, char *out, int out_size, int *glob_flag) {
+    int o = 0;
+    int glob = 0;
+    int in_single = 0, in_double = 0;
+    const char *p = in;
+
+    while (*p) {
+        char c = *p;
+
+        if (in_single) {
+            if (c == '\'') { in_single = 0; p++; continue; }
+            if (o >= out_size - 1) return -1;
+            out[o++] = c; p++;
+            continue;
+        }
+
+        if (in_double) {
+            if (c == '"') { in_double = 0; p++; continue; }
+            if (c == '\\' && p[1]) {
+                char n = p[1];
+                if (n == '"' || n == '\\' || n == '$') {
+                    if (o >= out_size - 1) return -1;
+                    out[o++] = n; p += 2; continue;
+                }
+            }
+            if (c == '$') {
+                p++;
+                char name[64]; int nl = 0;
+                if (*p == '{') {
+                    p++;
+                    while (*p && *p != '}' && nl < 63) name[nl++] = *p++;
+                    if (*p == '}') p++;
+                } else {
+                    while ((*p >= 'a' && *p <= 'z') ||
+                           (*p >= 'A' && *p <= 'Z') ||
+                           (*p >= '0' && *p <= '9') || *p == '_') {
+                        if (nl < 63) name[nl++] = *p;
+                        p++;
+                    }
+                }
+                name[nl] = '\0';
+                const char *val = (nl > 0) ? getenv(name) : NULL;
+                if (val) {
+                    while (*val) {
+                        if (o >= out_size - 1) return -1;
+                        out[o++] = *val++;
+                    }
+                }
+                continue;
+            }
+            if (o >= out_size - 1) return -1;
+            out[o++] = c; p++;
+            continue;
+        }
+
+        /* 引号外 */
+        if (c == '\'') { in_single = 1; p++; continue; }
+        if (c == '"')  { in_double = 1; p++; continue; }
+        if (c == '\\' && p[1]) {
+            if (o >= out_size - 1) return -1;
+            out[o++] = p[1]; p += 2; continue;
+        }
+        if (c == '$') {
+            p++;
+            char name[64]; int nl = 0;
+            if (*p == '{') {
+                p++;
+                while (*p && *p != '}' && nl < 63) name[nl++] = *p++;
+                if (*p == '}') p++;
+            } else {
+                while ((*p >= 'a' && *p <= 'z') ||
+                       (*p >= 'A' && *p <= 'Z') ||
+                       (*p >= '0' && *p <= '9') || *p == '_') {
+                    if (nl < 63) name[nl++] = *p;
+                    p++;
+                }
+            }
+            name[nl] = '\0';
+            const char *val = (nl > 0) ? getenv(name) : NULL;
+            if (val) {
+                while (*val) {
+                    if (o >= out_size - 1) return -1;
+                    out[o++] = *val++;
+                }
+            }
+            continue;
+        }
+        if (c == '*' || c == '?') glob = 1;
+        if (o >= out_size - 1) return -1;
+        out[o++] = c; p++;
+    }
+
+    out[o] = '\0';
+    *glob_flag = glob;
+    return 0;
+}
+
+/* 对 argv 整体做展开。返回新的 argc（可能比原 argc 多，因为 glob）。
+ * out[] 指向 expand_buf 内的字符串，下一次 expand_argv 前调用 expand_buf_reset 会失效。 */
+static int expand_argv(char **in, int argc, char **out, int out_max) {
+    int n = 0;
+    for (int i = 0; i < argc; i++) {
+        char tmp[WORD_MAX];
+        int glob = 0;
+        if (expand_word(in[i], tmp, sizeof(tmp), &glob) < 0) continue;
+        if (tmp[0] == '\0' && !glob) continue;  /* "" 空参数直接丢弃，简化 */
+
+        if (glob) {
+            char *matches[32];
+            int nm = glob_expand(tmp, matches, 32);
+            if (nm == 0) {
+                /* 无匹配：保留原 pattern（POSIX sh 行为） */
+                if (n < out_max) {
+                    out[n] = expand_buf_alloc(strlen(tmp) + 1);
+                    if (out[n]) { strcpy(out[n], tmp); n++; }
+                }
+            } else {
+                for (int j = 0; j < nm && n < out_max; j++) {
+                    out[n] = expand_buf_alloc(strlen(matches[j]) + 1);
+                    if (out[n]) { strcpy(out[n], matches[j]); n++; }
+                    free(matches[j]);
+                }
+            }
+        } else {
+            if (n < out_max) {
+                out[n] = expand_buf_alloc(strlen(tmp) + 1);
+                if (out[n]) { strcpy(out[n], tmp); n++; }
+            }
+        }
+    }
+    out[n] = NULL;
+    return n;
+}
 
 /* ---------- 基础输入：读一行，带退格支持 ---------- */
 
@@ -44,11 +279,8 @@ static int read_line(char *buf, int max) {
     return i;
 }
 
-/* 原地拆分 argv。支持 "..." 和 '...' 引号：引号内的空格不分割，
- * 引号本身去掉。无引号时行为和原来一致。
- *
- * 原地修改的原理：读指针 p 只在非引号字符时前进写指针 w，
- * 跳过引号字符时 w 不前进——w 始终 ≤ p，安全覆盖。 */
+/* 原地拆分 argv，保留引号字符（留给 expand_word 判断"引号内不展开"）。
+ * 引号内的空格不分割。 */
 static int tokenize(char *cmd, char **argv, int max) {
     int argc = 0;
     char *p = cmd;
@@ -63,17 +295,18 @@ static int tokenize(char *cmd, char **argv, int max) {
 
         while (*p && *p != ' ' && *p != '\t') {
             if (*p == '"' || *p == '\'') {
-                char q = *p++;
+                char q = *p;
+                *w++ = *p++;
                 while (*p && *p != q) {
                     *w++ = *p++;
                 }
-                if (*p == q) p++;   /* 跳过结束引号 */
+                if (*p == q) *w++ = *p++;
             } else {
                 *w++ = *p++;
             }
         }
 
-        if (*p) p++;                /* 跳过分隔符（空格或 tab） */
+        if (*p) p++;
         *w++ = '\0';
     }
 
@@ -128,24 +361,10 @@ static void cmd_help(void) {
     printf("  <prog>       run program\n");
 }
 
-static void cmd_ls(int argc, char **argv) {
-    int long_fmt = 0;
-    const char *path = ".";
-    int argi = 1;
-
-    if (argc >= 2 && strcmp(argv[1], "-l") == 0) {
-        long_fmt = 1;
-        argi = 2;
-    }
-    if (argc > argi) path = argv[argi];
-
+/* 列出目录内容。返回条目数，出错返回负值。 */
+static int list_dir(const char *path, int long_fmt) {
     int fd = fs_opendir(path);
-    if (fd < 0) {
-        set_color(VGA_LIGHT_RED, VGA_BLACK);
-        printf("ls: cannot open '%s' (error %d)\n", path, fd);
-        set_color(VGA_LIGHT_GRAY, VGA_BLACK);
-        return;
-    }
+    if (fd < 0) return fd;
 
     struct dirent ent;
     int n;
@@ -155,7 +374,6 @@ static void cmd_ls(int argc, char **argv) {
         else                       set_color(VGA_LIGHT_GRAY, VGA_BLACK);
 
         if (long_fmt) {
-            /* 解析 FAT32 日期/时间（dir 返回原始格式） */
             uint16_t d = ent.mod_date;
             uint16_t t = ent.mod_time;
             int year  = 1980 + ((d >> 9) & 0x7F);
@@ -177,17 +395,83 @@ static void cmd_ls(int argc, char **argv) {
         }
         count++;
     }
-
     fs_closedir(fd);
     set_color(VGA_LIGHT_GRAY, VGA_BLACK);
 
-    if (n < 0) {
-        set_color(VGA_LIGHT_RED, VGA_BLACK);
-        printf("ls: readdir failed (%d)\n", n);
-        set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+    if (n < 0) return n;
+    return count;
+}
+
+static void cmd_ls(int argc, char **argv) {
+    int long_fmt = 0;
+    int argi = 1;
+
+    if (argc >= 2 && strcmp(argv[1], "-l") == 0) {
+        long_fmt = 1;
+        argi = 2;
+    }
+
+    /* 无路径参数：列出当前目录 */
+    if (argi >= argc) {
+        int cnt = list_dir(".", long_fmt);
+        if (cnt < 0) {
+            set_color(VGA_LIGHT_RED, VGA_BLACK);
+            printf("ls: cannot open '.' (error %d)\n", cnt);
+            set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+        } else {
+            printf("total: %d\n", cnt);
+        }
         return;
     }
-    printf("total: %d\n", count);
+
+    int multi = (argc - argi > 1);
+    int had_error = 0;
+
+    for (int i = argi; i < argc; i++) {
+        const char *path = argv[i];
+
+        /* 先试目录 */
+        int d = fs_opendir(path);
+        if (d >= 0) {
+            fs_closedir(d);
+            if (multi) printf("%s:\n", path);
+            int cnt = list_dir(path, long_fmt);
+            if (cnt < 0) {
+                set_color(VGA_LIGHT_RED, VGA_BLACK);
+                printf("ls: readdir '%s' failed (error %d)\n", path, cnt);
+                set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+                had_error = 1;
+            } else if (multi) {
+                printf("total: %d\n", cnt);
+            }
+        } else {
+            /* 不是目录：当文件处理 */
+            int fd = fs_open(path, FS_O_RDONLY);
+            if (fd >= 0) {
+                if (long_fmt) {
+                    struct fstat_buf st;
+                    if (fs_fstat(fd, &st) == 0) {
+                        printf("%04d-%02d-%02d %02d:%02d  %7u  %s\n",
+                               st.mtime.year, st.mtime.month, st.mtime.day,
+                               st.mtime.hour, st.mtime.minute,
+                               st.size, path);
+                    } else {
+                        printf("%s\n", path);
+                    }
+                } else {
+                    printf("%s\n", path);
+                }
+                fs_close(fd);
+            } else {
+                set_color(VGA_LIGHT_RED, VGA_BLACK);
+                printf("ls: cannot access '%s' (error %d)\n", path, fd);
+                set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+                had_error = 1;
+            }
+        }
+    }
+
+    (void)had_error;
 }
 
 static void cmd_cd(int argc, char **argv) {
@@ -695,6 +979,17 @@ int main(int _argc, char **_argv) {
         int argc = tokenize(cmd, argv, ARGV_MAX);
         if (argc == 0) continue;
         argv[argc] = NULL;
+
+        /* 词展开：去引号 + $VAR + glob */
+        expand_buf_reset();
+        char *eargv[ARGV_MAX];
+        int eargc = expand_argv(argv, argc, eargv, ARGV_MAX);
+        if (eargc == 0) continue;
+
+        /* 用展开结果覆盖 argv——后续代码不用改 */
+        for (int i = 0; i < eargc; i++) argv[i] = eargv[i];
+        argv[eargc] = NULL;
+        argc = eargc;
 
         const char *c = argv[0];
 
