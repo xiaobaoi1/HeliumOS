@@ -15,6 +15,10 @@
 #define CMD_MAX          128
 #define ARGV_MAX         64
 
+static void set_color(int fg, int bg);
+static void expand_buf_reset(void);
+static int  expand_argv(char **in, int argc, char **out, int out_max);
+
 extern char **environ;
 
 /* ---------- 词展开：引号 + $VAR + glob ---------- */
@@ -252,31 +256,195 @@ static int expand_argv(char **in, int argc, char **out, int out_max) {
     return n;
 }
 
+/* ---------- 命令历史 ---------- */
+#define HIST_MAX  16
+static char g_history[HIST_MAX][CMD_MAX];
+static int  g_hist_count = 0;
+
+static void add_history(const char *line) {
+    if (!line || !line[0]) return;
+    if (g_hist_count > 0 &&
+        strcmp(g_history[g_hist_count - 1], line) == 0) return;
+
+    if (g_hist_count < HIST_MAX) {
+        strncpy(g_history[g_hist_count], line, CMD_MAX - 1);
+        g_history[g_hist_count][CMD_MAX - 1] = '\0';
+        g_hist_count++;
+    } else {
+        for (int i = 1; i < HIST_MAX; i++)
+            strcpy(g_history[i - 1], g_history[i]);
+        strncpy(g_history[HIST_MAX - 1], line, CMD_MAX - 1);
+        g_history[HIST_MAX - 1][CMD_MAX - 1] = '\0';
+    }
+}
+
+/* ---------- 行重绘 ----------
+ * 假设光标在行内某处：\r 回行首 → 打 prompt（绿色）→ 打 buf（灰色）
+ * → \x1b[K 清到行尾 → 回退 (len - cursor) 个字符到 cursor 处。
+ * 一次 write 完成，避免多次系统调用。 */
+static void line_redraw(const char *buf, int len, int cursor) {
+    char out[1024];
+    int o = 0;
+
+    out[o++] = '\r';
+    /* 绿色 prompt "\x1b[92m$ \x1b[37m" */
+    const char *p = "\x1b[92m$ \x1b[37m";
+    while (*p) out[o++] = *p++;
+
+    for (int i = 0; i < len && o < 900; i++) out[o++] = buf[i];
+    out[o++] = '\x1b'; out[o++] = '['; out[o++] = 'K';
+
+    int back = len - cursor;
+    while (back-- > 0 && o < 1000) {
+        out[o++] = '\x1b'; out[o++] = '['; out[o++] = 'D';
+    }
+
+    write(1, out, o);
+}
+
 /* ---------- 基础输入：读一行，带退格支持 ---------- */
 
 static int read_line(char *buf, int max) {
-    int i = 0;
+    int len = 0;
+    int cursor = 0;
+    int hist_pos = -1;      /* -1 = 不在历史中 */
+    char saved[CMD_MAX];    /* 浏览历史时暂存新行 */
+    int have_saved = 0;
+
+    buf[0] = '\0';
+
+    /* 打印 prompt */
+    set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+    write(1, "$ ", 2);
+    set_color(VGA_LIGHT_GRAY, VGA_BLACK);
+
     for (;;) {
         char c;
-        if (read(0, &c, 1) == 1) {
-            if (c == '\n') {
-                // putchar('\n');
-                break;
+        if (read(0, &c, 1) != 1) return -1;   /* 连接断了 / pty master 关闭 */
+
+        /* ---------- ESC 序列 ---------- */
+        if (c == 0x1B) {
+            char seq[4];
+            int sl = 0;
+            for (int i = 0; i < 3; i++) {
+                char x;
+                if (read(0, &x, 1) != 1) break;
+                seq[sl++] = x;
+                if (i == 0 && x != '[' && x != 'O') break;
+                if (i >= 1 && ((x >= 'A' && x <= 'Z') || x == '~')) break;
             }
-            if (c == '\b' && i > 0) {
-                i--;
-                // printf("\b \b");
+            if (sl >= 2 && (seq[0] == '[' || seq[0] == 'O')) {
+                char final = seq[sl - 1];
+
+                if (final == 'A') {              /* 上：历史 */
+                    if (g_hist_count == 0) continue;
+                    if (hist_pos == -1) {
+                        strncpy(saved, buf, CMD_MAX - 1);
+                        saved[CMD_MAX - 1] = '\0';
+                        have_saved = 1;
+                        hist_pos = g_hist_count - 1;
+                    } else if (hist_pos > 0) {
+                        hist_pos--;
+                    } else {
+                        continue;
+                    }
+                    strncpy(buf, g_history[hist_pos], CMD_MAX - 1);
+                    buf[CMD_MAX - 1] = '\0';
+                    len = strlen(buf);
+                    cursor = len;
+                    line_redraw(buf, len, cursor);
+                } else if (final == 'B') {       /* 下：历史 */
+                    if (hist_pos == -1) continue;
+                    hist_pos++;
+                    if (hist_pos >= g_hist_count) {
+                        hist_pos = -1;
+                        if (have_saved) {
+                            strncpy(buf, saved, CMD_MAX - 1);
+                            buf[CMD_MAX - 1] = '\0';
+                        } else {
+                            buf[0] = '\0';
+                        }
+                    } else {
+                        strncpy(buf, g_history[hist_pos], CMD_MAX - 1);
+                        buf[CMD_MAX - 1] = '\0';
+                    }
+                    len = strlen(buf);
+                    cursor = len;
+                    line_redraw(buf, len, cursor);
+                } else if (final == 'C') {       /* 右 */
+                    if (cursor < len) { cursor++; write(1, "\x1b[C", 3); }
+                } else if (final == 'D') {       /* 左 */
+                    if (cursor > 0) { cursor--; write(1, "\x1b[D", 3); }
+                } else if (final == 'H') {       /* Home */
+                    while (cursor > 0) { cursor--; write(1, "\x1b[D", 3); }
+                } else if (final == 'F') {       /* End */
+                    while (cursor < len) { cursor++; write(1, "\x1b[C", 3); }
+                } else if (sl >= 3 && seq[1] == '3' && seq[2] == '~') {
+                    /* Delete */
+                    if (cursor < len) {
+                        for (int i = cursor; i < len - 1; i++) buf[i] = buf[i + 1];
+                        len--;
+                        buf[len] = '\0';
+                        line_redraw(buf, len, cursor);
+                    }
+                }
                 continue;
             }
-            if (c != '\b' && i < max - 1) {
-                buf[i++] = c;
-                // putchar(c);
-            }
+            continue;
         }
-        __asm__ volatile("pause");
+
+        /* ---------- 控制字符 ---------- */
+        if (c == '\r' || c == '\n') {
+            while (cursor < len) { cursor++; write(1, "\x1b[C", 3); }
+            write(1, "\r\n", 2);
+            buf[len] = '\0';
+            return len;
+        }
+
+        if (c == 0x03) {                         /* ^C */
+            write(1, "^C\r\n", 4);
+            return 0;
+        }
+
+        if (c == 0x04) {                         /* ^D */
+            if (len == 0) { write(1, "\r\n", 2); return -1; }
+            continue;
+        }
+
+        if (c == 0x15) {                         /* ^U：清整行 */
+            len = 0; cursor = 0; buf[0] = '\0';
+            line_redraw(buf, 0, 0);
+            continue;
+        }
+
+        if (c == 0x7F || c == '\b') {            /* 退格 */
+            if (cursor > 0) {
+                for (int i = cursor - 1; i < len - 1; i++) buf[i] = buf[i + 1];
+                len--;
+                cursor--;
+                buf[len] = '\0';
+                line_redraw(buf, len, cursor);
+            }
+            continue;
+        }
+
+        /* 可打印字符 */
+        if (c >= 0x20 && c < 0x7F) {
+            if (len >= max - 1) continue;
+            for (int i = len; i > cursor; i--) buf[i] = buf[i - 1];
+            buf[cursor] = c;
+            len++;
+            buf[len] = '\0';
+            if (cursor == len - 1) {
+                write(1, &c, 1);
+                cursor++;
+            } else {
+                cursor++;
+                line_redraw(buf, len, cursor);
+            }
+            continue;
+        }
     }
-    buf[i] = '\0';
-    return i;
 }
 
 /* 原地拆分 argv，保留引号字符（留给 expand_word 判断"引号内不展开"）。
@@ -957,10 +1125,12 @@ static void cmd_uname(void) {
 int main(int _argc, char **_argv) {
     (void)_argc; (void)_argv;
 
-    /* shell 忽略 SIGINT —— 按 Ctrl+C 不杀 shell */
     struct sigaction sa = {0};
     sa.sa_handler = SIG_IGN;
     sigaction(SIGINT, &sa, 0);
+
+    /* 切 pty raw mode：shell 自己做行编辑、回显、信号处理 */
+    term_set_raw(1);
 
     printf("Welcome to HeliumOS Shell!\n");
     printf("Type 'help' for commands.\n\n");
@@ -969,24 +1139,20 @@ int main(int _argc, char **_argv) {
     char *argv[ARGV_MAX];
 
     while (1) {
-        set_color(VGA_LIGHT_GREEN, VGA_BLACK);
-        printf("$ ");
-        set_color(VGA_LIGHT_GRAY, VGA_BLACK);
-
         int n = read_line(cmd, sizeof(cmd));
-        if (n == 0) continue;
+        if (n < 0) break;        /* ^D EOF 或连接断开 */
+        if (n == 0) continue;    /* ^C 或空行 */
+
+        add_history(cmd);        /* 记录原始输入（展开前） */
 
         int argc = tokenize(cmd, argv, ARGV_MAX);
         if (argc == 0) continue;
         argv[argc] = NULL;
 
-        /* 词展开：去引号 + $VAR + glob */
         expand_buf_reset();
         char *eargv[ARGV_MAX];
         int eargc = expand_argv(argv, argc, eargv, ARGV_MAX);
         if (eargc == 0) continue;
-
-        /* 用展开结果覆盖 argv——后续代码不用改 */
         for (int i = 0; i < eargc; i++) argv[i] = eargv[i];
         argv[eargc] = NULL;
         argc = eargc;

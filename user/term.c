@@ -952,6 +952,8 @@ int main(int argc, char **argv) {
     if (sh < 0) { dprintf(2, "term: spawn %s %d\n", argc >= 6 ? argv[5] : "SHELL", sh); return 1; }
     pty_set_fg(g_master, sp.out_pid);
 
+    pty_close(slave);
+
     for (;;) {
         while (pipe_avail(ev_rd) >= (int)sizeof(struct wm_event)) {
             struct wm_event ev;
@@ -1024,16 +1026,53 @@ int main(int argc, char **argv) {
             /* 鼠标 / 焦点事件忽略 */
         }
 
-        if (pty_avail(g_master) > 0) {
-            cursor_restore();
+        int av = pty_avail(g_master);
+        if (av < 0) {
+            /* 子进程已退出，pty slave 端所有 handle 关闭 → EOF。
+             * 先把缓冲区里剩余的输出读完，再发布，再销毁窗口退出。 */
+            while ((av = pty_avail(g_master)) > 0) {
+                char buf[256];
+                int n = pty_read(g_master, buf, sizeof(buf));
+                if (n <= 0) break;
+                for (int i = 0; i < n; i++)
+                    process_byte((unsigned char)buf[i]);
+            }
 
+            cursor_restore();
+            if (!g_scrolled) cursor_draw();
+
+            /* 发布最后一帧（如果有未发布脏区） */
+            if (g_shm &&
+                (g_shm->pub_x0 == SHM_DIRTY_EMPTY ||
+                 g_shm->pub_x1 <= g_shm->pub_x0) &&
+                g_shm->cur_x0 != SHM_DIRTY_EMPTY &&
+                g_shm->cur_x1 > g_shm->cur_x0) {
+                g_shm->pub_x0 = g_shm->cur_x0;
+                g_shm->pub_y0 = g_shm->cur_y0;
+                g_shm->pub_x1 = g_shm->cur_x1;
+                g_shm->pub_y1 = g_shm->cur_y1;
+                g_shm->counter++;
+            }
+
+            /* 通知 WM 销毁窗口 */
+            struct wm_destroy_request dr;
+            dr.magic = WM_MAGIC;
+            dr.type = WM_REQ_DESTROY;
+            dr.owner_pid = getpid();
+            strncpy(dr.shm_name, g_my_shm_name, sizeof(dr.shm_name) - 1);
+            pipe_write(g_inbox_w, &dr, sizeof(dr));
+
+            return 0;
+        }
+
+        if (av > 0) {
+            cursor_restore();
             char buf[256];
             int n = pty_read(g_master, buf, sizeof(buf));
             if (n > 0) {
                 for (int i = 0; i < n; i++)
                     process_byte((unsigned char)buf[i]);
             }
-
             term_present();
             if (!g_scrolled) cursor_draw();
         }

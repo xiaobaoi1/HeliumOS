@@ -33,6 +33,8 @@ struct pty_pair {
     uint32_t fg_pid;    /* HeliumOS：用 pid 而非 pgid */
 
     int refcount;
+    int master_count;   /* 存活的 master handle 数 */
+    int slave_count;    /* 存活的 slave handle 数 */
     int eof_pending;
 };
 
@@ -247,12 +249,15 @@ int pty_read_slave(struct pty_pair *p, uint8_t *buf, uint32_t n) {
 
     while (1) {
         int got = buf_read(p->to_slave, p->ts_head, &p->ts_tail, buf, n);
-        if (got > 0) return got; /* 唤醒等写 to_slave 的 master（暂时没有，占位） */
+        if (got > 0) return got;
 
         if (p->eof_pending) {
             p->eof_pending = 0;
-            return 0;   /* EOF */
+            return 0;   /* ^D 触发的逻辑 EOF */
         }
+
+        /* 所有 master handle 已关闭 → 物理 EOF */
+        if (p->master_count == 0) return 0;
 
         struct task *cur = get_current_task();
         if (!cur) return EINVAL;
@@ -292,7 +297,6 @@ static int pty_read_master(struct pty_pair *p, uint8_t *buf, uint32_t n) {
     while (1) {
         int got = buf_read(p->to_master, p->tm_head, &p->tm_tail, buf, n);
         if (got > 0) {
-            /* 唤醒等写 to_master 的 slave */
             if (p->wait_slave_write) {
                 struct task *t = p->wait_slave_write;
                 p->wait_slave_write = NULL;
@@ -301,7 +305,11 @@ static int pty_read_master(struct pty_pair *p, uint8_t *buf, uint32_t n) {
             return got;
         }
 
+        /* 所有 slave handle 已关闭 → 物理 EOF */
+        if (p->slave_count == 0) return 0;
+
         struct task *cur = get_current_task();
+
         if (!cur) return EINVAL;
         if (cur->pending_signals & ~cur->blocked_signals) return EINTR;
 
@@ -332,6 +340,8 @@ static int handle_alloc(struct task *t, struct pty_pair *p, int type) {
             t->pty_handles[i].type = type;
             t->pty_handles[i].pair = p;
             p->refcount++;
+            if (type == PTY_MASTER) p->master_count++;
+            else                    p->slave_count++;
             return i;
         }
     }
@@ -343,13 +353,17 @@ static void handle_close(struct task *t, int h) {
     if (!t->pty_handles[h].used) return;
 
     struct pty_pair *p = t->pty_handles[h].pair;
+    int type = t->pty_handles[h].type;
     t->pty_handles[h].used = 0;
     t->pty_handles[h].pair = NULL;
 
     if (p) {
+        if (type == PTY_MASTER && p->master_count > 0) p->master_count--;
+        if (type == PTY_SLAVE  && p->slave_count  > 0) p->slave_count--;
+
+        /* 唤醒对端——让它重新进入 pty_read 检查 EOF */
         wake_master(p);
         wake_slave(p);
-        /* 唤醒等写的 */
         if (p->wait_slave_write) {
             struct task *w = p->wait_slave_write;
             p->wait_slave_write = NULL;
@@ -507,10 +521,23 @@ int sys_pty_avail(int h) {
     struct pty_pair *p = cur->pty_handles[h].pair;
     if (!p) return EINVAL;
 
-    if (cur->pty_handles[h].type == PTY_MASTER)
-        return (int)buf_count(p->tm_head, p->tm_tail);
-    else
-        return (int)buf_count(p->ts_head, p->ts_tail);
+    /* 返回约定：
+     *   > 0  缓冲区可读字节数
+     *     0  暂时无数据，对端还活着
+     *    -1  EOF：对端所有 handle 已关闭，读将返回 0
+     */
+    if (cur->pty_handles[h].type == PTY_MASTER) {
+        uint32_t cnt = buf_count(p->tm_head, p->tm_tail);
+        if (cnt > 0) return (int)cnt;
+        if (p->slave_count == 0) return -1;
+        return 0;
+    } else {
+        uint32_t cnt = buf_count(p->ts_head, p->ts_tail);
+        if (cnt > 0) return (int)cnt;
+        if (p->eof_pending) return (int)cnt;   /* ^D，交给 pty_read 处理 */
+        if (p->master_count == 0) return -1;
+        return 0;
+    }
 }
 
 int sys_pty_set_winsize(int h, uint16_t cols, uint16_t rows) {
