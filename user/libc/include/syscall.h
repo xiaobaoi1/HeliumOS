@@ -90,6 +90,8 @@
 #define SYS_INPUT_CLAIM   131
 #define SYS_FB_MAP        132
 #define SYS_FB_CLAIM      133
+#define SYS_FB_CURSOR_HIDE 134
+#define SYS_FB_CURSOR_SYNC 135
 
 #define SYS_PTY_OPEN    140
 #define SYS_PTY_READ    141
@@ -545,6 +547,14 @@ static inline int fb_map(struct fb_user_info *info) {
 
 static inline int fb_claim(void) {
     return __syscall(SYS_FB_CLAIM, 0, 0, 0);
+}
+
+static inline int fb_cursor_hide(void) {
+    return __syscall(SYS_FB_CURSOR_HIDE, 0, 0, 0);
+}
+
+static inline int fb_cursor_sync(void) {
+    return __syscall(SYS_FB_CURSOR_SYNC, 0, 0, 0);
 }
 
 

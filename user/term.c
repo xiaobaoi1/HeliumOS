@@ -12,6 +12,7 @@
 #include "methylui/mui_widget.h"
 #include "methylui/mui_scroll.h"
 #include "ttf.h"
+#include "ime_dict.h"
 #include <stdint.h>
 
 static int g_master = -1;
@@ -875,28 +876,7 @@ static int term_resize(int new_w, int new_h) {
 #define IME_BAR_W 480
 #define IME_BUF_MAX 32
 
-struct ime_word { const char *py; const char *cand[5]; };
-static const struct ime_word g_ime_words[] = {
-    { "ni",       { "\xE4\xBD\xA0", "\xE5\xB0\xBC", "\xE6\xB3\xA5", NULL, NULL } },
-    { "hao",      { "\xE5\xA5\xBD", "\xE5\x8F\xB7", "\xE6\xAF\xAB", NULL, NULL } },
-    { "wo",       { "\xE6\x88\x91", NULL, NULL, NULL, NULL } },
-    { "shi",      { "\xE6\x98\xAF", "\xE4\xBA\x8B", "\xE6\x97\xB6", "\xE5\xB8\x82", "\xE8\xAF\x95" } },
-    { "de",       { "\xE7\x9A\x84", "\xE5\xBE\x97", "\xE5\x9C\xB0", NULL, NULL } },
-    { "zhong",    { "\xE4\xB8\xAD", "\xE7\xA7\x8D", "\xE9\x87\x8D", NULL, NULL } },
-    { "guo",      { "\xE5\x9B\xBD", "\xE8\xBF\x87", "\xE6\x9E\x9C", NULL, NULL } },
-    { "ren",      { "\xE4\xBA\xBA", "\xE8\xAE\xA4", "\xE4\xBB\x81", NULL, NULL } },
-    { "min",      { "\xE6\xB0\x91", NULL, NULL, NULL, NULL } },
-    { "wen",      { "\xE6\x96\x87", "\xE9\x97\xAE", "\xE9\x97\xBB", NULL, NULL } },
-    { "zi",       { "\xE5\xAD\x97", "\xE8\x87\xAA", "\xE5\xAD\x90", NULL, NULL } },
-    { "shu",      { "\xE8\xBE\x93", "\xE4\xB9\xA6", "\xE6\x95\xB0", NULL, NULL } },
-    { "ru",       { "\xE5\x85\xA5", NULL, NULL, NULL, NULL } },
-    { "fa",       { "\xE6\xB3\x95", "\xE5\x8F\x91", "\xE7\xBD\x9A", NULL, NULL } },
-    { "ce",       { "\xE6\xB5\x8B", "\xE7\xAD\x96", NULL, NULL, NULL } },
-    { "nihao",    { "\xE4\xBD\xA0\xE5\xA5\xBD", NULL, NULL, NULL, NULL } },
-    { "zhongwen", { "\xE4\xB8\xAD\xE6\x96\x87", NULL, NULL, NULL, NULL } },
-    { "shuru",    { "\xE8\xBE\x93\xE5\x85\xA5", NULL, NULL, NULL, NULL } },
-    { "ceshi",    { "\xE6\xB5\x8B\xE8\xAF\x95", NULL, NULL, NULL, NULL } },
-};
+
 static int g_ime_on, g_ime_visible;
 static char g_ime_buf[IME_BUF_MAX];
 static int g_ime_len;
@@ -904,9 +884,7 @@ static uint32_t g_ime_save[IME_BAR_W * FONT_H];
 static int g_ime_saved_w;
 
 static const struct ime_word *ime_lookup(void) {
-    for (unsigned i = 0; i < sizeof(g_ime_words)/sizeof(g_ime_words[0]); i++)
-        if (strcmp(g_ime_words[i].py, g_ime_buf) == 0) return &g_ime_words[i];
-    return NULL;
+    return ime_lookup_pinyin(g_ime_buf);
 }
 static int ime_cp_width(uint32_t cp) {
     if (ttf_glyph(cp)) return CELL_W;

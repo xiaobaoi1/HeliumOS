@@ -846,6 +846,24 @@ static int sys_fb_claim(void) {
     return OK;
 }
 
+static int sys_fb_cursor_hide(void) {
+    struct task *cur = get_current_task();
+    if (!cur) return EINVAL;
+    if (!(cur->caps & CAP_DISPLAY)) return EPERM;
+    if (display_get_owner() != cur->pid) return EPERM;
+    display_cursor_hide();
+    return OK;
+}
+
+static int sys_fb_cursor_sync(void) {
+    struct task *cur = get_current_task();
+    if (!cur) return EINVAL;
+    if (!(cur->caps & CAP_DISPLAY)) return EPERM;
+    if (display_get_owner() != cur->pid) return EPERM;
+    display_cursor_sync();
+    return OK;
+}
+
 /* 查询 fd 是否可读。当前只支持 fd = 0。
  * 返回：> 0 可读字节数（估计），0 不可读，< 0 错误。 */
 static int sys_fd_avail(int fd) {
@@ -1196,6 +1214,12 @@ void syscall_handler(struct registers *regs) {
             break;
         case SYS_FB_CLAIM:
             ret = sys_fb_claim();
+            break;
+        case SYS_FB_CURSOR_HIDE:
+            ret = sys_fb_cursor_hide();
+            break;
+        case SYS_FB_CURSOR_SYNC:
+            ret = sys_fb_cursor_sync();
             break;
 
 

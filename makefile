@@ -378,13 +378,13 @@ $(BUILD_DIR)/lib%.so: user/lib/lib%.c
 
 # 附加对象映射（只有两个程序需要，直接赋值最清晰）
 EXTRA_OBJS_wm      := $(BUILD_DIR)/wm_font.o $(BUILD_DIR)/unicode_font.o
-EXTRA_OBJS_desktop := $(BUILD_DIR)/wm_font.o $(METHYLUI_OBJS)
+EXTRA_OBJS_desktop := $(BUILD_DIR)/wm_font.o $(METHYLUI_OBJS) $(BUILD_DIR)/ime_dict.o
 EXTRA_OBJS_test_mui_draw := $(METHYLUI_OBJS)
 EXTRA_OBJS_test_mui_button := $(METHYLUI_OBJS)
 EXTRA_OBJS_test_mui_form := $(METHYLUI_OBJS)
 EXTRA_OBJS_kilo := $(POSIX_OBJS)
 EXTRA_OBJS_methylate := $(METHYLUI_OBJS)
-EXTRA_OBJS_term      := $(BUILD_DIR)/ttf.o $(BUILD_DIR)/unicode_font.o \
+EXTRA_OBJS_term      := $(BUILD_DIR)/ttf.o $(BUILD_DIR)/unicode_font.o $(BUILD_DIR)/ime_dict.o \
                         $(BUILD_DIR)/methylui/mui_font.o \
                         $(BUILD_DIR)/methylui/mui_surface.o \
                         $(BUILD_DIR)/methylui/mui_widget.o \

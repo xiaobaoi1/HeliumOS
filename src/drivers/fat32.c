@@ -74,7 +74,7 @@ static void lfn_write_at(const struct fat32_dir_entry *e, char *buf,
             return;
         }
         /* UTF-16 → ASCII 简化：只处理 < 0x80 */
-        buf[offset + i] = (w < 0x80) ? (char)w : '?';
+        buf[offset + i] = (w <= 0xFF) ? (char)(w & 0xFF) : '?';
     }
 }
 

@@ -88,6 +88,8 @@
 #define SYS_INPUT_CLAIM   131
 #define SYS_FB_MAP        132
 #define SYS_FB_CLAIM      133
+#define SYS_FB_CURSOR_HIDE 134
+#define SYS_FB_CURSOR_SYNC 135
 
 /* ========== pty (140~149) ========== */
 #define SYS_PTY_OPEN    140

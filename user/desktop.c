@@ -17,6 +17,7 @@
 #include "methylui/mui_textbox.h"
 #include "methylui/mui_scroll.h"
 #include "methylui/mui_dialog.h"
+#include "ime_dict.h"
 
 #define PANEL_H     28
 #define MENU_ITEM_H 24
@@ -409,7 +410,10 @@ static void fm_paint_topbar(struct fm_win *w) {
     mui_fill(s, 0, 0, w->cw, FM_TOP_BAR_H, 0x2A2A3E);
 
     /* 顶栏：输入框 > 状态消息 > 当前路径 */
-    if (w->input_mode != FM_INPUT_NONE) {
+    if (w->status[0]) {
+        mui_text(s, 4, (FM_TOP_BAR_H - MUI_FONT_H) / 2,
+                 w->status, 0xFFC040, 0x2A2A3E);
+    } else if (w->input_mode != FM_INPUT_NONE) {
         mui_text(s, 4, (FM_TOP_BAR_H - MUI_FONT_H) / 2,
                  w->input_prompt, 0xFFFFFF, 0x2A2A3E);
         int px = 4 + mui_text_width(w->input_prompt);
@@ -421,9 +425,6 @@ static void fm_paint_topbar(struct fm_win *w) {
             w->input_box.base.dirty = 1;
             mui_widget_paint(&w->input_box.base, s, px, 0);
         }
-    } else if (w->status[0]) {
-        mui_text(s, 4, (FM_TOP_BAR_H - MUI_FONT_H) / 2,
-                 w->status, 0xFFC040, 0x2A2A3E);
     } else {
         char bar[160];
         snprintf(bar, sizeof(bar), "%s", w->path);
@@ -758,8 +759,8 @@ static int fm_menu_count(struct fm_win *w) {
 }
 
 static const char *fm_menu_label(struct fm_win *w, int i) {
-    static const char *bg_labels[FM_MENU_MAX_ITEMS]   = { "Refresh", "Paste", "New Dir", "New C Source", NULL };
-    static const char *item_labels[FM_MENU_MAX_ITEMS] = { "Copy", "Cut", "Delete", "Rename", "Compile" };
+    static const char *bg_labels[FM_MENU_MAX_ITEMS]   = { "\xE5\x88\xB7\xE6\x96\xB0", "\xE7\xB2\x98\xE8\xB4\xB4", "\xE6\x96\xB0\xE5\xBB\xBA\xE6\x96\x87\xE4\xBB\xB6\xE5\xA4\xB9", "\xE6\x96\xB0\xE5\xBB\xBA\x20\x43\x20\xE6\xBA\x90\xE6\x96\x87\xE4\xBB\xB6", NULL };
+    static const char *item_labels[FM_MENU_MAX_ITEMS] = { "\xE5\xA4\x8D\xE5\x88\xB6", "\xE5\x89\xAA\xE5\x88\x87", "\xE5\x88\xA0\xE9\x99\xA4", "\xE9\x87\x8D\xE5\x91\xBD\xE5\x90\x8D", "\xE7\xBC\x96\xE8\xAF\x91" };
     return (w->menu_target >= 0) ? item_labels[i] : bg_labels[i];
 }
 
@@ -1329,7 +1330,114 @@ static void fm_handle_esc_seq(struct fm_win *w, const char *seq, unsigned int mo
     }
 }
 
+
+/* ---------- Desktop-side pinyin IME for file-name fields ---------- */
+static int  g_ime_on, g_ime_len, g_ime_show;
+static char g_ime_buf[32];
+
+static struct mui_textbox *fm_ime_target(struct fm_win *w) {
+    if (!w) return NULL;
+    if (w->dialog.active) return &w->dialog.input;
+    if (w->input_mode != FM_INPUT_NONE) return &w->input_box;
+    return NULL;
+}
+
+static void ime_hint_build(char *out, int size) {
+    if (!out || size <= 0) return;
+    out[0] = '\0';
+    if (!g_ime_on || !g_ime_show) return;
+    if (!g_ime_len) {
+        snprintf(out, size, "IME: pinyin");
+        return;
+    }
+    int n = snprintf(out, size, "IME: %s", g_ime_buf);
+    const struct ime_word *word = ime_lookup_pinyin(g_ime_buf);
+    if (word) for (int i = 0; i < 3 && word->cand[i]; i++) {
+        if (n >= size - 1) break;
+        n += snprintf(out + n, size - n, " %d:%s", i + 1, word->cand[i]);
+    }
+}
+
+static int ime_handle_key(int key, unsigned int mods,
+                          struct mui_textbox *target) {
+    if (key == ' ' && (mods & WM_MOD_CTRL)) {
+        if (!target) return 0;
+        g_ime_on = !g_ime_on;
+        g_ime_len = 0;
+        g_ime_buf[0] = '\0';
+        g_ime_show = g_ime_on;
+        return 1;
+    }
+    if (!g_ime_on) return 0;
+    if (key >= 'A' && key <= 'Z') key = key - 'A' + 'a';
+    if (key >= 'a' && key <= 'z') {
+        if (g_ime_len < (int)sizeof(g_ime_buf) - 1) {
+            g_ime_buf[g_ime_len++] = (char)key;
+            g_ime_buf[g_ime_len] = '\0';
+        }
+        g_ime_show = 1;
+        return 1;
+    }
+    if (key == '\b' || key == 127) {
+        if (!g_ime_len) return 0;
+        g_ime_buf[--g_ime_len] = '\0';
+        g_ime_show = 1;
+        return 1;
+    }
+    if (key == ' ' || key == '\r' || key == '\n') {
+        if (!g_ime_len) return 0;
+        const struct ime_word *word = ime_lookup_pinyin(g_ime_buf);
+        if (word && word->cand[0]) {
+            mui_textbox_insert_utf8(target, word->cand[0]);
+            g_ime_len = 0;
+            g_ime_buf[0] = '\0';
+            g_ime_show = 0;
+        }
+        return 1;
+    }
+    if (key >= '1' && key <= '9') {
+        if (!g_ime_len) return 0;
+        const struct ime_word *word = ime_lookup_pinyin(g_ime_buf);
+        int pick = key - '1';
+        if (word && pick < 5 && word->cand[pick]) {
+            mui_textbox_insert_utf8(target, word->cand[pick]);
+            g_ime_len = 0;
+            g_ime_buf[0] = '\0';
+            g_ime_show = 0;
+        }
+        return 1;
+    }
+    if (key == 27) {
+        if (!g_ime_len && !g_ime_show) return 0;
+        g_ime_len = 0;
+        g_ime_buf[0] = '\0';
+        g_ime_show = 0;
+        return 1;
+    }
+    return 0;
+}
+
+static int desk_ime_key(struct fm_win *w, int key, unsigned int mods) {
+    struct mui_textbox *target = fm_ime_target(w);
+    if (!target) return 0;
+    if (!ime_handle_key(key, mods, target)) return 0;
+
+    char hint[96];
+    ime_hint_build(hint, sizeof(hint));
+    if (w->dialog.active) {
+        strncpy(w->dialog.error, hint, sizeof(w->dialog.error) - 1);
+        w->dialog.error[sizeof(w->dialog.error) - 1] = '\0';
+        fm_redraw(w);
+    } else {
+        strncpy(w->status, hint, sizeof(w->status) - 1);
+        w->status[sizeof(w->status) - 1] = '\0';
+        fm_redraw_topbar(w);
+    }
+    return 1;
+}
+
 static void fm_handle_key(struct fm_win *w, int key, unsigned int mods) {
+    if (desk_ime_key(w, key, mods)) return;
     /* Rename 对话框（mui_dialog）：键盘模态 */
     if (w->dialog.active) {
         mui_dialog_key(&w->dialog, key, g_tick);
@@ -2024,6 +2132,14 @@ static void handle_wall_event(struct wm_event *ev) {
 
         /* Rename 对话框：键盘模态，直接交给 MUI */
         if (g_desk_dialog.active) {
+            if (ime_handle_key(key, ev->extra, &g_desk_dialog.input)) {
+                char hint[96];
+                ime_hint_build(hint, sizeof(hint));
+                strncpy(g_desk_dialog.error, hint, sizeof(g_desk_dialog.error) - 1);
+                g_desk_dialog.error[sizeof(g_desk_dialog.error) - 1] = '\0';
+                desk_dialog_redraw();
+                return;
+            }
             mui_dialog_key(&g_desk_dialog, key, g_tick);
             if (!g_desk_dialog.active) {
                 if (g_desk_dialog.result > 0) desktop_refresh_icons();
@@ -2249,9 +2365,9 @@ static const char *g_power_labels[POWER_MENU_ITEMS] = { "  Reset", "  Power Off"
 #define CONTEXT_MENU_ITEMS 4
 #define CONTEXT_ITEM_MAX_ITEMS 5
 static const char *g_context_labels[CONTEXT_MENU_ITEMS] =
-    { "Refresh", "Paste", "New Dir", "New C Source" };
+    { "\xE5\x88\xB7\xE6\x96\xB0", "\xE7\xB2\x98\xE8\xB4\xB4", "\xE6\x96\xB0\xE5\xBB\xBA\xE6\x96\x87\xE4\xBB\xB6\xE5\xA4\xB9", "\xE6\x96\xB0\xE5\xBB\xBA\x20\x43\x20\xE6\xBA\x90\xE6\x96\x87\xE4\xBB\xB6" };
 static const char *g_context_item_labels[CONTEXT_ITEM_MAX_ITEMS] =
-    { "Copy", "Cut", "Delete", "Rename", "Compile" };
+    { "\xE5\xA4\x8D\xE5\x88\xB6", "\xE5\x89\xAA\xE5\x88\x87", "\xE5\x88\xA0\xE9\x99\xA4", "\xE9\x87\x8D\xE5\x91\xBD\xE5\x90\x8D", "\xE7\xBC\x96\xE8\xAF\x91" };
 
 static int g_context_file = -1;
 
@@ -2264,7 +2380,7 @@ static int context_item_count(void) {
 }
 #define CONTEXT_MULTI_ITEMS 3
 static const char *g_context_multi_labels[CONTEXT_MULTI_ITEMS] =
-    { "Copy", "Cut", "Delete" };
+    { "\xE5\xA4\x8D\xE5\x88\xB6", "\xE5\x89\xAA\xE5\x88\x87", "\xE5\x88\xA0\xE9\x99\xA4" };
 
 static void draw_menu(int hover) {
     gfx_fill_rect(g_menu_pixels, g_menu_w, g_menu_h, 0, 0, g_menu_w, g_menu_h, COL_MENU_BG);

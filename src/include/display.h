@@ -48,4 +48,8 @@ void display_flush(void);
 void     display_set_owner(uint32_t pid);
 uint32_t display_get_owner(void);
 
+/* Kernel-owned hardware cursor overlay (used while a display client owns FB). */
+void display_cursor_hide(void);
+void display_cursor_sync(void);
+
 #endif

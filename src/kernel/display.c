@@ -14,6 +14,9 @@ static int cur_y = -1;
 
 static uint32_t g_fb_owner = 0;
 
+static void mouse_restore(void);
+static void mouse_draw(int mx, int my);
+
 
 /* ---------- 脏区 ---------- */
 
@@ -36,6 +39,7 @@ void display_dirty(int x0, int y0, int x1, int y1) {
 
 void display_set_owner(uint32_t pid) {
     uint32_t old = g_fb_owner;
+    if (pid != 0 && old == 0) mouse_restore();
     g_fb_owner = pid;
 
     /* WM 退出——内核恢复渲染 */
@@ -226,7 +230,7 @@ static void mouse_draw(int mx, int my) {
                 continue;
             }
             mouse_save[y * MOUSE_W + x] =
-                fb->screen[(py * fb->pitch + px * 4) / 4];
+                fb->virt[(py * fb->pitch + px * 4) / 4];
         }
     }
     for (int y = 0; y < MOUSE_H; y++) {
@@ -242,6 +246,17 @@ static void mouse_draw(int mx, int my) {
     }
     mouse_prev_x = mx;
     mouse_prev_y = my;
+}
+
+void display_cursor_hide(void) {
+    mouse_restore();
+}
+
+void display_cursor_sync(void) {
+    struct mouse_state *m = mouse_get();
+    if (!m) return;
+    mouse_restore();
+    mouse_draw(m->x, m->y);
 }
 
 /* ---------- flush ---------- */

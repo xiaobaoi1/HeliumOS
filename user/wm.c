@@ -425,53 +425,24 @@ static void win_bbox(struct window *w, int *x0, int *y0, int *x1, int *y1) {
 #define CUR_W 12
 #define CUR_H 16
 
-static const unsigned short cursor_bits[CUR_H] = {
-    0x8000, 0xC000, 0xE000, 0xF000,
-    0xF800, 0xFC00, 0xFE00, 0xFF00,
-    0xFF80, 0xFFC0, 0xE000, 0xD000,
-    0x8800, 0x0000, 0x0000, 0x0000,
-};
-
 static int mouse_x = 0, mouse_y = 0;
 static int mouse_prev_x = -1, mouse_prev_y = -1;
-static unsigned int mouse_save[CUR_W * CUR_H];
 
 static int mouse_intersects_rect(int x0, int y0, int x1, int y1) {
     return x1 > mouse_x && x0 < mouse_x + CUR_W &&
            y1 > mouse_y && y0 < mouse_y + CUR_H;
 }
 
-/* The stdvga front buffer doubles as the render target, so the cursor
- * must save/restore the VRAM pixels directly instead of relying on a
- * separate system-RAM composition buffer. */
+/* Cursor pixels are owned by the kernel display layer.  Clients only
+ * bracket framebuffer updates with hide/sync calls. */
 static void mouse_restore(void) {
-    if (mouse_prev_x < 0) return;
-    for (int j = 0; j < CUR_H; j++) {
-        int py = mouse_prev_y + j;
-        if (py < 0 || py >= (int)g_H) continue;
-        for (int i = 0; i < CUR_W; i++) {
-            int px = mouse_prev_x + i;
-            if (px < 0 || px >= (int)g_W) continue;
-            g_fb[py * g_pitch_px + px] = mouse_save[j * CUR_W + i];
-        }
-    }
+    fb_cursor_hide();
     mouse_prev_x = -1;
     mouse_prev_y = -1;
 }
 
 static void mouse_draw(void) {
-    for (int j = 0; j < CUR_H; j++) {
-        unsigned short row = cursor_bits[j];
-        int py = mouse_y + j;
-        if (py < 0 || py >= (int)g_H) continue;
-        for (int i = 0; i < CUR_W; i++) {
-            int px = mouse_x + i;
-            if (px < 0 || px >= (int)g_W) continue;
-            int off = py * g_pitch_px + px;
-            mouse_save[j * CUR_W + i] = g_fb[off];
-            if (row & (0x8000 >> i)) g_fb[off] = 0xFFFFFF;
-        }
-    }
+    fb_cursor_sync();
     mouse_prev_x = mouse_x;
     mouse_prev_y = mouse_y;
 }
