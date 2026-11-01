@@ -411,7 +411,7 @@ tcc-prepare: libc.a
 
 
 tcc: 
-	gcc -m32 -static -nostdlib     -Wl,-T,user/linker.ld     -Wl,--start-group     user/tcc.o     user/libtcc.a     build/crt0.o     build/libc.a     -Wl,--end-group     /usr/lib/gcc/x86_64-linux-gnu/15/32/libgcc.a     -o build/TCC.ELF
+	gcc -m32 -static -nostdlib     -Wl,-T,user/linker.ld     -Wl,--start-group     user/tcc.out     user/libtcc.a     build/crt0.o     build/libc.a     -Wl,--end-group     /usr/lib/gcc/x86_64-linux-gnu/15/32/libgcc.a     -o build/TCC.ELF
 
 
 
