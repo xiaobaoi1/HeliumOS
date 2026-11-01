@@ -7,6 +7,7 @@
 #include "wm_proto.h"
 #include "wm_theme.h"
 #include "wm_font.h"
+#include "unicode_font.h"
 #include "shm_layout.h"
 
 static void mouse_restore(void);
@@ -312,23 +313,30 @@ static void draw_title_text(struct window *w) {
     int ty = w->y + (TITLE_H - FONT_H) / 2;
     int tx_limit = w->x + w->w - CTRL_BTN_MARGIN - CTRL_BTN_SIZE * 3 - CTRL_BTN_GAP * 2 - 8;
 
-    for (const char *p = w->title; *p; p++) {
-        int cp = (unsigned char)*p;
-        if (cp >= 128) cp = '?';
-
-        const uint8_t *g = wm_font_glyph(cp);
+    const unsigned char *p = (const unsigned char*)w->title;
+    while (*p) {
+        uint32_t cp;
+        int n = ufont_utf8_decode(p, &cp);
+        const uint8_t *g = wm_font_glyph((int)cp);
+        int gw = wm_font_width((int)cp);
+        if (!g) {
+            g = wm_font_glyph('?');
+            gw = wm_font_width('?');
+        }
+        if (!gw) gw = FONT_W;
+        if (tx + gw > tx_limit) break;
         if (g) {
             for (int r = 0; r < FONT_H; r++) {
-                unsigned char bits = g[r];
-                for (int j = 0; j < FONT_W; j++) {
-                    if (bits & (0x80 >> j)) {
-                        put_pixel_buf(g_back, tx + j, ty + r, COL_TITLE_FG);
-                    }
+                for (int j = 0; j < gw; j++) {
+                    int bit;
+                    if (gw == 16) bit = g[r * 2 + (j >> 3)] & (0x80 >> (j & 7));
+                    else          bit = g[r] & (0x80 >> j);
+                    if (bit) put_pixel_buf(g_back, tx + j, ty + r, COL_TITLE_FG);
                 }
             }
         }
-        tx += FONT_W;
-        if (tx + FONT_W > tx_limit) break;
+        tx += gw;
+        p += n;
     }
 }
 
@@ -1215,8 +1223,6 @@ int main(int argc, char **argv) {
     fill_rect_buf(g_back, 0, 0, g_W, g_H, COL_BG);
     reset_clip();
 
-    wm_font_load();
-
     pipe_unlink(WM_INBOX_NAME);
     int inbox_fds[2];
     if (pipe_named(WM_INBOX_NAME, inbox_fds) < 0) {
@@ -1225,6 +1231,8 @@ int main(int argc, char **argv) {
     }
     g_inbox_rd = inbox_fds[0];
     ipc_close(inbox_fds[1]);
+
+    wm_font_load();
 
     blit_back_to_fb(0, 0, g_W, g_H);
     mouse_x = g_W / 2;

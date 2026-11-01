@@ -204,9 +204,20 @@ static void draw_file_icon(int idx) {
         gfx_fill_rect(g_wall_pixels, g_W, g_H, ix + ICON_SIZE - 1, iy, 1, ICON_SIZE, edge); 
     }
 
-    char label[11];
-    int n = 0;
-    while (n < 10 && f->name[n]) { label[n] = f->name[n]; n++; }
+    char label[64];
+    int n = 0, tw = 0;
+    const unsigned char *np = (const unsigned char*)f->name;
+    while (*np && n < (int)sizeof(label) - 4) {
+        uint32_t cp;
+        int clen = ufont_utf8_decode(np, &cp);
+        int cw = wm_font_width((int)cp);
+        if (!cw) cw = 8;
+        if (tw + cw > ICON_CELL_W - 8) break;
+        memcpy(label + n, np, clen);
+        n += clen;
+        tw += cw;
+        np += clen;
+    }
     label[n] = '\0';
 
     int ly = iy + ICON_SIZE + 4;
@@ -216,7 +227,6 @@ static void draw_file_icon(int idx) {
 
     gfx_fill_rect(g_wall_pixels, g_W, g_H, lx, ly, lw, 16, lbg);
 
-    int tw = n * 8;
     int tx = px + (ICON_CELL_W - tw) / 2;
     if (tx < px + 2) tx = px + 2;
     gfx_draw_text(g_wall_pixels, g_W, tx, ly, label, 0xFFFFFF, lbg);
@@ -273,7 +283,7 @@ static void redraw_selection_changed(uint64_t old_mask) {
 #define FM_MENU_W       152
 #define FM_MENU_ITEM_H  24
 #define FM_MENU_PAD     4
-#define FM_MENU_MAX_ITEMS 4
+#define FM_MENU_MAX_ITEMS 5
 
 /* 顶栏输入模式 */
 #define FM_INPUT_NONE    0
@@ -738,12 +748,18 @@ static int fm_collect_selection(struct fm_win *w, char paths[][256], int max) {
 
 static int fm_menu_count(struct fm_win *w) {
     if (w->menu_target < 0) return 4;
-    return (mui_list_selected_count(&w->list) > 1) ? 3 : 4;  /* 多选时不允许 Rename */
+    if (mui_list_selected_count(&w->list) > 1) return 3;
+    int idx = w->menu_target;
+    if (idx >= 0 && idx < w->list.count &&
+        w->list.items[idx].icon == MUI_LIST_ICON_FILE &&
+        is_c_source(w->list.items[idx].text))
+        return 5;
+    return 4;
 }
 
 static const char *fm_menu_label(struct fm_win *w, int i) {
-    static const char *bg_labels[FM_MENU_MAX_ITEMS]   = { "Refresh", "Paste", "New Dir", "New C Source" };
-    static const char *item_labels[FM_MENU_MAX_ITEMS] = { "Copy", "Cut", "Delete", "Rename" };
+    static const char *bg_labels[FM_MENU_MAX_ITEMS]   = { "Refresh", "Paste", "New Dir", "New C Source", NULL };
+    static const char *item_labels[FM_MENU_MAX_ITEMS] = { "Copy", "Cut", "Delete", "Rename", "Compile" };
     return (w->menu_target >= 0) ? item_labels[i] : bg_labels[i];
 }
 
@@ -1153,6 +1169,52 @@ static void fm_finish_drag(struct fm_win *w, int mx, int my) {
 }
 
 /* 执行右键菜单项 */
+static int compile_source_path(const char *src) {
+    if (!src || !is_c_source(src)) return 0;
+    char parent[256], stem[128], out[256];
+    strncpy(stem, fm_path_base(src), sizeof(stem) - 1);
+    stem[sizeof(stem) - 1] = '\0';
+    int len = (int)strlen(stem);
+    if (len > 2 && stem[len - 2] == '.' &&
+        (stem[len - 1] == 'c' || stem[len - 1] == 'C'))
+        stem[len - 2] = '\0';
+    fm_path_parent(src, parent, sizeof(parent));
+    fm_path_join(parent, stem, out, sizeof(out));
+
+    char *argv[] = { "TCC", "-xc", "-o", out, (char*)src, NULL };
+    struct spawn_params sp = {
+        .size = sizeof(sp),
+        .in_fd = SPAWN_FD_NULL, .out_fd = SPAWN_FD_NULL, .err_fd = SPAWN_FD_NULL,
+        .in_pipe = -1, .out_pipe = -1, .err_pipe = -1,
+        .in_pty = -1, .out_pty = -1, .err_pty = -1,
+        .flags = 0, .envp = 0, .out_pid = 0,
+        .child_class = CLASS_USER, .child_caps = 0,
+    };
+    int h = spawn("TCC", argv, &sp);
+    if (h < 0) return 0;
+    int st = 0, wr = wait(h, &st, 0);
+    process_close(h);
+    return wr == 0 && st == 0;
+}
+
+static void fm_compile_selected(struct fm_win *w, int idx) {
+    if (!w || idx < 0 || idx >= w->list.count) return;
+    char src[256];
+    fm_item_path(w, idx, src, sizeof(src));
+    int ok = compile_source_path(src);
+    fm_refresh(w);
+    desktop_refresh_icons();
+    fm_set_status(w, ok ? "Compiled" : "Compile failed");
+    fm_redraw(w);
+}
+
+static void desk_compile_file(int idx) {
+    if (idx < 0 || idx >= g_file_count || g_files[idx].is_dir) return;
+    char src[256];
+    snprintf(src, sizeof(src), "SYS:\\%s", g_files[idx].name);
+    if (compile_source_path(src)) desktop_refresh_icons();
+}
+
 static void fm_menu_action(struct fm_win *w, int item) {
     int target = w->menu_target;
 
@@ -1178,6 +1240,8 @@ static void fm_menu_action(struct fm_win *w, int item) {
                     fm_redraw(w);
                 }
             }
+        } else if (item == 4) {
+            fm_compile_selected(w, target);
         }
         return;
     }
@@ -2125,9 +2189,18 @@ static void draw_window_items(void) {
         unsigned int bg = g_win_list[i].minimized ? 0x1A1A2E : 0x3A4A5E;
         gfx_fill_rect(g_panel_pixels, g_W, PANEL_H, x, 0, WIN_ITEM_W - 4, PANEL_H, bg);
 
-        char label[13];
-        int k = 0;
-        for (; k < 12 && g_win_list[i].title[k]; k++) label[k] = g_win_list[i].title[k];
+        char label[64];
+        int k = 0, used = 0;
+        const unsigned char *tp = (const unsigned char*)g_win_list[i].title;
+        while (*tp && k < (int)sizeof(label) - 4) {
+            uint32_t cp;
+            int clen = ufont_utf8_decode(tp, &cp);
+            int cw = wm_font_width((int)cp);
+            if (!cw) cw = 8;
+            if (used + cw > WIN_ITEM_W - 12) break;
+            memcpy(label + k, tp, clen);
+            k += clen; used += cw; tp += clen;
+        }
         label[k] = '\0';
         gfx_draw_text(g_panel_pixels, g_W, x + 4, (PANEL_H - 16) / 2, label, COL_PANEL_FG, bg);
         x += WIN_ITEM_W;
@@ -2174,14 +2247,24 @@ static const char *g_main_labels[MAIN_MENU_ITEMS] = { "Power Options", "Terminal
 #define POWER_MENU_ITEMS 2
 static const char *g_power_labels[POWER_MENU_ITEMS] = { "  Reset", "  Power Off" };
 #define CONTEXT_MENU_ITEMS 4
+#define CONTEXT_ITEM_MAX_ITEMS 5
 static const char *g_context_labels[CONTEXT_MENU_ITEMS] =
     { "Refresh", "Paste", "New Dir", "New C Source" };
-static const char *g_context_item_labels[CONTEXT_MENU_ITEMS] =
-    { "Copy", "Cut", "Delete", "Rename" };
+static const char *g_context_item_labels[CONTEXT_ITEM_MAX_ITEMS] =
+    { "Copy", "Cut", "Delete", "Rename", "Compile" };
+
+static int g_context_file = -1;
+
+static int context_item_count(void) {
+    int idx = g_context_file;
+    if (idx >= 0 && idx < g_file_count && !g_files[idx].is_dir &&
+        is_c_source(g_files[idx].name))
+        return CONTEXT_ITEM_MAX_ITEMS;
+    return CONTEXT_MENU_ITEMS;
+}
 #define CONTEXT_MULTI_ITEMS 3
 static const char *g_context_multi_labels[CONTEXT_MULTI_ITEMS] =
     { "Copy", "Cut", "Delete" };
-static int g_context_file = -1;   /* 桌面项菜单对应的图标下标 */
 
 static void draw_menu(int hover) {
     gfx_fill_rect(g_menu_pixels, g_menu_w, g_menu_h, 0, 0, g_menu_w, g_menu_h, COL_MENU_BG);
@@ -2192,7 +2275,7 @@ static void draw_menu(int hover) {
         count = CONTEXT_MENU_ITEMS;
         labels = g_context_labels;
     } else if (g_menu_state == MENU_STATE_CONTEXT_ITEM) {
-        count = CONTEXT_MENU_ITEMS;
+        count = context_item_count();
         labels = g_context_item_labels;
     } else if (g_menu_state == MENU_STATE_CONTEXT_MULTI) {
         count = CONTEXT_MULTI_ITEMS;
@@ -2378,8 +2461,11 @@ static void open_context_item_menu(int file_idx, int x, int y) {
     g_menu_state = multi ? MENU_STATE_CONTEXT_MULTI : MENU_STATE_CONTEXT_ITEM;
     g_context_file = file_idx;
     g_menu_w = MENU_W;
-    g_menu_h = (multi ? CONTEXT_MULTI_ITEMS : CONTEXT_MENU_ITEMS)
-               * MENU_ITEM_H + MENU_PAD * 2;
+    int items = multi ? CONTEXT_MULTI_ITEMS :
+                ((file_idx >= 0 && file_idx < g_file_count &&
+                  !g_files[file_idx].is_dir && is_c_source(g_files[file_idx].name))
+                 ? CONTEXT_ITEM_MAX_ITEMS : CONTEXT_MENU_ITEMS);
+    g_menu_h = items * MENU_ITEM_H + MENU_PAD * 2;
     strcpy(g_menu_shm, "menu-shm");
     char ev_name[24];
     strcpy(ev_name, "menu-ev");
@@ -2405,8 +2491,8 @@ static void close_menu_request(void) {
 }
 
 static int menu_item_count(void) {
-    if (g_menu_state == MENU_STATE_CONTEXT ||
-        g_menu_state == MENU_STATE_CONTEXT_ITEM) return CONTEXT_MENU_ITEMS;
+    if (g_menu_state == MENU_STATE_CONTEXT) return CONTEXT_MENU_ITEMS;
+    if (g_menu_state == MENU_STATE_CONTEXT_ITEM) return context_item_count();
     if (g_menu_state == MENU_STATE_CONTEXT_MULTI) return CONTEXT_MULTI_ITEMS;
     if (g_menu_state == MENU_STATE_MAIN)    return MAIN_MENU_ITEMS;
     return POWER_MENU_ITEMS;
@@ -2461,6 +2547,8 @@ static void handle_menu_event(struct wm_event *ev) {
                     mui_dialog_open_rename(&g_desk_dialog, ROOT_PATH,
                                            g_files[idx].name);
                     draw_wallpaper();
+                } else if (item == 4) {
+                    desk_compile_file(idx);
                 }
             } else if (g_menu_state == MENU_STATE_MAIN) {
                 if (item == 0) { g_menu_state = MENU_STATE_POWER; draw_menu(-1); return; }
@@ -2514,7 +2602,7 @@ int main(int argc, char **argv) {
     const char *sh = getenv("SCREEN_H");
     g_W = sw ? atoi(sw) : 1024; g_H = sh ? atoi(sh) : 768;
 
-    for (int i = 0; i < 100; i++) {
+    for (int i = 0; i < 1000; i++) {
         g_inbox_w = pipe_open(WM_INBOX_NAME, 1);
         if (g_inbox_w >= 0) break;
         sleep_ms(10);

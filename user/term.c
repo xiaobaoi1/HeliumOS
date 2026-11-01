@@ -11,6 +11,7 @@
 #include "methylui/mui_surface.h"
 #include "methylui/mui_widget.h"
 #include "methylui/mui_scroll.h"
+#include "ttf.h"
 #include <stdint.h>
 
 static int g_master = -1;
@@ -27,6 +28,13 @@ static unsigned char  *g_glyph_width = NULL;
 static unsigned char  *g_glyph_data  = NULL;
 static unsigned int    g_glyph_data_used = 0;
 
+#define TTF_CACHE_SIZE (128 * 1024)
+static unsigned char *g_ttf_cache = NULL;
+static unsigned char *g_ttf_state = NULL;   /* 0 unknown, 1 miss, 2 rendered */
+static uint16_t      *g_ttf_off = NULL;
+static unsigned int   g_ttf_cache_used = 0;
+static int            g_ttf_ok = 0;
+
 static int hexval(char c) {
     if (c >= '0' && c <= '9') return c - '0';
     if (c >= 'a' && c <= 'f') return c - 'a' + 10;
@@ -34,32 +42,18 @@ static int hexval(char c) {
     return -1;
 }
 
-static void load_font(void) {
-    int fd = fs_open("SYS:/UNIFONT.HEX", FS_O_RDONLY);
-    if (fd < 0) {
-        dprintf(2, "term: font open failed %d\n", fd);
-        return;
-    }
+static int load_unifont(void) {
+    int fd = fs_open("SYS:/UNIFONT-17.HEX", FS_O_RDONLY);
+    if (fd < 0) return -1;
 
-    g_glyph_ptr   = (unsigned char**)malloc(MAX_CP * sizeof(unsigned char*));
-    g_glyph_width = (unsigned char*)malloc(MAX_CP);
-    g_glyph_data  = (unsigned char*)malloc(GLYPH_DATA_MAX);
-    if (!g_glyph_ptr || !g_glyph_width || !g_glyph_data) {
-        dprintf(2, "term: font alloc failed\n");
-        fs_close(fd);
-        return;
-    }
-    g_glyph_data_used = 0;
-
-    static char buf[65536];   /* 64KB，跨越多个簇，触发合并读 */
+    static char buf[65536];
     char line[128];
     int line_len = 0;
-    int loaded = 0, skipped = 0;
+    int loaded = 0;
 
     for (;;) {
         int n = fs_read(fd, buf, sizeof(buf));
         if (n <= 0) break;
-
         for (int i = 0; i < n; i++) {
             char c = buf[i];
             if (c == '\n' || c == '\r') {
@@ -72,28 +66,20 @@ static void load_font(void) {
                 while (*p && *p != ':') {
                     int v = hexval(*p);
                     if (v < 0) { ok = 0; break; }
-                    cp = cp * 16 + v;
+                    cp = cp * 16 + (uint32_t)v;
                     p++;
                 }
                 if (!ok || *p != ':') { line_len = 0; continue; }
                 p++;
-
                 int hl = 0;
                 const char *q = p;
                 while (hexval(q[0]) >= 0 && hexval(q[1]) >= 0) { hl += 2; q += 2; }
-
-                int width;
-                if (hl == 32)      width = 8;
-                else if (hl == 64) width = 16;
-                else { line_len = 0; skipped++; continue; }
-
-                if (cp >= MAX_CP) { line_len = 0; skipped++; continue; }
-
+                int width = (hl == 32) ? 8 : (hl == 64) ? 16 : 0;
+                if (!width || cp >= MAX_CP) { line_len = 0; continue; }
                 int data_size = hl / 2;
-                if (g_glyph_data_used + data_size > GLYPH_DATA_MAX) {
-                    line_len = 0; skipped++; continue;
+                if (g_glyph_data_used + (unsigned)data_size > GLYPH_DATA_MAX) {
+                    line_len = 0; continue;
                 }
-
                 unsigned char *dst = g_glyph_data + g_glyph_data_used;
                 int decode_ok = 1;
                 for (int k = 0; k < data_size; k++) {
@@ -103,14 +89,11 @@ static void load_font(void) {
                     dst[k] = (unsigned char)((hi << 4) | lo);
                     p += 2;
                 }
-
                 if (decode_ok) {
-                    g_glyph_ptr[cp]   = dst;
+                    g_glyph_ptr[cp] = dst;
                     g_glyph_width[cp] = (unsigned char)width;
-                    g_glyph_data_used += data_size;
+                    g_glyph_data_used += (unsigned)data_size;
                     loaded++;
-                } else {
-                    skipped++;
                 }
                 line_len = 0;
             } else if (line_len < (int)sizeof(line) - 1) {
@@ -118,10 +101,56 @@ static void load_font(void) {
             }
         }
     }
-
     fs_close(fd);
-    dprintf(2, "term: font loaded %d glyphs (%u bytes), skipped %d\n",
-            loaded, g_glyph_data_used, skipped);
+    return loaded;
+}
+
+static void load_font(void) {
+    g_glyph_ptr = (unsigned char**)malloc(MAX_CP * sizeof(unsigned char*));
+    g_glyph_width = (unsigned char*)malloc(MAX_CP);
+    g_glyph_data = (unsigned char*)malloc(GLYPH_DATA_MAX);
+    if (!g_glyph_ptr || !g_glyph_width || !g_glyph_data) {
+        dprintf(2, "term: font alloc failed\n");
+        return;
+    }
+    memset(g_glyph_ptr, 0, MAX_CP * sizeof(unsigned char*));
+    memset(g_glyph_width, 0, MAX_CP);
+    g_glyph_data_used = 0;
+
+    if (ttf_load("SYS:/CONSOLA.TTF", FONT_H) == 0) {
+        g_ttf_cache = (unsigned char*)malloc(TTF_CACHE_SIZE);
+        g_ttf_state = (unsigned char*)malloc(MAX_CP);
+        g_ttf_off = (uint16_t*)malloc(MAX_CP * sizeof(uint16_t));
+        if (g_ttf_cache && g_ttf_state && g_ttf_off) {
+            memset(g_ttf_state, 0, MAX_CP);
+            g_ttf_cache_used = 0;
+            g_ttf_ok = 1;
+        }
+    }
+
+    int fallback = load_unifont();
+    dprintf(2, "term: TTF=%s unifont=%d\n", g_ttf_ok ? "yes" : "no", fallback);
+}
+
+/* Rasterise a codepoint on first use and cache its 8x16 1-bit mask.
+ * TTF glyphs only provide coverage; ANSI fg/bg colours still come from
+ * the terminal state and are applied by draw_char_at(). */
+static unsigned char *ttf_glyph(uint32_t cp) {
+    if (!g_ttf_ok || cp >= MAX_CP) return NULL;
+    if (g_ttf_state[cp] == 0) {
+        unsigned int used = g_ttf_cache_used;
+        if (used + FONT_H <= TTF_CACHE_SIZE) {
+            unsigned char *dst = g_ttf_cache + used;
+            if (ttf_render_glyph(cp, dst, CELL_W, FONT_H) > 0) {
+                g_ttf_off[cp] = (uint16_t)used;
+                g_ttf_cache_used += FONT_H;
+                g_ttf_state[cp] = 2;
+                return dst;
+            }
+        }
+        g_ttf_state[cp] = 1;
+    }
+    return g_ttf_state[cp] == 2 ? g_ttf_cache + g_ttf_off[cp] : NULL;
 }
 
 /* ---------- 渲染 ---------- */
@@ -213,12 +242,13 @@ static void fill_rect(int x, int y, int w, int h, unsigned int rgb) {
     mark_dirty(x, y, x + w, y + h);
 }
 
+
 static void draw_char_at(int px, int py, uint32_t cp,
                          uint32_t fg, uint32_t bg) {
-    int width = 8;
-    unsigned char *g = NULL;
+    int width = CELL_W;
+    unsigned char *g = ttf_glyph(cp);
 
-    if (g_glyph_ptr && g_glyph_width && cp < MAX_CP) {
+    if (!g && g_glyph_ptr && g_glyph_width && cp < MAX_CP) {
         g = g_glyph_ptr[cp];
         if (g && g_glyph_width[cp]) width = g_glyph_width[cp];
     }
@@ -840,6 +870,138 @@ static int term_resize(int new_w, int new_h) {
 
 /* ---------- main ---------- */
 
+
+/* ---------- Simple pinyin IME ---------- */
+#define IME_BAR_W 480
+#define IME_BUF_MAX 32
+
+struct ime_word { const char *py; const char *cand[5]; };
+static const struct ime_word g_ime_words[] = {
+    { "ni",       { "\xE4\xBD\xA0", "\xE5\xB0\xBC", "\xE6\xB3\xA5", NULL, NULL } },
+    { "hao",      { "\xE5\xA5\xBD", "\xE5\x8F\xB7", "\xE6\xAF\xAB", NULL, NULL } },
+    { "wo",       { "\xE6\x88\x91", NULL, NULL, NULL, NULL } },
+    { "shi",      { "\xE6\x98\xAF", "\xE4\xBA\x8B", "\xE6\x97\xB6", "\xE5\xB8\x82", "\xE8\xAF\x95" } },
+    { "de",       { "\xE7\x9A\x84", "\xE5\xBE\x97", "\xE5\x9C\xB0", NULL, NULL } },
+    { "zhong",    { "\xE4\xB8\xAD", "\xE7\xA7\x8D", "\xE9\x87\x8D", NULL, NULL } },
+    { "guo",      { "\xE5\x9B\xBD", "\xE8\xBF\x87", "\xE6\x9E\x9C", NULL, NULL } },
+    { "ren",      { "\xE4\xBA\xBA", "\xE8\xAE\xA4", "\xE4\xBB\x81", NULL, NULL } },
+    { "min",      { "\xE6\xB0\x91", NULL, NULL, NULL, NULL } },
+    { "wen",      { "\xE6\x96\x87", "\xE9\x97\xAE", "\xE9\x97\xBB", NULL, NULL } },
+    { "zi",       { "\xE5\xAD\x97", "\xE8\x87\xAA", "\xE5\xAD\x90", NULL, NULL } },
+    { "shu",      { "\xE8\xBE\x93", "\xE4\xB9\xA6", "\xE6\x95\xB0", NULL, NULL } },
+    { "ru",       { "\xE5\x85\xA5", NULL, NULL, NULL, NULL } },
+    { "fa",       { "\xE6\xB3\x95", "\xE5\x8F\x91", "\xE7\xBD\x9A", NULL, NULL } },
+    { "ce",       { "\xE6\xB5\x8B", "\xE7\xAD\x96", NULL, NULL, NULL } },
+    { "nihao",    { "\xE4\xBD\xA0\xE5\xA5\xBD", NULL, NULL, NULL, NULL } },
+    { "zhongwen", { "\xE4\xB8\xAD\xE6\x96\x87", NULL, NULL, NULL, NULL } },
+    { "shuru",    { "\xE8\xBE\x93\xE5\x85\xA5", NULL, NULL, NULL, NULL } },
+    { "ceshi",    { "\xE6\xB5\x8B\xE8\xAF\x95", NULL, NULL, NULL, NULL } },
+};
+static int g_ime_on, g_ime_visible;
+static char g_ime_buf[IME_BUF_MAX];
+static int g_ime_len;
+static uint32_t g_ime_save[IME_BAR_W * FONT_H];
+static int g_ime_saved_w;
+
+static const struct ime_word *ime_lookup(void) {
+    for (unsigned i = 0; i < sizeof(g_ime_words)/sizeof(g_ime_words[0]); i++)
+        if (strcmp(g_ime_words[i].py, g_ime_buf) == 0) return &g_ime_words[i];
+    return NULL;
+}
+static int ime_cp_width(uint32_t cp) {
+    if (ttf_glyph(cp)) return CELL_W;
+    if (g_glyph_ptr && cp < MAX_CP && g_glyph_width[cp]) return g_glyph_width[cp];
+    return CELL_W;
+}
+static void ime_draw_text(const char *text, int x, int y, uint32_t fg, uint32_t bg) {
+    const unsigned char *p = (const unsigned char*)text;
+    int limit = x + g_ime_saved_w - 4;
+    while (*p) {
+        uint32_t cp; int n = 1;
+        if (*p < 0x80) cp = *p;
+        else if ((*p & 0xE0) == 0xC0 && p[1]) { cp = ((*p & 0x1F) << 6) | (p[1] & 0x3F); n = 2; }
+        else if ((*p & 0xF0) == 0xE0 && p[1] && p[2]) { cp = ((*p & 0x0F) << 12) | ((p[1] & 0x3F) << 6) | (p[2] & 0x3F); n = 3; }
+        else if ((*p & 0xF8) == 0xF0 && p[1] && p[2] && p[3]) { cp = ((*p & 0x07) << 18) | ((p[1] & 0x3F) << 12) | ((p[2] & 0x3F) << 6) | (p[3] & 0x3F); n = 4; }
+        else { cp = '?'; n = 1; }
+        int w = ime_cp_width(cp);
+        if (x + w > limit) break;
+        draw_char_at(x, y, cp, fg, bg);
+        x += w; p += n;
+    }
+}
+static void ime_restore(void) {
+    if (!g_ime_visible || !g_ime_saved_w || !g_pixels) return;
+    int y = g_ch - FONT_H;
+    for (int r = 0; r < FONT_H; r++) {
+        unsigned int *dst = g_pixels + (y + r) * g_cw;
+        unsigned int *src = g_ime_save + r * g_ime_saved_w;
+        memcpy(dst, src, g_ime_saved_w * 4);
+    }
+    mark_dirty(0, y, g_ime_saved_w, y + FONT_H);
+    g_ime_visible = 0;
+}
+static void ime_draw(void) {
+    ime_restore();
+    if (!g_ime_on || g_scrolled || !g_pixels) return;
+    int w = g_text_w < IME_BAR_W ? g_text_w : IME_BAR_W;
+    if (w < 80) return;
+    int y = g_ch - FONT_H;
+    g_ime_saved_w = w;
+    for (int r = 0; r < FONT_H; r++)
+        memcpy(g_ime_save + r * w, g_pixels + (y + r) * g_cw, w * 4);
+    fill_rect(0, y, w, FONT_H, 0x2A2A3E);
+    char line[256];
+    int n = snprintf(line, sizeof(line), "%s", g_ime_len ? g_ime_buf : "IME:");
+    const struct ime_word *word = ime_lookup();
+    if (word) for (int i = 0; i < 5 && word->cand[i]; i++)
+        if (n < (int)sizeof(line) - 1)
+            n += snprintf(line + n, sizeof(line) - n, " %d:%s", i + 1, word->cand[i]);
+    ime_draw_text(line, 4, y, 0xFFFFFF, 0x2A2A3E);
+    g_ime_visible = 1;
+    mark_dirty(0, y, w, y + FONT_H);
+}
+static int ime_commit(int pick) {
+    const struct ime_word *word = ime_lookup();
+    if (!word || pick < 0 || pick >= 5 || !word->cand[pick]) return 0;
+    const char *out = word->cand[pick];
+    ime_restore();
+    g_ime_len = 0; g_ime_buf[0] = '\0';
+    pty_write(g_master, out, (unsigned int)strlen(out));
+    ime_draw();
+    return 1;
+}
+static int ime_key(int key, unsigned int mods) {
+    if (key == ' ' && (mods & WM_MOD_CTRL)) {
+        g_ime_on = !g_ime_on; g_ime_len = 0; g_ime_buf[0] = '\0';
+        ime_draw(); return 1;
+    }
+    if (!g_ime_on) return 0;
+    if (key >= 'A' && key <= 'Z') key = key - 'A' + 'a';
+    if (key >= 'a' && key <= 'z') {
+        if (g_ime_len < IME_BUF_MAX - 1) {
+            g_ime_buf[g_ime_len++] = (char)key; g_ime_buf[g_ime_len] = '\0';
+        }
+        ime_draw(); return 1;
+    }
+    if (key == '\b' || key == 127) {
+        if (!g_ime_len) return 0;
+        g_ime_buf[--g_ime_len] = '\0';
+        ime_draw(); return 1;
+    }
+    if (key == ' ' || key == '\r' || key == '\n') {
+        if (!g_ime_len) return 0;
+        ime_commit(0);
+        return 1;
+    }
+    if (key >= '1' && key <= '9') {
+        if (!g_ime_len) return 0;
+        ime_commit(key - '1');
+        return 1;
+    }
+    if (key == 27) { ime_restore(); g_ime_len = 0; g_ime_buf[0] = '\0'; return 1; }
+    return 0;
+}
+
 int main(int argc, char **argv) {
     if (argc < 5) {
         dprintf(2, "usage: TERM <shm_name> <w> <h> <event_pipe> [prog [args...]]\n");
@@ -955,9 +1117,12 @@ int main(int argc, char **argv) {
                     mui_scroll_end(&g_scroll);
                     term_view_update();
                 }
-                char c = (char)ev.code;
-                pty_write(g_master, &c, 1);
+                if (!ime_key((int)ev.code, ev.extra)) {
+                    char c = (char)ev.code;
+                    pty_write(g_master, &c, 1);
+                }
             } else if (ev.type == WM_EV_RESIZE) {
+                ime_restore();
                 /* WM 主动 resize（最大化 / 还原）——重建 shm 并通知 WM 切换 */
                 term_resize((int)ev.code, (int)ev.extra);
             } else if (ev.type == WM_EV_CLOSE_REQUEST) {
@@ -1016,6 +1181,7 @@ int main(int argc, char **argv) {
         }
 
         if (pty_avail(g_master) > 0) {
+            ime_restore();
             cursor_restore();
 
             char buf[256];
@@ -1027,6 +1193,7 @@ int main(int argc, char **argv) {
 
             term_present();
             if (!g_scrolled) cursor_draw();
+            ime_draw();
         }
 
         if (g_shm && (g_shm->pub_x0 == SHM_DIRTY_EMPTY ||
