@@ -43,7 +43,7 @@ struct ata_device {
 };
 
 /* 探测四个位置（主/从 × master/slave） */
-void ata_init(void);
+int ata_init(void);
 
 int                     ata_device_count(void);
 const struct ata_device *ata_get_device(int idx);

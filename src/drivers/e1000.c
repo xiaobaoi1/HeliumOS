@@ -9,6 +9,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <stddef.h>
+#include <driver.h>
 
 /* ---------- 寄存器偏移（字节） ---------- */
 #define E1000_CTRL      0x0000
@@ -187,11 +188,11 @@ static void e1000_irq(void) {
 
 /* ---------- 初始化 ---------- */
 
-void e1000_init(void) {
+int e1000_init(void) {
     const struct pci_device *pci = find_e1000();
     if (!pci) {
         kprintf("[E1000] Not found\n");
-        return;
+        return -1;
     }
 
     kprintf("[E1000] Found %04x:%04x at %02x:%02x.%x\n",
@@ -202,12 +203,12 @@ void e1000_init(void) {
     uint32_t bar0 = pci->bar[0];
     if (bar0 & 0x1) {
         kprintf("[E1000] BAR0 is I/O space, unsupported\n");
-        return;
+        return -1;
     }
     uint32_t mmio_phys = bar0 & ~0xF;
     if (mmio_phys == 0) {
         kprintf("[E1000] BAR0 invalid\n");
-        return;
+        return -1;
     }
 
     /* 打开 I/O space + bus master */
@@ -220,7 +221,7 @@ void e1000_init(void) {
     g_regs = (volatile uint32_t*)kmap(mmio_phys, 0x20000);
     if (!g_regs) {
         kprintf("[E1000] kmap failed\n");
-        return;
+        return -1;
     }
     kprintf("[E1000] MMIO 0x%x -> %p\n", mmio_phys, (void*)g_regs);
 
@@ -245,13 +246,13 @@ void e1000_init(void) {
 
     /* 分配 RX 环 */
     g_rx_ring_phys = pmm_alloc_pages(1);
-    if (!g_rx_ring_phys) { kprintf("[E1000] rx ring alloc failed\n"); return; }
+    if (!g_rx_ring_phys) { kprintf("[E1000] rx ring alloc failed\n"); return -1; }
     g_rx_ring = (struct e1000_rx_desc*)g_rx_ring_phys;
     memset(g_rx_ring, 0, sizeof(struct e1000_rx_desc) * E1000_NUM_RX);
 
     for (int i = 0; i < E1000_NUM_RX; i++) {
         uint32_t phys = pmm_alloc_pages(1);
-        if (!phys) { kprintf("[E1000] rx buf alloc failed\n"); return; }
+        if (!phys) { kprintf("[E1000] rx buf alloc failed\n"); return -1; }
         g_rx_buf_phys[i] = phys;
         g_rx_buf[i] = (uint8_t*)phys;
         g_rx_ring[i].buffer_addr = phys;
@@ -260,13 +261,13 @@ void e1000_init(void) {
 
     /* 分配 TX 环 */
     g_tx_ring_phys = pmm_alloc_pages(1);
-    if (!g_tx_ring_phys) { kprintf("[E1000] tx ring alloc failed\n"); return; }
+    if (!g_tx_ring_phys) { kprintf("[E1000] tx ring alloc failed\n"); return -1; }
     g_tx_ring = (struct e1000_tx_desc*)g_tx_ring_phys;
     memset(g_tx_ring, 0, sizeof(struct e1000_tx_desc) * E1000_NUM_TX);
 
     for (int i = 0; i < E1000_NUM_TX; i++) {
         uint32_t phys = pmm_alloc_pages(1);
-        if (!phys) { kprintf("[E1000] tx buf alloc failed\n"); return; }
+        if (!phys) { kprintf("[E1000] tx buf alloc failed\n"); return -1; }
         g_tx_buf_phys[i] = phys;
         g_tx_buf[i] = (uint8_t*)phys;
         g_tx_ring[i].buffer_addr = phys;
@@ -315,4 +316,7 @@ void e1000_init(void) {
 
     kprintf("[E1000] Ready, MAC %02x:%02x:%02x:%02x:%02x:%02x\n",
             g_mac[0], g_mac[1], g_mac[2], g_mac[3], g_mac[4], g_mac[5]);
+    
+    return 0;
 }
+DRIVER_INIT(e1000_init);

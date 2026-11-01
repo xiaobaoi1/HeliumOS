@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <input.h>
+#include <driver.h>
 
 #define PS2_DATA    0x60
 #define PS2_STATUS  0x64
@@ -59,7 +60,7 @@ static void mouse_cmd(uint8_t cmd) {
     (void)ps2_read_data();   /* 0xFA */
 }
 
-void mouse_init(void) {
+int mouse_init(void) {
     /* 1. 启用 auxiliary device（鼠标） */
     ps2_write_cmd(0xA8);
 
@@ -100,7 +101,9 @@ void mouse_init(void) {
 
     kprintf("[MOUSE] Initialized, cursor at (%d, %d), wheel=%d\n",
             g_mouse.x, g_mouse.y, g_packet_size == 4);
+    return 0;
 }
+DRIVER_INIT(mouse_init);
 
 struct mouse_state *mouse_get(void) { return &g_mouse; }
 

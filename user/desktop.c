@@ -1771,14 +1771,138 @@ static void handle_fm_event(struct fm_win *w, struct wm_event *ev) {
 }
 
 /* ============================================================
+ *                    BMP 壁纸
+ * ============================================================ */
+
+#define BMP_MAX_DIM  4096
+
+static int g_wall_bmp_state = 0;   /* 0=未尝试 1=成功 2=失败 */
+static unsigned int *g_wall_bmp_cache = NULL;
+
+struct bmp_file_hdr {
+    uint16_t magic;
+    uint32_t file_size;
+    uint16_t reserved1;
+    uint16_t reserved2;
+    uint32_t data_offset;
+} __attribute__((packed));
+
+struct bmp_dib_hdr {
+    uint32_t header_size;
+    int32_t  width;
+    int32_t  height;
+    uint16_t planes;
+    uint16_t bpp;
+    uint32_t compression;
+    uint32_t image_size;
+    int32_t  x_ppm;
+    int32_t  y_ppm;
+    uint32_t colors_used;
+    uint32_t colors_important;
+} __attribute__((packed));
+
+/* 解码 BMP，最近邻拉伸到 g_W × g_H，结果 malloc 到 *out。 */
+static int decode_bmp_to_fullscreen(const char *path,
+                                    unsigned int **out) {
+    *out = NULL;
+
+    int fd = fs_open(path, FS_O_RDONLY);
+    if (fd < 0) return -1;
+
+    struct bmp_file_hdr fh;
+    struct bmp_dib_hdr dh;
+    uint8_t *src = NULL;
+
+    if (fs_read(fd, &fh, sizeof(fh)) != sizeof(fh)) goto fail;
+    if (fh.magic != 0x4D42) goto fail;           /* 'BM' */
+    if (fs_read(fd, &dh, sizeof(dh)) != sizeof(dh)) goto fail;
+    if (dh.header_size < 40) goto fail;
+    if (dh.compression != 0) goto fail;          /* 只支持 BI_RGB */
+    if (dh.bpp != 24 && dh.bpp != 32) goto fail;
+
+    int src_w = dh.width;
+    int src_h = dh.height < 0 ? -dh.height : dh.height;
+    int bottom_up = dh.height > 0;
+    if (src_w <= 0 || src_h <= 0 ||
+        src_w > BMP_MAX_DIM || src_h > BMP_MAX_DIM) goto fail;
+
+    int src_stride = ((src_w * dh.bpp + 31) / 32) * 4;
+    size_t src_size = (size_t)src_stride * src_h;
+
+    src = (uint8_t*)malloc(src_size);
+    if (!src) goto fail;
+
+    if (fs_seek(fd, fh.data_offset) < 0) goto fail;
+    if (fs_read(fd, src, src_size) != (int)src_size) goto fail;
+
+    unsigned int *dst = (unsigned int*)malloc((size_t)g_W * g_H * 4);
+    if (!dst) goto fail;
+
+    int bpp_bytes = dh.bpp / 8;
+    for (int dy = 0; dy < g_H; dy++) {
+        int sy = dy * src_h / g_H;
+        if (bottom_up) sy = src_h - 1 - sy;
+        uint8_t *row = src + (size_t)sy * src_stride;
+        unsigned int *drow = dst + dy * g_W;
+
+        for (int dx = 0; dx < g_W; dx++) {
+            int sx = dx * src_w / g_W;
+            uint8_t *p = row + sx * bpp_bytes;
+            unsigned int b = p[0];
+            unsigned int g = p[1];
+            unsigned int r = p[2];
+            drow[dx] = (r << 16) | (g << 8) | b;
+        }
+    }
+
+    free(src);
+    fs_close(fd);
+    *out = dst;
+    return 0;
+
+fail:
+    if (src) free(src);
+    fs_close(fd);
+    return -1;
+}
+
+static void ensure_wall_bmp(void) {
+    if (g_wall_bmp_state != 0) return;
+
+    if (decode_bmp_to_fullscreen("SYS:/background.bmp",
+                                 &g_wall_bmp_cache) == 0) {
+        g_wall_bmp_state = 1;
+        dprintf(2, "desktop: wallpaper loaded from BMP\n");
+    } else {
+        g_wall_bmp_state = 2;
+        dprintf(2, "desktop: no BMP, using gradient\n");
+    }
+}
+
+/* 画壁纸到 g_wall_pixels。BMP 优先，失败回退渐变。 */
+static void draw_wallpaper_pixels(void) {
+    ensure_wall_bmp();
+
+    if (g_wall_bmp_state == 1 && g_wall_bmp_cache) {
+        memcpy(g_wall_pixels, g_wall_bmp_cache, (size_t)g_W * g_H * 4);
+        return;
+    }
+
+    /* 渐变回退 */
+    for (int y = 0; y < g_H; y++) {
+        unsigned int c = gfx_lerp(WALL_TOP, WALL_BOTTOM, y, g_H);
+        unsigned int *row = g_wall_pixels + y * g_W;
+        for (int x = 0; x < g_W; x++) row[x] = c;
+    }
+}
+
+/* ============================================================
  *                   系统组件
  * ============================================================ */
 
 static void draw_wallpaper(void) {
-    for (int y = 0; y < g_H; y++) {
-        unsigned int c = gfx_lerp(WALL_TOP, WALL_BOTTOM, y, g_H);
-        for (int x = 0; x < g_W; x++) g_wall_pixels[y * g_W + x] = c;
-    }
+    draw_wallpaper_pixels();   /* BMP 或渐变 */
+
     draw_all_files();
 
     if (g_desk_dialog.active) {

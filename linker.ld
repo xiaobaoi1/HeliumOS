@@ -15,6 +15,12 @@ SECTIONS
     .rodata ALIGN(4K) :
     {
         *(.rodata)
+
+        /* 驱动初始化函数指针表 */
+        . = ALIGN(4);
+        __driver_init_start = .;
+        KEEP(*(.driver_init))
+        __driver_init_end = .;
     }
 
     /* 异常表：用于内核访问用户指针 fault 恢复 */
