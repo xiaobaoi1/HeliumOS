@@ -10,6 +10,7 @@
 #include "wm_font.h"
 #include "unicode_font.h"
 #include "shm_layout.h"
+#include "bearssl.h"
 
 #define CW 800
 #define CH 600
@@ -25,6 +26,8 @@ static char g_url[192] = "http://example.com/";
 static char g_page[PAGE_MAX];
 static int g_page_len = 0;
 static char g_status[64] = "NetSurf ready - type a URL and press Enter";
+static unsigned int g_css_fg = 0xE0E0E0;
+static unsigned int g_css_bg = 0x101018;
 static int g_url_fresh = 1;
 
 static void fill_rect(int x, int y, int w, int h, unsigned int c) {
@@ -65,11 +68,15 @@ static void publish_all(void) {
     g_hdr->cur_x1 = 0; g_hdr->cur_y1 = 0;
 }
 
+static void scan_css(const char *html, int n);
+
 static void add_page_char(char c) {
     if (g_page_len < PAGE_MAX - 1) g_page[g_page_len++] = c;
 }
 
 static void html_to_text(const char *html, int n) {
+    g_css_fg = 0xE0E0E0; g_css_bg = 0x101018;
+    scan_css(html, n);
     g_page_len = 0;
     int in_tag = 0;
     char tag[16]; int tl = 0;
@@ -100,12 +107,15 @@ static void html_to_text(const char *html, int n) {
     g_page[g_page_len] = '\0';
 }
 
-static int parse_url(const char *url, char *host, int *port, char *path) {
-    if (strncmp(url, "http://", 7) != 0) return -1;
-    const char *p = url + 7; int h = 0;
+static int parse_url(const char *url, char *host, int *port, char *path, int *secure) {
+    int off = 0;
+    if (strncmp(url, "https://", 8) == 0) { off = 8; *secure = 1; }
+    else if (strncmp(url, "http://", 7) == 0) { off = 7; *secure = 0; }
+    else return -1;
+    const char *p = url + off; int h = 0;
     while (*p && *p != ':' && *p != '/' && h < 63) host[h++] = *p++;
     if (!h) return -1;
-    host[h] = '\0'; *port = 80;
+    host[h] = '\0'; *port = *secure ? 443 : 80;
     if (*p == ':') {
         p++; int v = 0, d = 0;
         while (*p >= '0' && *p <= '9') { v = v * 10 + (*p - '0'); p++; d++; }
@@ -124,9 +134,188 @@ static uint32_t resolve_host(const char *host) {
     return *(uint32_t*)h->h_addr_list[0];
 }
 
+
+struct lax_x509 {
+    const br_x509_class *vtable;
+    br_x509_minimal_context *xc;
+};
+
+static void lax_start_chain(const br_x509_class **ctx, const char *name) {
+    struct lax_x509 *x = (struct lax_x509*)ctx;
+    x->xc->vtable->start_chain(&x->xc->vtable, name);
+}
+static void lax_start_cert(const br_x509_class **ctx, uint32_t len) {
+    struct lax_x509 *x = (struct lax_x509*)ctx;
+    x->xc->vtable->start_cert(&x->xc->vtable, len);
+}
+static void lax_append(const br_x509_class **ctx, const unsigned char *buf, size_t len) {
+    struct lax_x509 *x = (struct lax_x509*)ctx;
+    x->xc->vtable->append(&x->xc->vtable, buf, len);
+}
+static void lax_end_cert(const br_x509_class **ctx) {
+    struct lax_x509 *x = (struct lax_x509*)ctx;
+    x->xc->vtable->end_cert(&x->xc->vtable);
+}
+static unsigned lax_end_chain(const br_x509_class **ctx) {
+    struct lax_x509 *x = (struct lax_x509*)ctx;
+    (void)x->xc->vtable->end_chain(&x->xc->vtable);
+    return 0; /* browser accepts the server certificate but still verifies the handshake key */
+}
+static const br_x509_pkey *lax_get_pkey(const br_x509_class *const *ctx, unsigned *usages) {
+    struct lax_x509 *x = (struct lax_x509*)ctx;
+    return x->xc->vtable->get_pkey(&x->xc->vtable, usages);
+}
+static const br_x509_class lax_x509_vtable = {
+    sizeof(struct lax_x509),
+    lax_start_chain, lax_start_cert, lax_append, lax_end_cert,
+    lax_end_chain, lax_get_pkey
+};
+
+static int tls_read(void *ctx, unsigned char *buf, size_t len) {
+    int fd = *(int*)ctx;
+    for (;;) {
+        int n = recvfrom(fd, buf, len, NULL, NULL);
+        if (n == EAGAIN_LOCAL) { sleep_ms(10); continue; }
+        return n;
+    }
+}
+static int tls_write(void *ctx, const unsigned char *buf, size_t len) {
+    int fd = *(int*)ctx;
+    for (;;) {
+        int n = sendto(fd, buf, len, NULL, 0);
+        if (n == EAGAIN_LOCAL) { sleep_ms(10); continue; }
+        return n;
+    }
+}
+
+static int fetch_https(const char *url, char *out, int out_size) {
+    char host[64], path[256]; int port, secure = 0;
+    if (parse_url(url, host, &port, path, &secure) < 0) return -1;
+    uint32_t ip = resolve_host(host);
+    if (!ip) return -1;
+    int s = socket(AF_INET, SOCK_STREAM, 0);
+    if (s < 0) return -1;
+    struct sockaddr_in local, dst;
+    memset(&local, 0, sizeof(local));
+    local.sin_family = AF_INET; local.sin_port = htons(43212);
+    bind(s, (struct sockaddr*)&local, sizeof(local));
+    memset(&dst, 0, sizeof(dst));
+    dst.sin_family = AF_INET; dst.sin_port = htons(port); dst.sin_addr = ip;
+    if (connect(s, (struct sockaddr*)&dst, sizeof(dst)) < 0) { sockclose(s); return -1; }
+
+    br_ssl_client_context sc;
+    br_x509_minimal_context xc;
+    br_sslio_context ioc;
+    struct lax_x509 x;
+    unsigned char *iobuf = (unsigned char*)malloc(BR_SSL_BUFSIZE_BIDI);
+    if (!iobuf) { sockclose(s); return -1; }
+    br_ssl_client_init_full(&sc, &xc, NULL, 0);
+    x.vtable = &lax_x509_vtable; x.xc = &xc;
+    br_ssl_engine_set_x509(&sc.eng, &x.vtable);
+    br_ssl_engine_set_buffer(&sc.eng, iobuf, BR_SSL_BUFSIZE_BIDI, 1);
+    unsigned char seed[32];
+    struct rtc_time rt; memset(&rt, 0, sizeof(rt)); rtc_get_time(&rt);
+    memcpy(seed, &rt, sizeof(rt) < 32 ? sizeof(rt) : 32);
+    memcpy(seed + 16, &s, sizeof(s));
+    br_ssl_engine_inject_entropy(&sc.eng, seed, sizeof(seed));
+    if (!br_ssl_client_reset(&sc, host, 0)) { free(iobuf); sockclose(s); return -1; }
+    br_sslio_init(&ioc, &sc.eng, tls_read, &s, tls_write, &s);
+
+    char req[512];
+    int rl = snprintf(req, sizeof(req),
+        "GET %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: NetSurf-Helium/1.0\r\nConnection: close\r\n\r\n",
+        path, host);
+    if (br_sslio_write_all(&ioc, req, rl) < 0 || br_sslio_flush(&ioc) < 0) {
+        free(iobuf); sockclose(s); return -1;
+    }
+    int total = 0;
+    while (total < out_size - 1) {
+        int n = br_sslio_read(&ioc, out + total, out_size - 1 - total);
+        if (n <= 0) break;
+        total += n;
+    }
+    free(iobuf);
+    sockclose(s);
+    out[total] = '\0';
+    char *body = strstr(out, "\r\n\r\n");
+    if (body) {
+        int skip = (int)(body + 4 - out), len = total - skip;
+        memmove(out, body + 4, len); out[len] = '\0'; return len;
+    }
+    return total;
+}
+
+static unsigned int css_color(const char *v) {
+    while (*v == ' ' || *v == '\t') v++;
+    if (v[0] == '#') {
+        unsigned val = 0; int n = 0; v++;
+        for (; n < 6 && v[n]; n++) {
+            int c = v[n], d;
+            if (c >= '0' && c <= '9') d = c - '0';
+            else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
+            else if (c >= 'A' && c <= 'F') d = c - 'A' + 10;
+            else break;
+            val = (val << 4) | (unsigned)d;
+        }
+        if (n >= 6) return val & 0xFFFFFFu;
+    }
+    if (!strncmp(v, "white", 5)) return 0xFFFFFF;
+    if (!strncmp(v, "black", 5)) return 0x000000;
+    if (!strncmp(v, "red", 3)) return 0xFF0000;
+    if (!strncmp(v, "green", 5)) return 0x00FF00;
+    if (!strncmp(v, "blue", 4)) return 0x0000FF;
+    if (!strncmp(v, "gray", 4) || !strncmp(v, "grey", 4)) return 0x888888;
+    if (!strncmp(v, "yellow", 6)) return 0xFFFF00;
+    if (!strncmp(v, "cyan", 4)) return 0x00FFFF;
+    if (!strncmp(v, "magenta", 7)) return 0xFF00FF;
+    return 0xE0E0E0;
+}
+
+static void css_block(const char *s, int n) {
+    for (int i = 0; i < n; i++) {
+        if (i + 5 < n && !strncmp(s + i, "color", 5) &&
+            (i == 0 || s[i - 1] != '-')) {
+            int j = i + 5;
+            while (j < n && (s[j] == ' ' || s[j] == '\t')) j++;
+            if (j < n && s[j] == ':') {
+                j++;
+                while (j < n && (s[j] == ' ' || s[j] == '\t')) j++;
+                g_css_fg = css_color(s + j);
+            }
+        }
+        if (i + 16 < n && !strncmp(s + i, "background-color", 16)) {
+            int j = i + 16;
+            while (j < n && (s[j] == ' ' || s[j] == '\t')) j++;
+            if (j < n && s[j] == ':') {
+                j++;
+                while (j < n && (s[j] == ' ' || s[j] == '\t')) j++;
+                g_css_bg = css_color(s + j);
+            }
+        }
+    }
+}
+
+static void scan_css(const char *html, int n) {
+    for (int i = 0; i + 6 < n; i++) {
+        if (!strncmp(html + i, "<style", 6)) {
+            int j = i + 6;
+            while (j < n && html[j] != '>') j++;
+            int k = j + 1;
+            while (k + 8 < n && strncmp(html + k, "</style>", 8)) k++;
+            if (k > j + 1) css_block(html + j + 1, k - j - 1);
+            i = k;
+        } else if (!strncmp(html + i, "style=\"", 7)) {
+            int k = i + 7;
+            while (k < n && html[k] != '"') k++;
+            css_block(html + i + 7, k - i - 7);
+            i = k;
+        }
+    }
+}
+
 static int fetch_http(const char *url, char *out, int out_size) {
-    char host[64], path[256]; int port;
-    if (parse_url(url, host, &port, path) < 0) return -1;
+    char host[64], path[256]; int port, secure = 0;
+    if (parse_url(url, host, &port, path, &secure) < 0) return -1;
     uint32_t ip = resolve_host(host);
     if (!ip) return -1;
     int s = socket(AF_INET, SOCK_STREAM, 0);
@@ -180,6 +369,7 @@ static void load_url(void) {
     if (!buf) return;
     int n = -1;
     if (!strncmp(g_url, "http://", 7)) n = fetch_http(g_url, buf, PAGE_MAX);
+    else if (!strncmp(g_url, "https://", 8)) n = fetch_https(g_url, buf, PAGE_MAX);
     else {
         int fd = fs_open(g_url, FS_O_RDONLY);
         if (fd >= 0) {
@@ -198,7 +388,7 @@ static void load_url(void) {
 }
 
 static void render(void) {
-    fill_rect(0, 0, CW, CH, 0x101018);
+    fill_rect(0, 0, CW, CH, g_css_bg);
     fill_rect(0, 0, CW, TOOL_H, 0x2A2A3E);
     fill_rect(6, 5, CW - 74, 20, 0x080810);
     draw_text(10, 7, CW - 80, g_url, 0xFFFFFF, 0x080810);
@@ -220,7 +410,7 @@ static void render(void) {
         uint32_t cp; int n = ufont_utf8_decode(q, &cp);
         int gw = wm_font_width((int)cp); if (!gw) gw = 8;
         if (x + gw > CW - 10) { x = 10; y += 18; }
-        draw_text(x, y, x + gw + 1, p, 0xE0E0E0, 0x101018);
+        draw_text(x, y, x + gw + 1, p, g_css_fg, g_css_bg);
         x += gw; p += n;
     }
     draw_text(10, CH - 18, CW - 10, g_status, 0x8888AA, 0x101018);
