@@ -35,32 +35,52 @@ void sleep_tick(void) {
     }
 }
 
+/* 防止嵌套 schedule 把 current 消费掉。
+ * schedule 只允许在栈最外层真正切换；
+ * 中断里的 schedule 如果看到 g_in_schedule != 0，直接返回，
+ * 由外层 schedule 的 for 循环处理。 */
 void schedule(void) {
     struct task *current = get_current_task();
 
-    /* 当前进程仍可运行 */
+    /* 已经在该进程的 schedule 栈帧里（hlt 期间中断重入），不再调度。
+     * 用 current->in_schedule 而非全局标志，避免跨进程泄漏。 */
+    if (current && current->in_schedule) return;
+
     if (current && current->time_slice > 0 && current->state == TASK_STATE_RUNNING) {
         return;
     }
 
-    /* 时间片用完，放回就绪队列。
-     * 注意：ZOMBIE 状态的 current（task_exit 调进来）不满足此分支，
-     * 会被跳过——task 已在 blocked_list 里，不重复入队。 */
+    if (current) current->in_schedule = 1;
+
     if (current && current->state == TASK_STATE_RUNNING) {
         current->time_slice = TIME_SLICE_TICKS;
         current->state = TASK_STATE_READY;
         enqueue_task(&ready_queue_head, &ready_queue_tail, current);
     }
 
-    /* 取下一个 */
-    struct task *next = dequeue_task(&ready_queue_head, &ready_queue_tail);
-    if (!next) {
-        kprintf("[SCHED] Idling...\n");
-        set_current_task(NULL);
-        while (1) __asm__("hlt");
-        return;
-    }
+    for (;;) {
+        struct task *next = dequeue_task(&ready_queue_head, &ready_queue_tail);
+        if (next) {
+            if (next == current) {
+                /* 自己继续跑，不切 */
+                next->state = TASK_STATE_RUNNING;
+                next->time_slice = TIME_SLICE_TICKS;
+                next->in_schedule = 0;
+                return;
+            }
+            set_current_task(next);
+            switch_to(current, next);
 
-    set_current_task(next);
-    switch_to(current, next);
+            /* 被切回来：从 switch_to 之后继续。
+             * current 是全局 current_task，此时是切回来的进程。 */
+            current = get_current_task();
+            if (current) current->in_schedule = 0;
+            return;
+        }
+
+        /* 无进程可运行：开中断休眠，等时钟 tick 唤醒。
+         * 中断里的 schedule 看到 current->in_schedule=1 直接返回，
+         * 不会抢走 ready queue。 */
+        __asm__ volatile("sti; hlt; cli" ::: "memory");
+    }
 }

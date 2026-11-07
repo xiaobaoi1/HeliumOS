@@ -598,7 +598,7 @@ static int sys_spawn(const char *path, char *const argv[], void *params_user) {
         goto cleanup;
     }
 
-        struct task *child = task_create(entry, pgd_child, argc, k_argv,
+    struct task *child = task_create(entry, pgd_child, argc, k_argv,
                                      envc, k_envp,
                                      redir_in, redir_out, redir_err,
                                      redir_in_pipe, redir_out_pipe, redir_err_pipe,
@@ -608,6 +608,14 @@ static int sys_spawn(const char *path, char *const argv[], void *params_user) {
         vmm_free_process_address_space(pgd_child);
         ret = ENOMEM;
         goto cleanup;
+    }
+
+    if (child) {
+        const char *img = path_buf;
+        for (const char *p = path_buf; *p; p++)
+            if (*p == '\\' || *p == '/') img = p + 1;
+        strncpy(child->image, img, sizeof(child->image) - 1);
+        child->image[sizeof(child->image) - 1] = '\0';
     }
 
     proc_handle_t h = proc_handle_alloc(child, PROC_ALL);
@@ -691,6 +699,30 @@ static int sys_process_close(proc_handle_t h) {
     cur->proc_handles[h].task = NULL;
 
     proc_unref(target);
+    return OK;
+}
+
+static int sys_proc_query(uint32_t pid, struct proc_info *user_out) {
+    if (!user_out) return EINVAL;
+    if (check_user_range((uint32_t)user_out, sizeof(struct proc_info)) < 0)
+        return EFAULT;
+
+    struct task *t = proc_find_by_pid(pid);
+    if (!t || t->zombie) return ENOENT;
+
+    struct proc_info info;
+    memset(&info, 0, sizeof(info));
+    info.pid = t->pid;
+    info.creator_pid = t->creator_pid;
+    info.entry_point = t->entry_point;
+    info.state = (uint8_t)t->state;
+    info.class = t->class;
+    info.caps = t->caps;
+    strncpy(info.image, t->image, sizeof(info.image) - 1);
+    info.image[sizeof(info.image) - 1] = '\0';
+
+    if (copy_to_user((uint32_t)user_out, &info, sizeof(info)) < 0)
+        return EFAULT;
     return OK;
 }
 
@@ -962,6 +994,9 @@ void syscall_handler(struct registers *regs) {
             break;
         case SYS_PROC_OPEN:
             ret = sys_proc_open((uint32_t)arg1, (uint8_t)arg2);
+            break;
+        case SYS_PROC_QUERY:
+            ret = sys_proc_query(arg1, (struct proc_info*)arg2);
             break;
         
         case SYS_SIGACTION:

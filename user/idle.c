@@ -1,7 +1,9 @@
+#include "syscall.h"
+
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
-    while (1) {
-        __asm__ volatile("pause");
+    for (;;) {
+        sleep_ms(1000);
     }
     return 0;
 }

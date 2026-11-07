@@ -114,7 +114,8 @@ struct task {
 
     /* 进程分级 + 能力（不占前 6 字段偏移） */
     uint8_t  class;
-    uint8_t  reserved_priv[3];
+    uint8_t  in_schedule;
+    uint8_t  reserved_priv[2];
     uint32_t caps;
 
     uint32_t heap_base;
@@ -125,6 +126,7 @@ struct task {
     struct task *wait_target;
     uint64_t wait_deadline;          /* WAITING_CHILD 的超时时刻（tick） */
 
+    char image[32];                  /* 程序基名，如 "WM"/"SHELL" */
     char cwd_volume[VOL_NAME_LEN];
     char cwd_path[PATH_MAX_LEN];
 
