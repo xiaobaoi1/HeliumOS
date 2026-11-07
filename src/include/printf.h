@@ -24,9 +24,4 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap);
 #define KLOG_ERR(fmt, ...)   kprintf("[ERR] " fmt, ##__VA_ARGS__)
 #define KLOG_WARN(fmt, ...)  kprintf("[WARN] " fmt, ##__VA_ARGS__)
 
-/* panic 用：日志环访问。kprintf 的每个字符都会进环，
- * panic 时把最近 N 字节 dump 出来。 */
-int  log_ring_size(void);
-char log_ring_at(int idx);
-
 #endif
