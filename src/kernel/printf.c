@@ -9,8 +9,33 @@
 
 typedef void (*putc_fn)(char c, void *ctx);
 
+/* ---------- 日志环（供 panic dump） ---------- */
+
+#define LOG_RING_SIZE  8192
+static char             g_log_ring[LOG_RING_SIZE];
+static volatile uint32_t g_log_head = 0;
+static volatile uint8_t  g_log_wrapped = 0;
+
+static void log_ring_putc(char c) {
+    g_log_ring[g_log_head] = c;
+    g_log_head = (g_log_head + 1) % LOG_RING_SIZE;
+    if (g_log_head == 0) g_log_wrapped = 1;
+}
+
+int log_ring_size(void) {
+    return g_log_wrapped ? LOG_RING_SIZE : (int)g_log_head;
+}
+
+char log_ring_at(int idx) {
+    int n = log_ring_size();
+    if (idx < 0 || idx >= n) return '\0';
+    int start = g_log_wrapped ? (int)g_log_head : 0;
+    return g_log_ring[(start + idx) % LOG_RING_SIZE];
+}
+
 static void putc_console(char c, void *ctx) {
     (void)ctx;
+    log_ring_putc(c);
     serial_write_char(c);
     tty_write_char(c);
 }
