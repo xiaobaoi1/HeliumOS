@@ -7,6 +7,8 @@
 #include <signal.h>
 #include <input.h>
 #include <irq.h>
+#include <printf.h>
+#include <mouse.h>
 
 #define KEYBOARD_DATA_PORT   0x60
 
@@ -122,8 +124,21 @@ static char scancode_to_ascii(uint8_t scancode) {
 }
 
 void keyboard_handle_irq(void) {
-    uint8_t scancode = inb(KEYBOARD_DATA_PORT);
-    char c = scancode_to_ascii(scancode);
+    uint8_t status = inb(0x64);
+    if (!(status & 0x01)) return;   /* OBF 无数据 */
+
+    /* 关键：无论来源，先读走 0x60，清 OBF。
+     * 不读会导致 8042 拒绝新数据，键盘彻底死。 */
+    uint8_t data = inb(KEYBOARD_DATA_PORT);
+
+    if (status & 0x20) {
+        /* 鼠标数据错发到 IRQ 1：转交鼠标状态机 */
+        mouse_handle_byte(data);
+        return;
+    }
+
+    /* 键盘数据 */
+    char c = scancode_to_ascii(data);
     if (c) {
         struct input_event ev = {
             .type = INPUT_KEY,
@@ -135,18 +150,18 @@ void keyboard_handle_irq(void) {
         return;
     }
 
-    /* 方向键 → VT100 ESC 序列。kilo 的 editorReadKey 依赖这个。 */
+    /* 方向键等 ESC 序列 */
     const char *seq = 0;
-    switch (scancode) {
-        case 0x48: seq = "\x1b[A"; break;   /* 上 */
-        case 0x50: seq = "\x1b[B"; break;   /* 下 */
-        case 0x4D: seq = "\x1b[C"; break;   /* 右 */
-        case 0x4B: seq = "\x1b[D"; break;   /* 左 */
-        case 0x47: seq = "\x1b[H"; break;   /* Home */
-        case 0x4F: seq = "\x1b[F"; break;   /* End */
-        case 0x53: seq = "\x1b[3~"; break;  /* Delete */
-        case 0x49: seq = "\x1b[5~"; break;  /* Page Up */
-        case 0x51: seq = "\x1b[6~"; break;  /* Page Down */
+    switch (data) {
+        case 0x48: seq = "\x1b[A"; break;
+        case 0x50: seq = "\x1b[B"; break;
+        case 0x4D: seq = "\x1b[C"; break;
+        case 0x4B: seq = "\x1b[D"; break;
+        case 0x47: seq = "\x1b[H"; break;
+        case 0x4F: seq = "\x1b[F"; break;
+        case 0x53: seq = "\x1b[3~"; break;
+        case 0x49: seq = "\x1b[5~"; break;
+        case 0x51: seq = "\x1b[6~"; break;
     }
     if (seq) {
         for (int i = 0; seq[i]; i++) {
@@ -160,6 +175,7 @@ void keyboard_handle_irq(void) {
         }
     }
 }
+
 /* ---------- device_ops 实现 ---------- */
 static int kb_dev_open(void **state, void *arg) {
     (void)arg;
