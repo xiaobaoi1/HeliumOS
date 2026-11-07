@@ -4,6 +4,8 @@
 #include <string.h>
 #include <stddef.h>
 #include <heap.h>
+#include <scheduler.h>   /* get_ticks */
+#include <errno.h>       /* EAGAIN */
 
 static struct tcp_socket g_tcp[TCP_MAX_SOCKETS];
 
@@ -27,6 +29,7 @@ struct tcp_socket *tcp_alloc(void) {
             memset(&g_tcp[i], 0, sizeof(g_tcp[i]));
             g_tcp[i].used = 1;
             g_tcp[i].state = TCP_CLOSED;
+            g_tcp[i].rto_ms = TCP_RTO_INIT;    /* ← 新增 */
             return &g_tcp[i];
         }
     }
@@ -135,6 +138,20 @@ static int tcp_send_segment(struct tcp_socket *s, uint32_t src_ip,
 }
 
 /* ---------- 收发入口 ---------- */
+
+/* ACK 到达：出队 seq + len <= ack 的段，重置 RTO。 */
+static void tcp_txq_ack(struct tcp_socket *s, uint32_t ack) {
+    for (int i = 0; i < TCP_TXQ_SIZE; i++) {
+        struct tcp_tx_seg *seg = &s->txq[i];
+        if (!seg->used) continue;
+        if ((uint32_t)(seg->seq + seg->len) <= ack) {
+            seg->used = 0;
+            if (s->txq_count > 0) s->txq_count--;
+        }
+    }
+    s->rto_ms = TCP_RTO_INIT;
+}
+
 
 void tcp_input(uint32_t src_ip, uint32_t dst_ip,
                const uint8_t *pkt, uint32_t len) {
@@ -255,7 +272,10 @@ void tcp_input(uint32_t src_ip, uint32_t dst_ip,
             tcp_send_segment(s, dst_ip, TCP_ACK,
                              s->snd_nxt, s->rcv_nxt, NULL, 0);
         } else if (flags & TCP_ACK) {
-            s->snd_una = ack;
+            if ((int32_t)(ack - s->snd_una) > 0) {
+                s->snd_una = ack;
+                tcp_txq_ack(s, ack);
+            }
         }
         return;
     }
@@ -371,16 +391,40 @@ int tcp_send(struct tcp_socket *s, const uint8_t *data, uint32_t len) {
 
     uint32_t src_ip = net_local_ip();
     uint32_t sent = 0;
+
     while (sent < len) {
+        if (s->txq_count >= TCP_TXQ_SIZE) {
+            return sent > 0 ? (int)sent : EAGAIN;
+        }
+
+        int slot = -1;
+        for (int i = 0; i < TCP_TXQ_SIZE; i++) {
+            if (!s->txq[i].used) { slot = i; break; }
+        }
+        if (slot < 0) return sent > 0 ? (int)sent : EAGAIN;
+
         uint32_t chunk = len - sent;
         if (chunk > TCP_MSS) chunk = TCP_MSS;
 
-        int r = tcp_send_segment(s, src_ip,
-                                 TCP_PSH | TCP_ACK,
-                                 s->snd_nxt, s->rcv_nxt,
-                                 data + sent, chunk);
-        if (r < 0) return sent > 0 ? (int)sent : -1;
+        struct tcp_tx_seg *seg = &s->txq[slot];
+        seg->used     = 1;
+        seg->flags    = TCP_PSH | TCP_ACK;
+        seg->len      = (uint16_t)chunk;
+        seg->seq      = s->snd_nxt;
+        seg->retries  = 0;
+        seg->last_tick = get_ticks();
+        memcpy(seg->data, data + sent, chunk);
+
+        int r = tcp_send_segment(s, src_ip, seg->flags,
+                                 seg->seq, s->rcv_nxt,
+                                 seg->data, chunk);
+        if (r < 0) {
+            seg->used = 0;
+            return sent > 0 ? (int)sent : -1;
+        }
+
         s->snd_nxt += chunk;
+        s->txq_count++;
         sent += chunk;
     }
     return (int)len;
@@ -410,6 +454,42 @@ int tcp_recv(struct tcp_socket *s, uint8_t *buf, uint32_t max) {
     return (int)n;
 }
 
+void tcp_retransmit_check(struct tcp_socket *s) {
+    if (!s) return;
+    if (s->txq_count == 0) return;
+    if (s->state == TCP_CLOSED || s->state == TCP_LISTEN) return;
+
+    uint32_t now = get_ticks();
+    uint32_t src_ip = net_local_ip();
+
+    for (int i = 0; i < TCP_TXQ_SIZE; i++) {
+        struct tcp_tx_seg *seg = &s->txq[i];
+        if (!seg->used) continue;
+
+        uint32_t elapsed = now - seg->last_tick;
+        if (elapsed < s->rto_ms) continue;
+
+        if (seg->retries >= TCP_RETX_MAX) {
+            kprintf("[TCP] retransmit give up seq=%u after %d retries\n",
+                    seg->seq, (int)TCP_RETX_MAX);
+            s->state = TCP_CLOSED;
+            tcp_maybe_free(s);
+            return;
+        }
+
+        kprintf("[TCP] retransmit seq=%u len=%u retry=%u rto=%u\n",
+                seg->seq, seg->len, seg->retries + 1, s->rto_ms);
+
+        tcp_send_segment(s, src_ip, seg->flags,
+                         seg->seq, s->rcv_nxt, seg->data, seg->len);
+
+        seg->last_tick = now;
+        seg->retries++;
+        s->rto_ms *= 2;
+        if (s->rto_ms > TCP_RTO_MAX) s->rto_ms = TCP_RTO_MAX;
+    }
+}
+
 int tcp_close(struct tcp_socket *s) {
     if (!s) return -1;
     if (s->user_closed) return 0;    /* 已 close 过，幂等 */
@@ -418,6 +498,21 @@ int tcp_close(struct tcp_socket *s) {
 
     if (s->state == TCP_ESTABLISHED) {
         s->user_closed = 1;
+        /* FIN 也入队，让重传覆盖丢包场景 */
+        int slot = -1;
+        for (int i = 0; i < TCP_TXQ_SIZE; i++) {
+            if (!s->txq[i].used) { slot = i; break; }
+        }
+        if (slot >= 0) {
+            struct tcp_tx_seg *seg = &s->txq[slot];
+            seg->used      = 1;
+            seg->flags     = TCP_FIN | TCP_ACK;
+            seg->len       = 0;
+            seg->seq       = s->snd_nxt;
+            seg->retries   = 0;
+            seg->last_tick = get_ticks();
+            s->txq_count++;
+        }
         tcp_send_segment(s, src_ip, TCP_FIN | TCP_ACK,
                          s->snd_nxt, s->rcv_nxt, NULL, 0);
         s->snd_nxt += 1;
@@ -428,6 +523,21 @@ int tcp_close(struct tcp_socket *s) {
 
     if (s->state == TCP_CLOSE_WAIT) {
         s->user_closed = 1;
+        /* FIN 也入队，让重传覆盖丢包场景 */
+        int slot = -1;
+        for (int i = 0; i < TCP_TXQ_SIZE; i++) {
+            if (!s->txq[i].used) { slot = i; break; }
+        }
+        if (slot >= 0) {
+            struct tcp_tx_seg *seg = &s->txq[slot];
+            seg->used      = 1;
+            seg->flags     = TCP_FIN | TCP_ACK;
+            seg->len       = 0;
+            seg->seq       = s->snd_nxt;
+            seg->retries   = 0;
+            seg->last_tick = get_ticks();
+            s->txq_count++;
+        }
         tcp_send_segment(s, src_ip, TCP_FIN | TCP_ACK,
                          s->snd_nxt, s->rcv_nxt, NULL, 0);
         s->snd_nxt += 1;

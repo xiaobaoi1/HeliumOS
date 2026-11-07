@@ -187,7 +187,9 @@ int sys_sendto(int h, const void *buf_user, uint32_t len,
             if (check_user_range((uint32_t)buf_user, len) < 0) return EFAULT;
             if (copy_from_user(tmp, (uint32_t)buf_user, len) < 0) return EFAULT;
         }
-        return tcp_send(tcp, tmp, len);
+        int ret = tcp_send(tcp, tmp, len);
+        if (ret < 0) tcp_retransmit_check(tcp);
+        return ret;
     }
 
     struct sockaddr_in dst;
@@ -237,8 +239,11 @@ int sys_recvfrom(int h, void *buf_user, uint32_t max,
 
         uint8_t tmp[UDP_PAYLOAD_MAX];
         int ret = tcp_recv(tcp, tmp, range);
-        if (ret < 0) return 0;         /* EOF：返回 0 表示对端关闭 */
-        if (ret == 0) return EAGAIN;   /* 暂时没数据 */
+        if (ret < 0) return 0;
+        if (ret == 0) {
+            tcp_retransmit_check(tcp);   /* ← 等数据时顺带检查重传 */
+            return EAGAIN;
+        }
         if (copy_to_user((uint32_t)buf_user, tmp, ret) < 0) return EFAULT;
         return ret;
     }

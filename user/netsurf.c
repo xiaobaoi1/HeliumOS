@@ -335,6 +335,7 @@ static int fetch_http(const char *url, char *out, int out_size) {
     int sent = 0;
     while (sent < rl) {
         int n = sendto(s, req + sent, rl - sent, (struct sockaddr*)&dst, sizeof(dst));
+        if (n == EAGAIN_LOCAL) { sleep_ms(10); continue; }
         if (n <= 0) { sockclose(s); return -1; }
         sent += n;
     }

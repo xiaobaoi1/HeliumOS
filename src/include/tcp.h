@@ -6,6 +6,21 @@
 #define TCP_MAX_SOCKETS   16
 #define TCP_RX_BUF_SIZE   4096
 #define TCP_MSS           1460
+#define TCP_TXQ_SIZE    8
+#define TCP_RTO_INIT    1000    /* ms */
+#define TCP_RTO_MAX     8000
+#define TCP_RETX_MAX    8
+
+struct tcp_tx_seg {
+    uint8_t  used;
+    uint8_t  flags;         /* TCP_PSH|TCP_ACK 或 TCP_FIN|TCP_ACK */
+    uint16_t len;
+    uint32_t seq;
+    uint32_t last_tick;
+    uint8_t  retries;
+    uint8_t  pad[3];
+    uint8_t  data[TCP_MSS];
+};
 
 /* 状态 */
 #define TCP_CLOSED       0
@@ -69,6 +84,10 @@ struct tcp_socket {
     uint32_t rx_head;
     uint32_t rx_tail;
     uint32_t rx_count;
+    /* 发送重传队列 */
+    struct tcp_tx_seg txq[TCP_TXQ_SIZE];
+    uint8_t  txq_count;
+    uint32_t rto_ms;
 };
 
 void tcp_init(void);
@@ -95,6 +114,7 @@ void tcp_input(uint32_t src_ip, uint32_t dst_ip,
 uint16_t tcp_checksum(uint32_t src_ip, uint32_t dst_ip,
                       const uint8_t *tcp_seg, uint32_t len);
                     
+void tcp_retransmit_check(struct tcp_socket *s);
 int tcp_close(struct tcp_socket *s);
 
 #endif
