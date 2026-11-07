@@ -249,8 +249,6 @@ void kmain(uint32_t magic, uint32_t addr) {
     if (!sys_vol) {
         panic("no FAT32 volume found");
     }
-    
-    font_init(sys_vol);
 
     mouse_init();
 
@@ -265,7 +263,7 @@ void kmain(uint32_t magic, uint32_t addr) {
 
     // kprintf("[TEST] size of task: %d\n", sizeof(struct task));
 
-    /* 构造 ICMP echo request 到网关 10.0.2.2 */
+        /* 构造 ICMP echo request 到网关 10.0.2.2 */
 
     kprintf("[TASK] sizeof(task)=%d\n", sizeof(struct task));
     if(sizeof(struct task) > PAGE_SIZE){
