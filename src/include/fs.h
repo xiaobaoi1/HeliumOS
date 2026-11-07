@@ -5,6 +5,8 @@
 #include <volume.h>
 #include <fat32.h>
 
+struct file_mapping;    /* 前向声明，避免包含 file_map.h */
+
 /* 每进程最大句柄数 */
 #define FS_MAX_HANDLES   32
 #define FD_INVALID       (-1)
@@ -22,17 +24,16 @@
 
 typedef int fd_t;
 
-/* 前向声明，避免和 task.h 循环包含 */
 struct task;
 
-/* 每进程的句柄槽位 */
 struct fs_handle {
     uint8_t         used;
-    uint8_t         obj_type;    /* FS_OBJ_FILE / FS_OBJ_DIR */
-    uint8_t         fs_type;     /* VOL_FS_FAT32 */
+    uint8_t         obj_type;
+    uint8_t         fs_type;
     uint8_t         reserved;
     uint32_t        offset;
     struct volume  *vol;
+    struct file_mapping *fm;   /* 新增：page cache 引用；FS_OBJ_DIR 时为 NULL */
     union {
         struct fat32_file  fat32_file;
         struct fat32_dir   fat32_dir;
