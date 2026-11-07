@@ -1698,6 +1698,10 @@ static void handle_fm_event(struct fm_win *w, struct wm_event *ev) {
         close_fm_window(w);
         return;
     }
+    if (ev->type == WM_EV_NEW_TAB) {
+        open_folder_window(w->path);
+        return;
+    }
 
     if (ev->type == WM_EV_RESIZE) {
         fm_resize_window(w, (int)ev->code, (int)ev->extra);
@@ -2287,19 +2291,19 @@ static void handle_wall_event(struct wm_event *ev) {
     int hit = wall_hit_icon(ev->x, ev->y);
     int shift = (ev->extra & WM_MOD_SHIFT) != 0;
     int ctrl  = (ev->extra & WM_MOD_CTRL) != 0;
-    int toggle = shift || ctrl;           /* Shift 或 Ctrl 点击都可多选 */
+    int toggle = shift || ctrl;
     uint64_t old = g_sel_mask;
 
     if (hit >= 0) {
         if (toggle) {
             desk_sel_toggle(hit);
-            g_last_clicked_file = -1;       /* 多选点击不参与双击判定 */
+            g_last_clicked_file = -1;
         } else if (!desk_is_selected(hit)) {
             desk_sel_only(hit);
         } else if (desk_sel_count() <= 1) {
             desk_sel_only(hit);
         } else {
-            g_selected_file = hit;          /* 多选内部点击：保留选择，准备拖拽 */
+            g_selected_file = hit;
         }
     } else {
         desk_sel_clear();
@@ -2311,7 +2315,7 @@ static void handle_wall_event(struct wm_event *ev) {
         g_wall_drag_moved = 0;
         g_wall_drag_x = ev->x;
         g_wall_drag_y = ev->y;
-        wall_drag_begin();       /* 记录全部选中项，拖到文件窗口即可批量移动 */
+        wall_drag_begin(); 
 
         if (!toggle && hit == g_last_clicked_file &&
             g_tick - g_click_tick < 400) {
@@ -2459,10 +2463,6 @@ static void draw_menu(int hover) {
     shm_publish(g_menu_hdr);
 }
 
-/* 开一个终端窗口。
- * extra 非 NULL 时把它接到 TERM 参数后面，让终端启动后直接运行该命令
- * （argv[0] 为程序路径，如 {"KILO", "SYS:\\kmain.c", NULL}）；
- * extra 为 NULL 时终端里跑交互 shell。 */
 static void spawn_term_argv(int cw, int ch, int x, int y,
                             char *const extra[], const char *title) {
     static int term_slot = 0;
@@ -2518,7 +2518,6 @@ static void spawn_term(int cw, int ch, int x, int y) {
     spawn_term_argv(cw, ch, x, y, NULL, "Terminal");
 }
 
-/* 「开始 → 关于」：拉起独立的 ABOUT 程序弹出对话框 */
 static void spawn_about(void) {
     char *argv[] = { "ABOUT", NULL };
     struct spawn_params sp = {
@@ -2534,7 +2533,6 @@ static void spawn_about(void) {
     spawn("ABOUT", argv, &sp);
 }
 
-/* 用 kilo 打开 C 源文件：开一个终端窗口，里面直接跑 KILO <path> */
 static void open_photo_file(const char *path) {
     if (!path || !path[0]) return;
     char *argv[] = { "PHOTOS", (char*)path, NULL };
@@ -2561,7 +2559,6 @@ static void open_source_file(const char *path) {
     spawn_term_argv(640, 480, 160, 80, extra, title);
 }
 
-/* 桌面多选：全部选中项写入剪贴板 */
 static void desk_copy_selection(int cut) {
     int n = desk_collect_paths(g_clip_paths, CLIP_MAX);
     if (n <= 0) return;
@@ -2569,7 +2566,6 @@ static void desk_copy_selection(int cut) {
     g_clip_cut = cut;
 }
 
-/* 桌面右键：把剪贴板内容粘贴到 SYS:\ */
 static void desktop_paste(void) {
     if (g_clip_count <= 0) return;
 
@@ -2597,7 +2593,6 @@ static void desktop_paste(void) {
     desktop_refresh_icons();
 }
 
-/* 桌面右键新建：打开根目录 Files 窗口并进入输入状态（Rename 已改走 MUI 对话框） */
 static void desktop_open_fm_input(int mode) {
     struct fm_win *w = open_folder_window(ROOT_PATH);
     if (!w) return;
@@ -2629,7 +2624,6 @@ static void open_context_menu(int x, int y) {
     char ev_name[24];
     strcpy(ev_name, "menu-ev");
 
-    /* 夹紧到屏幕内，避免菜单超出边界 */
     if (x + g_menu_w > g_W) x = g_W - g_menu_w;
     if (y + g_menu_h > g_H) y = g_H - g_menu_h;
     if (x < 0) x = 0;
@@ -2642,7 +2636,6 @@ static void open_context_menu(int x, int y) {
     g_menu_visible = 1;
 }
 
-/* 桌面图标右键菜单：Copy / Cut / Delete / Rename */
 static void open_context_item_menu(int file_idx, int x, int y) {
     if (g_menu_visible) return;
 
@@ -2782,9 +2775,6 @@ static void handle_panel_event(struct wm_event *ev) {
     }
 }
 
-/* ============================================================
- *                          main
- * ============================================================ */
 
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
@@ -2800,7 +2790,7 @@ int main(int argc, char **argv) {
     if (g_inbox_w < 0) { printf("desktop: wm-inbox open failed\n"); return 1; }
 
     wm_font_load();
-    mui_font_load();            /* methylui 字体（文件窗口用） */
+    mui_font_load(); 
     mui_dialog_init(&g_desk_dialog);
     calc_desk_cols();
 
@@ -2855,10 +2845,9 @@ int main(int argc, char **argv) {
                 mui_dialog_tick(&w->dialog, g_tick)) {
                 fm_redraw(w);
             }
-            if (w->used) fm_publish(w);      /* 有延迟脏区时补发 */
+            if (w->used) fm_publish(w);
         }
 
-        /* 壁纸 / 任务栏 / 菜单的延迟脏区补发 */
         shm_publish(g_wall_hdr);
         shm_publish(g_panel_hdr);
         shm_publish(g_menu_hdr);
