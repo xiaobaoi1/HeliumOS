@@ -38,3 +38,5 @@ _start_crt0:
     mov $1, %eax
     int $0x80
     hlt
+
+.section .note.GNU-stack,"",@progbits

@@ -8,5 +8,6 @@
 #define O_RDWR   FS_O_RDWR
 #define O_CREAT  FS_O_CREAT
 #define O_TRUNC  FS_O_TRUNC
+#define O_APPEND FS_O_APPEND
 
 #endif

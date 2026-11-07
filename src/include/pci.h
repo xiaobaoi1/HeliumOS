@@ -48,6 +48,7 @@ const struct pci_device *pci_device_at(int idx);
 
 /* 查找第一个匹配的设备 */
 const struct pci_device *pci_find_class(uint8_t class_code, uint8_t subclass);
+const struct pci_device *pci_find_class_nth(uint8_t class_code, uint8_t subclass, int n);
 const struct pci_device *pci_find(uint16_t vendor, uint16_t device);
 
 /* 配置空间读写（off 会按 dword 对齐） */

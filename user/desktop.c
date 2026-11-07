@@ -19,6 +19,12 @@
 #include "methylui/mui_dialog.h"
 #include "ime_dict.h"
 
+static inline uint64_t tsc_now(void) {
+    uint32_t lo, hi;
+    __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((uint64_t)hi << 32) | lo;
+}
+
 #define PANEL_H     28
 #define MENU_ITEM_H 24
 #define MENU_PAD    4
@@ -2842,6 +2848,8 @@ static void handle_panel_event(struct wm_event *ev) {
 
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
+    uint64_t t0 = tsc_now();
+
     const char *sw = getenv("SCREEN_W");
     const char *sh = getenv("SCREEN_H");
     g_W = sw ? atoi(sw) : 1024; g_H = sh ? atoi(sh) : 768;
@@ -2852,13 +2860,16 @@ int main(int argc, char **argv) {
         sleep_ms(10);
     }
     if (g_inbox_w < 0) { printf("desktop: wm-inbox open failed\n"); return 1; }
+    dprintf(2, "[MARK] desk_inbox: %llu\n", tsc_now() - t0);
 
     wm_font_load();
     mui_font_load();
     mui_dialog_init(&g_desk_dialog);
     calc_desk_cols();
+    dprintf(2, "[MARK] desk_font: %llu\n", tsc_now() - t0);
 
     icons_load();
+    dprintf(2, "[MARK] desk_icons: %llu\n", tsc_now() - t0);
 
     strcpy(g_wall_shm, "wall-shm");
     char ev_wall[24]; strcpy(ev_wall, "wall-ev");
@@ -2866,9 +2877,11 @@ int main(int argc, char **argv) {
                          &g_wall_pixels, &g_wall_hdr, g_wall_shm, ev_wall, &g_wall_ev) < 0) {
         printf("desktop: wallpaper create failed\n"); return 1;
     }
+    dprintf(2, "[MARK] desk_wall_create: %llu\n", tsc_now() - t0);
 
     desk_load_files();
     draw_wallpaper();
+    dprintf(2, "[MARK] desk_wall_draw: %llu\n", tsc_now() - t0);
 
     strcpy(g_panel_shm, "panel-shm");
     char ev_panel[24]; strcpy(ev_panel, "panel-ev");
@@ -2877,8 +2890,10 @@ int main(int argc, char **argv) {
         printf("desktop: panel create failed\n"); return 1;
     }
     draw_panel(); update_clock();
+    dprintf(2, "[MARK] desk_panel: %llu\n", tsc_now() - t0);
 
     int clock_tick = 0;
+    dprintf(2, "[MARK] desk_loop_enter: %llu\n", tsc_now() - t0);
     for (;;) {
         struct wm_event ev;
         while (g_panel_ev >= 0 && pipe_avail(g_panel_ev) >= (int)sizeof(ev)) {

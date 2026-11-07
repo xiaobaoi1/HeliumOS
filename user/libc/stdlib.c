@@ -1,5 +1,6 @@
 #include "stdlib.h"
 #include <stddef.h>
+#include <stdint.h>
 
 /* ---------- 字符串转数字 ---------- */
 
@@ -124,4 +125,36 @@ long __isoc23_strtol(const char *s, char **endptr, int base) {
 }
 long long __isoc23_strtoll(const char *s, char **endptr, int base) {
     return strtoll(s, endptr, base);
+}
+
+/* ---------- 64 位无符号除法运行时（TCC 生成的 __udivdi3/__umoddi3） ----------
+ * 64 位 `%` / `/` 被 TCC 编译成这两个函数的调用，不内联。
+ * 算法：shift-subtract 长除法，65 位余数用 r_hi 标志。 */
+uint64_t __udivdi3(uint64_t n, uint64_t d) {
+    if (d == 0) return 0;
+    if (d > n)  return 0;
+    if (d == n) return 1;
+
+    /* 32/32 快速路径 */
+    if ((n >> 32) == 0 && (d >> 32) == 0)
+        return (uint32_t)n / (uint32_t)d;
+
+    uint64_t q = 0;
+    uint64_t r = 0;
+    for (int bit = 63; bit >= 0; bit--) {
+        uint32_t next = (uint32_t)((n >> bit) & 1);
+        uint32_t r_hi = (uint32_t)(r >> 63) & 1;
+        uint64_t r_lo = (r << 1) | next;
+        if (r_hi || r_lo >= d) {
+            r = r_lo - d;           /* uint64 减法，自动处理借位 */
+            q |= (1ULL << bit);
+        } else {
+            r = r_lo;
+        }
+    }
+    return q;
+}
+
+uint64_t __umoddi3(uint64_t n, uint64_t d) {
+    return n - __udivdi3(n, d) * d;
 }
