@@ -776,7 +776,10 @@ static struct window *make_app_window(struct wm_request *req) {
     }
     mouse_draw();
     /* 新建的普通窗口直接拿焦点，键盘操作（Enter/Del/输入）无需先点一下 */
-    if (w->kind == WM_KIND_NORMAL) set_focus(w);
+    if (w->kind == WM_KIND_NORMAL) {
+        if (tab_group_of(w)) activate_tab(w);
+        else set_focus(w);
+    }
     push_window_list();
     return w;
 }
