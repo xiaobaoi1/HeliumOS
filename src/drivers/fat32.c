@@ -427,13 +427,11 @@ int fat32_read_file(struct fat32_volume *vol, struct fat32_file *file,
 
     uint32_t cluster;
 
-    /* 缓存优化：连续读从上次位置继续。避免 O(N²) 簇链遍历。
-     * 限制缓存仅在 backward seek 不太远时使用（> 1024 簇则从头）。
-     * 反向 seek 或首次读，从头遍历。 */
-if (file->cached_cluster >= 2 &&
-    file->cached_cluster < 0x0FFFFFF8 &&
-    cluster_offset >= file->cached_cluster_offset &&
-    cluster_offset - file->cached_cluster_offset < 1024) {
+    /* 缓存优化：连续读从上次位置继续 */
+    if (file->cached_cluster >= 2 &&
+        file->cached_cluster < 0x0FFFFFF8 &&
+        cluster_offset >= file->cached_cluster_offset &&
+        cluster_offset - file->cached_cluster_offset < 1024) {
         cluster = file->cached_cluster;
         for (uint32_t i = file->cached_cluster_offset; i < cluster_offset; i++) {
             cluster = get_next_cluster(vol, cluster);
@@ -455,32 +453,25 @@ if (file->cached_cluster >= 2 &&
                                 (cluster - 2) * vol->bpb.sectors_per_cluster;
         uint32_t sector_in_cluster = skip_bytes / vol->bpb.bytes_per_sector;
         uint32_t sector_offset = skip_bytes % vol->bpb.bytes_per_sector;
+        uint32_t remaining = size - read_pos;   /* 按整个剩余量，不截断 */
 
-        uint32_t remaining_in_cluster = cluster_size - skip_bytes;
-        uint32_t to_read = (size - read_pos) < remaining_in_cluster
-                         ? (size - read_pos) : remaining_in_cluster;
+        if (sector_offset == 0 && remaining >= SECTOR_SIZE) {
+            /* 跨簇合并读：探测连续簇，一次读完 */
+            uint32_t max_sectors = remaining / SECTOR_SIZE;
+            if (max_sectors > 256) max_sectors = 256;
 
-        if (sector_offset == 0 && to_read >= SECTOR_SIZE) {
-            /* 扇区对齐且至少 1 个完整扇区——尝试跨连续簇合并读 */
-
-            /* 本簇剩余扇区 */
-            uint32_t sectors_avail = to_read / SECTOR_SIZE;
-            uint32_t sectors_in_chain = vol->bpb.sectors_per_cluster - sector_in_cluster;
-            if (sectors_in_chain > sectors_avail) sectors_in_chain = sectors_avail;
-
-            /* 探测后续簇是否物理连续（簇号 +1）。最多探 64 簇。 */
             uint32_t probe = cluster;
+            uint32_t total_sectors = vol->bpb.sectors_per_cluster - sector_in_cluster;
             uint32_t clusters_in_chain = 1;
-            uint32_t total_sectors = sectors_in_chain;
 
-            while (total_sectors < sectors_avail && clusters_in_chain < 64) {
+            while (total_sectors < max_sectors && clusters_in_chain < 64) {
                 uint32_t next = get_next_cluster(vol, probe);
                 if (next != probe + 1) break;
                 probe = next;
                 clusters_in_chain++;
                 total_sectors += vol->bpb.sectors_per_cluster;
             }
-            if (total_sectors > sectors_avail) total_sectors = sectors_avail;
+            if (total_sectors > max_sectors) total_sectors = max_sectors;
             if (total_sectors > 256) total_sectors = 256;
 
             if (ata_read_sectors(vol->dev, first_sector + sector_in_cluster,
@@ -488,25 +479,23 @@ if (file->cached_cluster >= 2 &&
                 return EIO;
 
             uint32_t n = total_sectors * SECTOR_SIZE;
-            if (n > to_read) n = to_read;
             read_pos += n;
             skip_bytes += n;
 
-            /* 推进 cluster 指针（可能跨多簇） */
             while (skip_bytes >= cluster_size) {
                 skip_bytes -= cluster_size;
                 cluster = get_next_cluster(vol, cluster);
                 if (cluster >= 0x0FFFFFF8) return read_pos;
             }
         } else {
-            /* 未对齐，或本簇剩余不足 1 扇区——单扇区读 */
+            /* 未对齐或不足一扇区：单扇区读 */
             uint8_t sector[SECTOR_SIZE];
             if (ata_read_sectors(vol->dev, first_sector + sector_in_cluster,
                                  1, sector) < 0)
                 return EIO;
 
-            uint32_t copy_len = (to_read < (SECTOR_SIZE - sector_offset))
-                              ? to_read : (SECTOR_SIZE - sector_offset);
+            uint32_t copy_len = (remaining < (SECTOR_SIZE - sector_offset))
+                              ? remaining : (SECTOR_SIZE - sector_offset);
             memcpy(buffer + read_pos, sector + sector_offset, copy_len);
             read_pos += copy_len;
             skip_bytes += copy_len;
@@ -519,7 +508,6 @@ if (file->cached_cluster >= 2 &&
         }
     }
 
-    /* 更新缓存——跳过连续读后可能已经前进很多簇 */
     file->cached_cluster = cluster;
     file->cached_cluster_offset = (offset + read_pos) / cluster_size;
 

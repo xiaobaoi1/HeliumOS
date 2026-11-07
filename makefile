@@ -92,6 +92,10 @@ OBJS = $(BUILD_DIR)/start.o \
 	   $(BUILD_DIR)/input.o \
 	   $(BUILD_DIR)/pty.o \
 	   $(BUILD_DIR)/file_map.o \
+	   $(BUILD_DIR)/ata_ahci.o \
+	   $(BUILD_DIR)/ata_bmide.o \
+	   $(BUILD_DIR)/ahci.o \
+
 
 	   
 
@@ -288,9 +292,12 @@ run: $(ISO)
 
 # 运行硬盘镜像（测试文件系统时使用）
 run-disk: $(DISK_IMG)
-	$(QEMU) -drive file=$(DISK_IMG),format=raw -serial stdio -m 1024 \
+	$(QEMU) -drive if=none,id=disk0,file=$(DISK_IMG),format=raw \
+	        -device ide-hd,drive=disk0,bus=ide.0 \
+	        -serial stdio -m 1024 \
 	        -netdev user,id=n0 -device rtl8139,netdev=n0 \
-	        -audiodev none,id=snd -device AC97,audiodev=snd
+	        -audiodev none,id=snd -device AC97,audiodev=snd \
+	        -machine q35
 
 run-tcp: $(DISK_IMG)
 	$(QEMU) -drive file=$(DISK_IMG),format=raw -serial stdio -m 1024 \

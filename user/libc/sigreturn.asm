@@ -4,3 +4,5 @@ __sigreturn_trampoline:
     mov eax, 72
     int 0x80
     hlt
+
+section .note.GNU-stack
