@@ -5,6 +5,9 @@
 #include "unicode_font.h"
 #include <stdint.h>
 
+/* gfx_draw_text 的透明背景约定：bit==0 的像素保持原值 */
+#define GFX_BG_TRANSPARENT  0xFFFFFFFFu
+
 static unsigned int gfx_lerp(unsigned int a, unsigned int b, int t, int max) {
     if (max <= 0) return a;
     int ar = (a >> 16) & 0xFF, ag = (a >> 8) & 0xFF, ab = a & 0xFF;
@@ -17,6 +20,8 @@ static unsigned int gfx_lerp(unsigned int a, unsigned int b, int t, int max) {
 
 static void gfx_draw_text(unsigned int *pixels, int pw, int px, int py,
                           const char *s, unsigned int fg, unsigned int bg) {
+    int transparent = (bg == GFX_BG_TRANSPARENT);
+
     const unsigned char *p = (const unsigned char*)s;
     while (*p) {
         uint32_t cp;
@@ -35,14 +40,18 @@ static void gfx_draw_text(unsigned int *pixels, int pw, int px, int py,
                 int bit;
                 if (gw == 16) bit = g ? (g[r * 2 + (j >> 3)] & (0x80 >> (j & 7))) : 0;
                 else          bit = g ? (g[r] & (0x80 >> j)) : 0;
-                if (bit) pixels[y * pw + x] = fg;
-                else if (bg != 0xFFFFFFFFu) pixels[y * pw + x] = bg;
+                if (bit) {
+                    pixels[y * pw + x] = fg;
+                } else if (!transparent) {
+                    pixels[y * pw + x] = bg;
+                }
             }
         }
         px += gw;
         p += n;
     }
 }
+
 
 static void gfx_fill_rect(unsigned int *pixels, int pw, int ph,
                           int x, int y, int w, int h, unsigned int c) {
