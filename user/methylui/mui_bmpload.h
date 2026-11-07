@@ -14,6 +14,9 @@ struct mui_bitmap {
 /* 从文件加载 BMP。返回 1 成功，0 失败。重复调用会先释放旧像素。 */
 int  mui_bmp_load(struct mui_bitmap *img, const char *path);
 
+/* Icon loader: keeps alpha and makes pure black/white pixels transparent. */
+int  mui_bmp_load_icon(struct mui_bitmap *img, const char *path);
+
 void mui_bmp_free(struct mui_bitmap *img);
 
 /* 把位图缩放到 (x,y,w,h) 画到 surface。trans 色跳过。
