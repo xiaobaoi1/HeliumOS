@@ -241,7 +241,6 @@ $(DISK_IMG): $(KERNEL_ELF) $(USER_ELFS) $(USER_LIB_SOS) tcc-prepare $(BUILD_DIR)
 	sudo cp $(KERNEL_ELF) /mnt/build/boot/; \
 	sudo cp tools/unifont.hex /mnt/build/UNIFONT.HEX; \
 	sudo cp tools/unifont-17.0.03.hex /mnt/build/UNIFONT-17.HEX; \
-	sudo cp tools/consola.ttf /mnt/build/CONSOLA.TTF; \
 	for app in $(USER_APPS); do \
 	    sudo cp $(BUILD_DIR)/$$app.ELF /mnt/build/$$app; \
 	done; \
@@ -384,7 +383,7 @@ EXTRA_OBJS_test_mui_button := $(METHYLUI_OBJS)
 EXTRA_OBJS_test_mui_form := $(METHYLUI_OBJS)
 EXTRA_OBJS_kilo := $(POSIX_OBJS)
 EXTRA_OBJS_methylate := $(METHYLUI_OBJS)
-EXTRA_OBJS_term      := $(BUILD_DIR)/ttf.o $(BUILD_DIR)/unicode_font.o $(BUILD_DIR)/ime_dict.o \
+EXTRA_OBJS_term      := $(BUILD_DIR)/unicode_font.o $(BUILD_DIR)/ime_dict.o \
                         $(BUILD_DIR)/methylui/mui_font.o \
                         $(BUILD_DIR)/methylui/mui_surface.o \
                         $(BUILD_DIR)/methylui/mui_widget.o \

@@ -1,4 +1,4 @@
-/* term — 终端模拟器（支持完整 unifont.hex + TTF 回退 + 输入法）
+/* term — 终端模拟器（支持完整 unifont.hex + 输入法）
  *
  * 用法: TERM <shm_name> <client_w> <client_h> <event_pipe> [prog [args...]]
  */
@@ -11,7 +11,6 @@
 #include "methylui/mui_surface.h"
 #include "methylui/mui_widget.h"
 #include "methylui/mui_scroll.h"
-#include "ttf.h"
 #include "ime_dict.h"
 #include <stdint.h>
 
@@ -28,13 +27,6 @@ static unsigned char **g_glyph_ptr   = NULL;
 static unsigned char  *g_glyph_width = NULL;
 static unsigned char  *g_glyph_data  = NULL;
 static unsigned int    g_glyph_data_used = 0;
-
-#define TTF_CACHE_SIZE (128 * 1024)
-static unsigned char *g_ttf_cache = NULL;
-static unsigned char *g_ttf_state = NULL;
-static uint16_t      *g_ttf_off   = NULL;
-static unsigned int   g_ttf_cache_used = 0;
-static int            g_ttf_ok = 0;
 
 static int hexval(char c) {
     if (c >= '0' && c <= '9') return c - '0';
@@ -118,43 +110,8 @@ static void load_font(void) {
     memset(g_glyph_width, 0, MAX_CP);
     g_glyph_data_used = 0;
 
-    /* TTF 回退启用开关：把下面注释解开即可。
-     * 若 CONSOLA.TTF 加载失败，ttf_glyph() 会一律返回 NULL，
-     * 所有字形自动退回 unifont。 */
-    // if (ttf_load("SYS:/CONSOLA.TTF", FONT_H) == 0) {
-    //     g_ttf_cache = (unsigned char*)malloc(TTF_CACHE_SIZE);
-    //     g_ttf_state = (unsigned char*)malloc(MAX_CP);
-    //     g_ttf_off   = (uint16_t*)malloc(MAX_CP * sizeof(uint16_t));
-    //     if (g_ttf_cache && g_ttf_state && g_ttf_off) {
-    //         memset(g_ttf_state, 0, MAX_CP);
-    //         g_ttf_cache_used = 0;
-    //         g_ttf_ok = 1;
-    //     }
-    // }
-
-    int fallback = load_unifont();
-    dprintf(2, "term: TTF=%s unifont=%d\n", g_ttf_ok ? "yes" : "no", fallback);
-}
-
-/* Rasterise a codepoint on first use and cache its 8x16 1-bit mask.
- * TTF glyphs only provide coverage; ANSI fg/bg colours still come from
- * the terminal state and are applied by draw_char_at(). */
-static unsigned char *ttf_glyph(uint32_t cp) {
-    if (!g_ttf_ok || cp >= MAX_CP) return NULL;
-    if (g_ttf_state[cp] == 0) {
-        unsigned int used = g_ttf_cache_used;
-        if (used + FONT_H <= TTF_CACHE_SIZE) {
-            unsigned char *dst = g_ttf_cache + used;
-            if (ttf_render_glyph(cp, dst, CELL_W, FONT_H) > 0) {
-                g_ttf_off[cp] = (uint16_t)used;
-                g_ttf_cache_used += FONT_H;
-                g_ttf_state[cp] = 2;
-                return dst;
-            }
-        }
-        g_ttf_state[cp] = 1;
-    }
-    return g_ttf_state[cp] == 2 ? g_ttf_cache + g_ttf_off[cp] : NULL;
+    int loaded = load_unifont();
+    dprintf(2, "term: unifont=%d\n", loaded);
 }
 
 /* ---------- 渲染 ---------- */
@@ -247,9 +204,8 @@ static void fill_rect(int x, int y, int w, int h, unsigned int rgb) {
 static void draw_char_at(int px, int py, uint32_t cp,
                          uint32_t fg, uint32_t bg) {
     int width = CELL_W;
-    unsigned char *g = ttf_glyph(cp);
-
-    if (!g && g_glyph_ptr && g_glyph_width && cp < MAX_CP) {
+    unsigned char *g = NULL;
+    if (g_glyph_ptr && g_glyph_width && cp < MAX_CP) {
         g = g_glyph_ptr[cp];
         if (g && g_glyph_width[cp]) width = g_glyph_width[cp];
     }
@@ -744,11 +700,9 @@ static int term_resize(int new_w, int new_h) {
     int new_text_w = new_w - TERM_SCROLL_W;
     if (new_text_w < CELL_W) new_text_w = CELL_W;
 
-    /* bug#1 修复：不含滚动条 */
     int copy_w = (old_text_w < new_text_w) ? old_text_w : new_text_w;
     int copy_h = (old_ch < new_h) ? old_ch : new_h;
 
-    /* 1. 分配新缓冲，全刷 g_bg（bug#2 修复） */
     size_t new_live_size = (size_t)new_w * (size_t)new_h * 4;
     unsigned int *new_live = (unsigned int*)malloc(new_live_size);
     if (!new_live) return -1;
@@ -760,7 +714,6 @@ static int term_resize(int new_w, int new_h) {
     if (!new_hist) { free(new_live); return -1; }
     for (size_t i = 0; i < new_hist_size / 4; i++) new_hist[i] = g_bg;
 
-    /* 2. shm + mmap */
     int new_shm_size = shm_total_size(new_w, new_h);
     int new_id = shm_open(new_shm, new_shm_size, 0);
     if (new_id < 0) { free(new_live); free(new_hist); return -1; }
@@ -773,7 +726,6 @@ static int term_resize(int new_w, int new_h) {
     struct shm_hdr *new_hdr    = (struct shm_hdr*)new_addr;
     unsigned int   *new_pixels = (unsigned int*)(new_addr + SHM_HDR_SIZE);
 
-    /* 3. 复制旧 live 到 new_live（每行前 copy_w 像素） */
     if (!g_scrolled) cursor_restore();
     unsigned int *old_src = (g_scrolled && g_live) ? g_live : g_pixels;
     if (old_src) {
@@ -784,8 +736,6 @@ static int term_resize(int new_w, int new_h) {
         }
     }
 
-    /* 4. 复制旧历史（bug#3 修复）：环形 → 线性，每行前 copy_w 像素。
-     * hist_line(i) 用旧 g_hist / g_hist_start / g_cw，必须在改 g_cw 前做。 */
     int old_hist_count = g_hist_count;
     if (g_hist && old_hist_count > 0) {
         for (int i = 0; i < old_hist_count; i++) {
@@ -799,7 +749,6 @@ static int term_resize(int new_w, int new_h) {
         }
     }
 
-    /* 5. shm 初始像素 = new_live */
     memcpy(new_pixels, new_live, new_live_size);
 
     new_hdr->counter = 0;
@@ -808,7 +757,6 @@ static int term_resize(int new_w, int new_h) {
     new_hdr->pub_x0 = SHM_DIRTY_EMPTY; new_hdr->pub_y0 = 0;
     new_hdr->pub_x1 = 0; new_hdr->pub_y1 = 0;
 
-    /* 6. 通知 WM */
     struct wm_resize_request req;
     memset(&req, 0, sizeof(req));
     req.magic = WM_MAGIC;
@@ -826,7 +774,6 @@ static int term_resize(int new_w, int new_h) {
         return -1;
     }
 
-    /* 7. 切换 */
     munmap((unsigned int)g_shm, shm_total_size(old_cw, old_ch));
     if (g_live) free(g_live);
     if (g_hist) free(g_hist);
@@ -835,7 +782,7 @@ static int term_resize(int new_w, int new_h) {
     g_pixels     = new_pixels;
     g_live       = new_live;
     g_hist       = new_hist;
-    g_hist_start = 0;                 /* 线性排列 */
+    g_hist_start = 0;
     g_hist_count = old_hist_count;
     g_scrolled   = 0;
 
@@ -885,7 +832,6 @@ static const struct ime_word *ime_lookup(void) {
 }
 
 static int ime_cp_width(uint32_t cp) {
-    if (ttf_glyph(cp)) return CELL_W;
     if (g_glyph_ptr && cp < MAX_CP && g_glyph_width[cp]) return g_glyph_width[cp];
     return CELL_W;
 }
@@ -1096,12 +1042,8 @@ int main(int argc, char **argv) {
     g_master = fds[0];
     int slave  = fds[1];
 
-    /* 先设好窗口大小再起子进程：kilo 启动时立刻 ioctl(TIOCGWINSZ)，
-     * 此时若还是 0x0 会退化成 DSR 查询（终端不响应）而启动失败。 */
     pty_set_winsize(g_master, g_cols, g_rows);
 
-    /* shell 进程的环境变量。整条链上（kmain → desktop → TERM → SHELL）
-     * 目前都没传 envp，所以 TERM 这里给 shell 一份最低限度的环境。 */
     static char *shell_envp[] = {
         "PATH=SYS:/",
         "HOME=SYS:/",
@@ -1118,9 +1060,6 @@ int main(int argc, char **argv) {
         .in_pty = slave, .out_pty = slave, .err_pty = slave,
         .flags = 0, .envp = (uint32_t)shell_envp, .out_pid = 0,
     };
-    /* 默认在 pty 上起交互 shell；若带第 6 个及以后的参数，
-     * 则直接运行该命令 —— 桌面用 "TERM ... KILO SYS:\kmain.c"
-     * 就能在终端里打开 kilo。 */
     int sh;
     if (argc >= 6) {
         char *cmd_argv[8];
@@ -1136,7 +1075,6 @@ int main(int argc, char **argv) {
     if (sh < 0) { dprintf(2, "term: spawn %s %d\n", argc >= 6 ? argv[5] : "SHELL", sh); return 1; }
     pty_set_fg(g_master, sp.out_pid);
 
-    /* 关闭我们持有的 slave 副本，让子进程退出后 master 能读到 EOF。 */
     pty_close(slave);
 
     for (;;) {
@@ -1146,7 +1084,6 @@ int main(int argc, char **argv) {
             if (n != sizeof(ev)) break;
 
             if (ev.type == WM_EV_KEY) {
-                /* 滚回历史时按任意键回到实时屏幕（与常见终端一致） */
                 if (g_scrolled) {
                     mui_scroll_end(&g_scroll);
                     term_view_update();
@@ -1211,13 +1148,10 @@ int main(int argc, char **argv) {
                 mui_scroll_by(&g_scroll, (int)ev.code);
                 term_view_update();
             }
-            /* 鼠标 / 焦点事件忽略 */
         }
 
         int av = pty_avail(g_master);
         if (av < 0) {
-            /* 子进程已退出，pty slave 端所有 handle 关闭 → EOF。
-             * 先把缓冲区里剩余的输出读完，再发布，再销毁窗口退出。 */
             while ((av = pty_avail(g_master)) > 0) {
                 char buf[256];
                 int n = pty_read(g_master, buf, sizeof(buf));
@@ -1230,7 +1164,6 @@ int main(int argc, char **argv) {
             cursor_restore();
             if (!g_scrolled) cursor_draw();
 
-            /* 发布最后一帧（如果有未发布脏区） */
             if (g_shm &&
                 (g_shm->pub_x0 == SHM_DIRTY_EMPTY ||
                  g_shm->pub_x1 <= g_shm->pub_x0) &&
@@ -1243,7 +1176,6 @@ int main(int argc, char **argv) {
                 g_shm->counter++;
             }
 
-            /* 通知 WM 销毁窗口 */
             struct wm_destroy_request dr;
             dr.magic = WM_MAGIC;
             dr.type = WM_REQ_DESTROY;
