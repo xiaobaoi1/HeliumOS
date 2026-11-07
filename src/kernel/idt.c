@@ -100,6 +100,14 @@ void idt_init(void) {
     kprintf("[IDT] Initialization complete.\n");
 }
 
+void pic_mask_irq(uint8_t irq) {
+    if (irq < 8) {
+        outb(0x21, inb(0x21) | (1 << irq));
+    } else {
+        outb(0xA1, inb(0xA1) | (1 << (irq - 8)));
+    }
+}
+
 /* 取消屏蔽特定IRQ（方便后续启用） */
 void pic_unmask_irq(uint8_t irq) {
     if (irq < 8) {
