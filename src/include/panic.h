@@ -2,13 +2,20 @@
 #define PANIC_H
 
 #include <isr.h>
+#include <stdint.h>
 
-/* 内核致命错误：打印消息 + CR2/CR3 + 停止 CPU。不返回。 */
-void panic(const char *fmt, ...)
-    __attribute__((noreturn, format(printf, 1, 2)));
+/* 底层实现：渲染 + 停机。不直接调用，用下面的宏。 */
+void panic_at(const char *file, uint32_t line, const char *fmt, ...)
+    __attribute__((noreturn, format(printf, 3, 4)));
+void panic_regs_at(const struct registers *regs,
+                   const char *file, uint32_t line, const char *fmt, ...)
+    __attribute__((noreturn, format(printf, 4, 5)));
 
-/* 带完整寄存器快照的 panic。regs 可为 NULL。 */
-void panic_regs(const struct registers *regs, const char *fmt, ...)
-    __attribute__((noreturn, format(printf, 2, 3)));
+/* 公开宏：自动填 __FILE__ 和 __LINE__ */
+#define panic(fmt, ...) \
+    panic_at(__FILE__, (uint32_t)__LINE__, fmt, ##__VA_ARGS__)
+
+#define panic_regs(regs, fmt, ...) \
+    panic_regs_at((regs), __FILE__, (uint32_t)__LINE__, fmt, ##__VA_ARGS__)
 
 #endif
