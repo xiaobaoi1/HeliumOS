@@ -1,0 +1,79 @@
+ar rcs build/libc.a build/libc_string.o build/libc_printf.o build/libc_malloc.o build/libc_signal.o build/libc_env.o build/libc_assert.o build/libc_ctype.o build/libc_qsort.o build/libc_abort.o build/libc_stdlib.o build/libc_inet.o build/libc_netdb.o build/libc_atexit.o build/libc_dl.o build/libc_stdio.o build/libc_errno.o build/libc_sem.o build/libc_sigreturn.o build/libc_setjmp.o build/posix_fd.o build/posix_io.o build/posix_sys.o
+# 拷贝头文件
+cp -r user/libc/include/* build/tcc_sysroot/include/
+cp -r user/posix/include/* build/tcc_sysroot/include/
+# 拷贝 crt0.o 和 libc.a
+cp build/crt0.o build/tcc_sysroot/lib/
+cp build/libc.a build/tcc_sysroot/lib/
+cp user/libtcc1.a build/tcc_sysroot/lib/
+gcc -m32 -static -nostdlib     -Wl,-T,user/linker.ld     -Wl,--start-group     user/tcc.out     user/libtcc.a     build/crt0.o     build/libc.a     -Wl,--end-group     /usr/lib/gcc/x86_64-linux-gnu/15/32/libgcc.a     -o build/TCC.ELF
+正在创建 FAT32 硬盘镜像 (需要 sudo 权限)...
+sudo umount /mnt/build 2>/dev/null || true
+sudo losetup -d /dev/loop22 2>/dev/null || true
+sudo losetup -d /dev/loop23 2>/dev/null || true
+dd if=/dev/zero of=build/HeliumOS.img bs=1M count=64 status=none
+(echo o; echo n; echo p; echo 1; echo 2048; echo; echo t; echo c; echo a; echo 1; echo w) | fdisk build/HeliumOS.img > /dev/null 2>&1
+loop 分配: disk=/dev/loop21 part=/dev/loop22
+硬盘镜像生成成功: build/HeliumOS.img
+qemu-system-i386 -drive file=build/HeliumOS.img,format=raw -serial stdio -m 1024 \
+        -netdev user,id=n0 -device rtl8139,netdev=n0 \
+        -audiodev none,id=snd -device AC97,audiodev=snd
+[DEV] Registered type 3
+[DISP] Registered: vga_text (80x25)
+[TTY] Initialized
+========================================
+ HeliumOS Kernel Started (1GB/3GB)
+========================================
+[PMM] Initializing...
+[PMM] Done. Free pages: 228969
+[HEAP] Initialized (slab, max=2048 bytes)
+[GDT] Initializing...
+[GDT] Loaded.
+[TSS] Initializing...
+[TSS] Loaded.
+[VMM] Identity: 0..128MB. Kmap window: 0x8000000..0x10000000.
+[VMM] User space starts at 0x40000000.
+[KMAP] Window 0x8000000..0x10000000 (128 MB)
+[IDT] Initializing...
+[IDT] Initialization complete.
+[RTC] Initialized
+[ACPI] RSDP rev=0
+[ACPI] FADT ok: pm1a=0x604 pm1b=0x0 reset=0
+[FB] phys=0xfd000000 1024x768 pitch=4096 bpp=32 type=1
+[FB] mapped to 0x08002000
+[VOL] Initialized (8 slots)
+[FS] Initialized
+[DEV] Registered type 1
+[IRQ] Registered IRQ 1: keyboard
+[DEV] Registered type 2
+[PCI] Scanning bus 0...
+[PCI] Found 7 device(s)
+[STDVGA] pci=yes vbe_id=0xb0c5 fb_valid=1
+[STDVGA] VBE DISPI id=0xb0c5; framebuffer 1024x768 32bpp pitch=4096
+[GRAPHIC] stdvga loaded successfully: 1024x768 32bpp
+[AUDIO] AC97 loaded successfully: vendor=8086 device=2415 io=0xc000 ext_id=0809
+[ATA] Initializing...
+[ATA] 1 drive(s) detected.
+[E1000] Not found
+[RTL8139] Found at I/O 0xc400 irq=11
+[RTL8139] Reset done
+[IRQ] Registered IRQ 11: rtl8139
+[NET] Registered eth0 mac=52:54:00:12:34:56
+[RTL8139] Ready
+[NET] Protocol stack ready (awaiting DHCP)
+[FAT32] Mounted at LBA 2048: bps=512 spc=1 fat_size=993 root=2
+[VOL] Registered 'SYS' (fs_type=1, lba=2048, sectors=129024)
+[IRQ] Registered IRQ 12: mouse
+[MOUSE] Initialized, cursor at (512, 384), wheel=1
+[TASK] Process 1 created. Entry: 0x40000000, Kernel stack: 0x0078b000, heap_brk=0x50000000
+[KERNEL] IDLE task created (pid=1)
+[TASK] Process 2 created. Entry: 0x40000000, Kernel stack: 0x007a3000, heap_brk=0x50000000
+[KERNEL] WM task created (pid=2)
+[TASK] Process 3 created. Entry: 0x40000000, Kernel stack: 0x007b2000, heap_brk=0x50000000
+[DHCP] client task created (pid=3)
+[TASK] Process 4 created. Entry: 0x40000000, Kernel stack: 0x00867000, heap_brk=0x50000000
+[DESKTOP] task created (pid=4)
+[KERNEL] Processes created. Starting scheduler...
+[TASK] sizeof(task)=3152
+[FB] claimed by pid=2
+[INPUT] keyboard claimed by pid=2
