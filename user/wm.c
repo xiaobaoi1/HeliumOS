@@ -661,23 +661,96 @@ static void push_window_list(void) {
 
 /* ==================== 窗口创建/销毁 ==================== */
 
+/* 按目标 maximized 值设置窗口显示状态。
+ * 不碰 minimized / z / focus，只调整几何和 maximized 标志；
+ * 需要改客户区尺寸时给应用发 WM_EV_RESIZE。 */
+static void apply_maximized_state(struct window *w, int want_max) {
+    if (!w || w->kind != WM_KIND_NORMAL) return;
+
+    if (want_max) {
+        if (!w->maximized) {
+            int full_w = (int)g_W - 2 * BORDER;
+            int full_h = (int)g_H - dock_height() - TITLE_H - 2 * BORDER;
+            int need_resize = 1;
+
+            /* 尺寸已接近全屏（新 tab 从全屏 tab 派生），用合理
+             * 窗口化尺寸做 restore，否则"还原"后还是全屏。 */
+            if (w->cw >= full_w - 8 && w->ch >= full_h - 8) {
+                w->restore_x = 120;
+                w->restore_y = 80;
+                w->restore_w = 600 + 2 * BORDER;
+                w->restore_h = 400 + TITLE_H + 2 * BORDER;
+                need_resize = 0;
+            } else {
+                w->restore_x = w->x;
+                w->restore_y = w->y;
+                w->restore_w = w->w;
+                w->restore_h = w->h;
+            }
+            w->maximized = 1;
+            w->x = 0;
+            w->y = 0;
+            w->w = g_W;
+            w->h = g_H - dock_height();
+
+            if (need_resize) {
+                int new_cw = w->w - 2 * BORDER;
+                int new_ch = w->h - TITLE_H - 2 * BORDER;
+                send_event(w, WM_EV_RESIZE, (uint32_t)new_cw, 0, 0,
+                           (uint32_t)new_ch);
+            }
+        } else {
+            /* 已最大化：位置/尺寸对齐即可 */
+            w->x = 0;
+            w->y = 0;
+            w->w = g_W;
+            w->h = g_H - dock_height();
+        }
+    } else {
+        if (w->maximized) {
+            w->x = w->restore_x;
+            w->y = w->restore_y;
+            w->w = w->restore_w;
+            w->h = w->restore_h;
+            w->maximized = 0;
+            int new_cw = w->w - 2 * BORDER;
+            int new_ch = w->h - TITLE_H - 2 * BORDER;
+            send_event(w, WM_EV_RESIZE, (uint32_t)new_cw, 0, 0,
+                       (uint32_t)new_ch);
+        }
+    }
+}
+
 static void activate_tab(struct window *w) {
     int g = tab_group_of(w);
     if (!g) { set_focus(w); return; }
+
     struct window *old = g_focus;
-    int ox = (old && tab_group_of(old) == g) ? old->x : w->x;
-    int oy = (old && tab_group_of(old) == g) ? old->y : w->y;
+    int same_group = (old && tab_group_of(old) == g);
+
+    /* 目标显示状态：同组时继承 old 的 maximized；
+     * 否则用它自己之前的状态。 */
+    int want_max = same_group ? old->maximized : w->maximized;
+
     for (int i = 0; i < MAX_WINDOWS; i++) {
         struct window *o = &g_wins[i];
         if (!o->used || tab_group_of(o) != g) continue;
         if (o == w) {
             o->minimized = 0;
-            o->x = ox; o->y = oy;
             o->z = g_next_z++;
         } else {
             o->minimized = 1;
         }
     }
+
+    apply_maximized_state(w, want_max);
+
+    /* 窗口化时 tab 组共享位置；最大化时位置由 helper 接管（0,0）。 */
+    if (!want_max && same_group) {
+        w->x = old->x;
+        w->y = old->y;
+    }
+
     set_focus(w);
     mouse_restore();
     redraw_region(0, 0, g_W, g_H);
@@ -786,6 +859,13 @@ static struct window *make_app_window(struct wm_request *req) {
     int ev_w = pipe_open(req->ev_name, 1);
     if (ev_w < 0) { w->used = 0; return NULL; }
     w->event_w = ev_w;
+
+    /* tab 组窗口：交给 activate_tab 处理（最小化同组旧 tab、
+     * 继承位置、全屏重绘、推送窗口列表）。否则只画自己。 */
+    if (w->kind == WM_KIND_NORMAL && tab_group_of(w)) {
+        activate_tab(w);
+        return w;
+    }
 
     mouse_restore();
     if (w->kind == WM_KIND_NORMAL) {
@@ -903,6 +983,9 @@ static void destroy_window(struct window *w) {
     int x0, y0, x1, y1;
     win_bbox(w, &x0, &y0, &x1, &y1);
 
+    int tab_group = tab_group_of(w);
+    int was_max   = w->maximized;                    /* 新增 */
+
     if (w->kind == WM_KIND_POPUP) {
         send_event(w, WM_EV_CLOSE, 0, 0, 0, 0);
     }
@@ -916,25 +999,31 @@ static void destroy_window(struct window *w) {
     }
     if (w->shm_name[0]) shm_unlink(w->shm_name);
 
-    int tab_group = tab_group_of(w);
     w->used = 0;
     w->event_w = -1;
     if (g_focus == w) set_focus(NULL);
     if (g_mouse_entered == w) g_mouse_entered = NULL;
     if (g_dragging == w) g_dragging = NULL;
+
     if (tab_group) {
         struct window *next = tab_nth(tab_group, 0);
         if (next) {
             next->minimized = 0;
-            next->x = x0; next->y = y0;
             next->z = g_next_z++;
+            apply_maximized_state(next, was_max);    /* 新增 */
+            if (!was_max) {                          /* 改 */
+                next->x = x0;                        /*   窗口化接管：保持原逻辑 */
+                next->y = y0;
+            }                                        /*   全屏接管：位置由 helper 设 (0,0) */
             set_focus(next);
         }
     }
     forget_window_buttons(w);
 
     mouse_restore();
-    redraw_region(x0, y0, x1, y1);
+    /* 改：接管窗口可能是全屏或窗口化，几何差异大——全屏重绘最稳。
+     * 关闭 tab 不是热路径，代价可接受。 */
+    redraw_region(0, 0, g_W, g_H);
     mouse_draw();
     push_window_list();
 }

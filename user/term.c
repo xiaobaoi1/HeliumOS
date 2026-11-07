@@ -736,15 +736,31 @@ static int term_resize(int new_w, int new_h) {
     snprintf(new_shm, sizeof(new_shm), "term-%d-r%d",
              (int)g_my_ev_name[8] - '0', g_resize_gen);
 
+    /* 先保存旧尺寸——复制完才更新 g_*，hist_line 依赖 g_cw */
+    int old_cw     = g_cw;
+    int old_ch     = g_ch;
+    int old_text_w = g_text_w;
+
+    int new_text_w = new_w - TERM_SCROLL_W;
+    if (new_text_w < CELL_W) new_text_w = CELL_W;
+
+    /* bug#1 修复：不含滚动条 */
+    int copy_w = (old_text_w < new_text_w) ? old_text_w : new_text_w;
+    int copy_h = (old_ch < new_h) ? old_ch : new_h;
+
+    /* 1. 分配新缓冲，全刷 g_bg（bug#2 修复） */
     size_t new_live_size = (size_t)new_w * (size_t)new_h * 4;
     unsigned int *new_live = (unsigned int*)malloc(new_live_size);
-    if (new_live) memset(new_live, 0, new_live_size);
+    if (!new_live) return -1;
+    for (size_t i = 0; i < new_live_size / 4; i++) new_live[i] = g_bg;
 
     size_t new_hist_size = (size_t)TERM_HIST_LINES * FONT_H *
                            (size_t)new_w * 4;
     unsigned int *new_hist = (unsigned int*)malloc(new_hist_size);
-    if (new_hist) memset(new_hist, 0, new_hist_size);
+    if (!new_hist) { free(new_live); return -1; }
+    for (size_t i = 0; i < new_hist_size / 4; i++) new_hist[i] = g_bg;
 
+    /* 2. shm + mmap */
     int new_shm_size = shm_total_size(new_w, new_h);
     int new_id = shm_open(new_shm, new_shm_size, 0);
     if (new_id < 0) { free(new_live); free(new_hist); return -1; }
@@ -754,27 +770,37 @@ static int term_resize(int new_w, int new_h) {
                                  MAP_SHARED, new_id, 0);
     if ((int)new_addr <= 0) { free(new_live); free(new_hist); return -1; }
 
-    struct shm_hdr *new_hdr = (struct shm_hdr*)new_addr;
-    unsigned int *new_pixels = (unsigned int*)(new_addr + SHM_HDR_SIZE);
+    struct shm_hdr *new_hdr    = (struct shm_hdr*)new_addr;
+    unsigned int   *new_pixels = (unsigned int*)(new_addr + SHM_HDR_SIZE);
 
+    /* 3. 复制旧 live 到 new_live（每行前 copy_w 像素） */
     if (!g_scrolled) cursor_restore();
     unsigned int *old_src = (g_scrolled && g_live) ? g_live : g_pixels;
-
-    unsigned int *live_dst = new_live ? new_live : new_pixels;
-    for (size_t i = 0; i < new_live_size / 4; i++)
-        live_dst[i] = g_bg;
-
     if (old_src) {
-        int copy_w = (g_text_w < new_w) ? g_text_w : new_w;
-        int copy_h = (g_ch < new_h) ? g_ch : new_h;
         for (int y = 0; y < copy_h; y++) {
-            memcpy(live_dst + y * new_w,
-                   old_src + y * g_cw,
+            memcpy(new_live + (size_t)y * new_w,
+                   old_src  + (size_t)y * old_cw,
                    (size_t)copy_w * 4);
         }
     }
-    if (new_live)
-        memcpy(new_pixels, new_live, new_live_size);
+
+    /* 4. 复制旧历史（bug#3 修复）：环形 → 线性，每行前 copy_w 像素。
+     * hist_line(i) 用旧 g_hist / g_hist_start / g_cw，必须在改 g_cw 前做。 */
+    int old_hist_count = g_hist_count;
+    if (g_hist && old_hist_count > 0) {
+        for (int i = 0; i < old_hist_count; i++) {
+            unsigned int *src = hist_line(i);
+            unsigned int *dst = new_hist + (size_t)i * FONT_H * new_w;
+            for (int r = 0; r < FONT_H; r++) {
+                memcpy(dst + (size_t)r * new_w,
+                       src + (size_t)r * old_cw,
+                       (size_t)copy_w * 4);
+            }
+        }
+    }
+
+    /* 5. shm 初始像素 = new_live */
+    memcpy(new_pixels, new_live, new_live_size);
 
     new_hdr->counter = 0;
     new_hdr->cur_x0 = SHM_DIRTY_EMPTY; new_hdr->cur_y0 = 0;
@@ -782,40 +808,43 @@ static int term_resize(int new_w, int new_h) {
     new_hdr->pub_x0 = SHM_DIRTY_EMPTY; new_hdr->pub_y0 = 0;
     new_hdr->pub_x1 = 0; new_hdr->pub_y1 = 0;
 
+    /* 6. 通知 WM */
     struct wm_resize_request req;
     memset(&req, 0, sizeof(req));
     req.magic = WM_MAGIC;
-    req.type = WM_REQ_RESIZE;
+    req.type  = WM_REQ_RESIZE;
     req.owner_pid = getpid();
     strncpy(req.old_shm, g_my_shm_name, sizeof(req.old_shm) - 1);
-    strncpy(req.new_shm, new_shm, sizeof(req.new_shm) - 1);
+    strncpy(req.new_shm, new_shm,      sizeof(req.new_shm) - 1);
     req.new_w = new_w;
     req.new_h = new_h;
 
     if (pipe_write(g_inbox_w, &req, sizeof(req)) != sizeof(req)) {
-        free(new_live);
-        free(new_hist);
+        free(new_live); free(new_hist);
+        munmap(new_addr, new_shm_size);
+        shm_unlink(new_shm);
         return -1;
     }
 
-    munmap((unsigned int)g_shm, shm_total_size(g_cw, g_ch));
-
+    /* 7. 切换 */
+    munmap((unsigned int)g_shm, shm_total_size(old_cw, old_ch));
     if (g_live) free(g_live);
     if (g_hist) free(g_hist);
 
-    g_shm = new_hdr;
-    g_pixels = new_pixels;
-    g_live = new_live;
-    g_hist = new_hist;
-    g_hist_start = g_hist_count = 0;
-    g_scrolled = 0;
+    g_shm        = new_hdr;
+    g_pixels     = new_pixels;
+    g_live       = new_live;
+    g_hist       = new_hist;
+    g_hist_start = 0;                 /* 线性排列 */
+    g_hist_count = old_hist_count;
+    g_scrolled   = 0;
 
-    g_cw = new_w;
-    g_ch = new_h;
-    g_text_w = new_w - TERM_SCROLL_W;
-    if (g_text_w < CELL_W) g_text_w = CELL_W;
-    g_cols = g_text_w / CELL_W;
-    g_rows = new_h / FONT_H;
+    g_cw     = new_w;
+    g_ch     = new_h;
+    g_text_w = new_text_w;
+    g_cols   = g_text_w / CELL_W;
+    g_rows   = new_h / FONT_H;
+
     g_cursor_drawn = 0;
     if (g_cx >= g_cols) g_cx = g_cols - 1;
     if (g_cy >= g_rows) g_cy = g_rows - 1;
@@ -831,8 +860,6 @@ static int term_resize(int new_w, int new_h) {
 
     strncpy(g_my_shm_name, new_shm, sizeof(g_my_shm_name) - 1);
 
-    dprintf(2, "term: resize to cols=%d rows=%d ch=%d\n",
-            g_cols, g_rows, g_ch);
     pty_set_winsize(g_master, g_cols, g_rows);
 
     if (g_master >= 0) {

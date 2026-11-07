@@ -252,9 +252,27 @@ static void draw_file_icon(int idx) {
     int ly = iy + ICON_SIZE + 4;
     int tx = px + (ICON_CELL_W - tw) / 2;
     if (tx < px + 2) tx = px + 2;
-    /* 阴影：先画偏移一像素的黑色，再叠白色前景 */
-    gfx_draw_text(g_wall_pixels, g_W, tx + 1, ly + 1, label, 0x000000, 0xFFFFFFFFu);
-    gfx_draw_text(g_wall_pixels, g_W, tx, ly, label, 0xFFFFFF, 0xFFFFFFFFu);
+
+    /* 用壁纸像素清理文字区（含阴影的 1 像素偏移，高度 17），
+     * 避免文件名变长/变短时旧字符残留，也让文字真正透出壁纸。 */
+    if (tw > 0) {
+        for (int j = 0; j < 17; j++) {
+            int yy = ly + j;
+            if (yy < 0 || yy >= g_H) continue;
+            unsigned int *row = g_wall_pixels + yy * g_W;
+            for (int i = 0; i < tw + 1; i++) {
+                int xx = tx + i;
+                if (xx < 0 || xx >= g_W) continue;
+                row[xx] = wall_bg_pixel(xx, yy);
+            }
+        }
+    }
+
+    /* 阴影黑色 + 前景白色，背景透明 */
+    gfx_draw_text(g_wall_pixels, g_W, tx + 1, ly + 1, label,
+                  0x000000, GFX_BG_TRANSPARENT);
+    gfx_draw_text(g_wall_pixels, g_W, tx, ly, label,
+                  0xFFFFFF, GFX_BG_TRANSPARENT);
 }
 
 static void draw_all_files(void) {
