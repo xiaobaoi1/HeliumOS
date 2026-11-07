@@ -1128,9 +1128,19 @@ static void cmd_ps(void) {
         set_color(VGA_LIGHT_GRAY, VGA_BLACK);
         return;
     }
-    printf("PID\n");
+    printf("PID   PPID  CLASS  STATE  IMAGE\n");
     for (int i = 0; i < n; i++) {
-        printf("%u\n", pids[i]);
+        struct proc_info info;
+        if (proc_query(pids[i], &info) == 0) {
+            static const char *cls[] = { "USER", "SVC", "KRNL" };
+            static const char *st[]  = { "RDY", "RUN", "WAIT", "SLEEP",
+                                          "ZMB", "PIPE", "PTY" };
+            printf("%-5u %-5u %-5s  %-5s  %s\n",
+                   info.pid, info.creator_pid,
+                   info.class < 3 ? cls[info.class] : "?",
+                   info.state < 7 ? st[info.state] : "?",
+                   info.image[0] ? info.image : "(kernel)");
+        }
     }
     printf("total: %d\n", n);
 }

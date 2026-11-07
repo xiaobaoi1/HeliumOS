@@ -126,6 +126,7 @@ struct task {
     struct task *wait_target;
     uint64_t wait_deadline;          /* WAITING_CHILD 的超时时刻（tick） */
 
+    char image[32];                  /* 程序基名，如 "WM"/"SHELL" */
     char cwd_volume[VOL_NAME_LEN];
     char cwd_path[PATH_MAX_LEN];
 

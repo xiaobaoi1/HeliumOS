@@ -350,6 +350,8 @@ static void pr_dump_task(struct task *t) {
     pr_puts("\n  --- current process ---\n");
     pr_printf("  pid=%u state=%u class=%u caps=0x%X\n",
               t->pid, t->state, (unsigned)t->class, t->caps);
+    if (t->image[0])
+        pr_printf("  image=%s\n", t->image);
     pr_printf("  creator_pid=%u entry=%08X\n",
               t->creator_pid, t->entry_point);
     pr_printf("  cwd=%s:%s\n",

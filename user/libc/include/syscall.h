@@ -110,6 +110,19 @@
 #define SYS_NET_GET_DNS  153
 
 
+#define SYS_PROC_QUERY 154
+
+struct proc_info {
+    unsigned int pid;
+    unsigned int creator_pid;
+    unsigned int entry_point;
+    unsigned char state;
+    unsigned char class;
+    unsigned char reserved[2];
+    unsigned int caps;
+    char     image[32];
+};
+
 
 
 
@@ -403,6 +416,10 @@ static inline int getppid(void) {
 
 static inline int proc_list(unsigned int *pids, int max) {
     return __syscall(SYS_PROC_LIST, (int)pids, max, 0);
+}
+
+static inline int proc_query(unsigned int pid, struct proc_info *out) {
+    return __syscall(SYS_PROC_QUERY, (int)pid, (int)out, 0);
 }
 
 static inline int sys_uname(struct uname_buf *u) {

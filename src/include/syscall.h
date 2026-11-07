@@ -108,6 +108,7 @@
 #define SYS_NET_GET_IF   151
 #define SYS_NET_SET_DNS  152
 #define SYS_NET_GET_DNS  153
+#define SYS_PROC_QUERY 154
 
 
 
@@ -120,5 +121,17 @@
 
 /* 系统调用处理函数声明 */
 void syscall_handler(struct registers *regs);
+
+
+struct proc_info {
+    uint32_t pid;
+    uint32_t creator_pid;
+    uint32_t entry_point;
+    uint8_t  state;
+    uint8_t  class;
+    uint8_t  reserved[2];
+    uint32_t caps;
+    char     image[32];
+};
 
 #endif

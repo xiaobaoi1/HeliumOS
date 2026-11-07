@@ -43,6 +43,7 @@
 #include <tty.h>
 #include <file_map.h>
 #include <font.h>
+#include <string.h>
 
 
 static const char *shell_env[] = {
@@ -86,6 +87,14 @@ static struct task *create_task_from_elf(struct fat32_volume *vol,
     if (!task) {
         kprintf("[KERNEL] Failed to create task for %s\n", path);
         return NULL;
+    }
+
+    if (task) {
+        const char *img = path;
+        for (const char *p = path; *p; p++)
+            if (*p == '\\' || *p == '/') img = p + 1;
+        strncpy(task->image, img, sizeof(task->image) - 1);
+        task->image[sizeof(task->image) - 1] = '\0';
     }
 
     return task;
