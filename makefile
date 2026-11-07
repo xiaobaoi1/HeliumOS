@@ -110,7 +110,7 @@ all: $(DISK_IMG)
 # ==================== 用户程序变量 ====================
 
 USER_CFLAGS = -m32 -ffreestanding -fno-pic -fno-stack-protector \
-              -Iuser/ -Iuser/libc/include -Iuser/posix/include -MMD -MP
+              -Iuser/ -Iuser/libc/include -Iuser/posix/include -Iuser/BearSSL-master/inc -MMD -MP
 
 METHYLUI_DIR  = user/methylui
 METHYLUI_OBJS = $(BUILD_DIR)/unicode_font.o \
@@ -139,6 +139,12 @@ USER_APPS = shell idle test testkill sleeper argtest test_write \
 # 需要 POSIX 兼容层的应用
 PHOTO_PY ?= /mnt/d/Local/Python314/python.exe
 PHOTO_SRCS := $(wildcard user/*.jpg user/*.jpeg user/*.png)
+
+BEARSSL_SRCS := $(shell find user/BearSSL-master/src -name '*.c' 2>/dev/null)
+BEARSSL_OBJS := $(patsubst user/BearSSL-master/src/%.c,$(BUILD_DIR)/bearssl/%.o,$(BEARSSL_SRCS))
+BEARSSL_CFLAGS := -Iuser/BearSSL-master/inc -Iuser/BearSSL-master/src \
+                  -DBR_USE_URANDOM=0 -DBR_USE_WIN32_RAND=0 \
+                  -DBR_USE_UNIX_TIME=0 -DBR_USE_WIN32_TIME=0
 
 POSIX_APPS = kilo
 POSIX_DIR  = user/posix
@@ -377,7 +383,7 @@ EXTRA_OBJS_wm      := $(BUILD_DIR)/wm_font.o $(BUILD_DIR)/unicode_font.o
 EXTRA_OBJS_about   := $(BUILD_DIR)/wm_font.o $(BUILD_DIR)/unicode_font.o
 EXTRA_OBJS_photos  := $(BUILD_DIR)/image.o
 EXTRA_OBJS_calc    := $(BUILD_DIR)/wm_font.o $(BUILD_DIR)/unicode_font.o $(BUILD_DIR)/math_lib.o
-EXTRA_OBJS_netsurf := $(BUILD_DIR)/wm_font.o $(BUILD_DIR)/unicode_font.o
+EXTRA_OBJS_netsurf := $(BUILD_DIR)/wm_font.o $(BUILD_DIR)/unicode_font.o $(BUILD_DIR)/bearssl/libbearssl.a
 EXTRA_OBJS_desktop := $(BUILD_DIR)/wm_font.o $(METHYLUI_OBJS) $(BUILD_DIR)/ime_dict.o
 EXTRA_OBJS_test_mui_draw := $(METHYLUI_OBJS)
 EXTRA_OBJS_test_mui_button := $(METHYLUI_OBJS)
@@ -394,6 +400,14 @@ EXTRA_OBJS_term      := $(BUILD_DIR)/unicode_font.o $(BUILD_DIR)/ime_dict.o \
 $(BUILD_DIR)/math_lib.o: user/lib/libmath.c user/libc/include/math.h
 	@mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/bearssl/%.o: user/BearSSL-master/src/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(USER_CFLAGS) $(BEARSSL_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/bearssl/libbearssl.a: $(BEARSSL_OBJS)
+	@mkdir -p $(BUILD_DIR)/bearssl
+	ar rcs $@ $(BEARSSL_OBJS)
 
 .SECONDEXPANSION:
 $(BUILD_DIR)/%.ELF: $(BUILD_DIR)/%.o $(BUILD_DIR)/crt0.o $(LIBC_OBJS) $$(EXTRA_OBJS_$$*) user/linker.ld

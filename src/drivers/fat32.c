@@ -1454,9 +1454,7 @@ int fat32_truncate(struct fat32_volume *vol, struct fat32_file *file) {
 
 /* ---------- unlink ---------- */
 
-int fat32_unlink(struct fat32_volume *vol, const char *path,
-                 uint32_t *out_first_cluster) {
-    if (out_first_cluster) *out_first_cluster = 0;
+int fat32_unlink(struct fat32_volume *vol, const char *path) {
     if (!vol || !vol->valid || !path) return EINVAL;
 
     char dir_path[PATH_MAX_LEN];
@@ -1475,10 +1473,8 @@ int fat32_unlink(struct fat32_volume *vol, const char *path,
     }
     if (e.attributes & 0x10) return EISDIR;
 
-    /* 记录首簇，供上层 page cache 失效使用 */
+    /* 释放簇链 */
     uint32_t fc = (e.cluster_high << 16) | e.cluster_low;
-    if (out_first_cluster) *out_first_cluster = fc;
-
     if (fc >= 2) free_cluster_chain(vol, fc);
 
     /* 标记短名项 + 前面的 LFN 项为 0xE5 */
@@ -1675,8 +1671,7 @@ int fat32_rmdir(struct fat32_volume *vol, const char *path) {
 /* ---------- rename ---------- */
 
 int fat32_rename(struct fat32_volume *vol, const char *old_path,
-                 const char *new_path, uint32_t *out_old_first_cluster) {
-    if (out_old_first_cluster) *out_old_first_cluster = 0;
+                 const char *new_path) {
     if (!vol || !vol->valid || !old_path || !new_path) return EINVAL;
 
     char old_dir[PATH_MAX_LEN], old_name[64];
@@ -1697,12 +1692,8 @@ int fat32_rename(struct fat32_volume *vol, const char *old_path,
     }
 
     uint32_t first_cluster = (e.cluster_high << 16) | e.cluster_low;
-    if (out_old_first_cluster) *out_old_first_cluster = first_cluster;
-
     uint32_t file_size = e.file_size;
     uint8_t attr = e.attributes;
-
-    /* ---------- 以下与原实现完全一致，只是不再依赖 first_cluster 变量名 ---------- */
 
     struct fat32_dir new_parent;
     if (fat32_opendir(vol, new_dir, &new_parent) != OK) return ENOENT;
@@ -1710,12 +1701,16 @@ int fat32_rename(struct fat32_volume *vol, const char *old_path,
     uint32_t new_lba = 0, new_idx = 0;
     if (find_entry_in_dir(vol, new_parent.start_cluster, new_name, -1,
                           NULL, &new_lba, &new_idx, NULL)) {
+        /* 目标名字就是源项自己（仅大小写变化）：允许继续，
+         * 否则 "foo.c" -> "Foo.c" 会被误判为已存在。 */
         if (new_lba != old_lba || new_idx != old_idx) return EEXIST;
     }
 
     int name_len = strlen(new_name);
     if (name_len > 195) return ENAMETOOLONG;
 
+    /* 同目录时优先原地复用旧目录项，避免分配新项/删除旧项。
+     * 不同目录或新名字需要更多 LFN 槽位时才走旧路径。 */
     int same_dir = (old_parent.start_cluster == new_parent.start_cluster);
     if (same_dir) {
         int needs_lfn = !(is_83_compatible(new_name) && !name_has_lower(new_name));
@@ -1736,6 +1731,7 @@ int fat32_rename(struct fat32_volume *vol, const char *old_path,
                     }
                 }
                 if (ok) {
+                    /* 复用原短名做 LFN 校验和，避免与其它短名冲突。 */
                     uint8_t n8[8], e3[3];
                     memcpy(n8, e.name, 8);
                     memcpy(e3, e.ext, 3);
