@@ -114,7 +114,8 @@ struct task {
 
     /* 进程分级 + 能力（不占前 6 字段偏移） */
     uint8_t  class;
-    uint8_t  reserved_priv[3];
+    uint8_t  in_schedule;
+    uint8_t  reserved_priv[2];
     uint32_t caps;
 
     uint32_t heap_base;

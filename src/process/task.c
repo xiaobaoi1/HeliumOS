@@ -319,7 +319,6 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd,
     task->creator_pid = get_current_task() ? get_current_task()->pid : 0;
     task->class = child_class;
     task->caps  = child_caps;
-    task->reserved_priv[0] = task->reserved_priv[1] = task->reserved_priv[2] = 0;
     task->wait_deadline = 0;
 
     task->refcount = 1;
