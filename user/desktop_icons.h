@@ -24,8 +24,8 @@ static void icons_pin(struct mui_bitmap *img, unsigned int *dst) {
 }
 
 static void icons_load(void) {
-    mui_bmp_load(&g_img_folder, "SYS:\\folder.bmp");
-    mui_bmp_load(&g_img_exec, "SYS:\\exec.bmp");
+    mui_bmp_load_icon(&g_img_folder, "SYS:\\folder.bmp");
+    mui_bmp_load_icon(&g_img_exec, "SYS:\\exec.bmp");
     icons_pin(&g_img_folder, g_folder_icon_px);
     icons_pin(&g_img_exec, g_exec_icon_px);
 }

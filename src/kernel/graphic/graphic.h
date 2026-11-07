@@ -15,7 +15,7 @@ struct graphic_device {
 };
 
 /* 在 fb_init + pci_init 之后调用。会通过 kprintf 把结果打到串口。 */
-int graphic_init(void);
+void graphic_init(void);
 struct graphic_device *graphic_get(void);
 
 #endif

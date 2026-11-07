@@ -74,7 +74,7 @@ static void lfn_write_at(const struct fat32_dir_entry *e, char *buf,
             return;
         }
         /* UTF-16 → ASCII 简化：只处理 < 0x80 */
-        buf[offset + i] = (w < 0x80) ? (char)w : '?';
+        buf[offset + i] = (w <= 0xFF) ? (char)(w & 0xFF) : '?';
     }
 }
 
@@ -745,6 +745,17 @@ static void fat32_now(uint16_t *out_time, uint16_t *out_date) {
     *out_date = (uint16_t)((year << 9) |
                            ((t.month & 0x0F) << 5) |
                            (t.day & 0x1F));
+}
+
+/* 8.3 目录项 → 名字字符串 */
+static void dir_entry_to_name(const struct fat32_dir_entry *e, char *out) {
+    int k = 0;
+    for (int i = 0; i < 8 && e->name[i] != ' '; i++) out[k++] = e->name[i];
+    if (e->ext[0] != ' ') {
+        out[k++] = '.';
+        for (int i = 0; i < 3 && e->ext[i] != ' '; i++) out[k++] = e->ext[i];
+    }
+    out[k] = '\0';
 }
 
 /* path → dir_path + name。dir_path 至少 PATH_MAX_LEN 字节，
