@@ -74,6 +74,7 @@ int mui_bmp_load(struct mui_bitmap *img, const char *path) {
         return 0;
     }
 
+    int any_alpha = 0;
     for (int y = 0; y < abs_h; y++) {
         got = 0;
         while (got < row_size) {
@@ -88,18 +89,35 @@ int mui_bmp_load(struct mui_bitmap *img, const char *path) {
             uint8_t b = row[x * bpp / 8];
             uint8_t g = row[x * bpp / 8 + 1];
             uint8_t r = row[x * bpp / 8 + 2];
+            uint8_t a = (bpp == 32) ? row[x * 4 + 3] : 0xFF;
+            if (a) any_alpha = 1;
             pixels[(size_t)dy * (size_t)width + x] =
-                ((unsigned int)r << 16) | ((unsigned int)g << 8) | b;
+                ((unsigned int)a << 24) | ((unsigned int)r << 16) |
+                ((unsigned int)g << 8) | b;
         }
     }
 
     fs_close(fd);
     free(row);
 
+    if (bpp == 32 && !any_alpha) {
+        for (size_t i = 0; i < px_count; i++) pixels[i] |= 0xFF000000u;
+    }
     img->pixels = pixels;
     img->w = (int)width;
     img->h = abs_h;
-    img->trans = pixels[0];
+    img->trans = pixels[0] & 0xFFFFFFu;
+    return 1;
+}
+
+int mui_bmp_load_icon(struct mui_bitmap *img, const char *path) {
+    if (!mui_bmp_load(img, path)) return 0;
+    size_t n = (size_t)img->w * (size_t)img->h;
+    for (size_t i = 0; i < n; i++) {
+        unsigned int rgb = img->pixels[i] & 0xFFFFFFu;
+        if (rgb == 0x000000u || rgb == 0xFFFFFFu)
+            img->pixels[i] = 0;
+    }
     return 1;
 }
 
@@ -117,7 +135,8 @@ int mui_bmp_blit(struct mui_bitmap *img, struct mui_surface *s,
             if (sx >= img->w) sx = img->w - 1;
 
             unsigned int c = img->pixels[(size_t)sy * (size_t)img->w + sx];
-            if (c == img->trans) continue;
+            unsigned int a = c >> 24;
+            if (a == 0) continue;
 
             int px = x + dx;
             int py = y + dy;
@@ -126,7 +145,17 @@ int mui_bmp_blit(struct mui_bitmap *img, struct mui_surface *s,
                 (px < s->clip_x0 || py < s->clip_y0 ||
                  px >= s->clip_x1 || py >= s->clip_y1)) continue;
 
-            s->pixels[py * s->w + px] = c;
+            if (a == 0xFF) {
+                s->pixels[py * s->w + px] = c & 0xFFFFFFu;
+            } else {
+                unsigned int d = s->pixels[py * s->w + px];
+                unsigned int sr = (c >> 16) & 0xFF, sg = (c >> 8) & 0xFF, sb = c & 0xFF;
+                unsigned int dr = (d >> 16) & 0xFF, dg = (d >> 8) & 0xFF, db = d & 0xFF;
+                unsigned int rr = (sr * a + dr * (255 - a)) / 255;
+                unsigned int gg = (sg * a + dg * (255 - a)) / 255;
+                unsigned int bb = (sb * a + db * (255 - a)) / 255;
+                s->pixels[py * s->w + px] = (rr << 16) | (gg << 8) | bb;
+            }
         }
     }
 

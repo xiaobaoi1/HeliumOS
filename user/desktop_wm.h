@@ -51,4 +51,15 @@ static int wm_create_window(const char *title, int kind, int x, int y, int w, in
     *out_hdr = hdr;
     return 0;
 }
+
+static int wm_set_window_alpha(const char *shm_name, uint32_t alpha) {
+    struct wm_set_alpha_request req;
+    memset(&req, 0, sizeof(req));
+    req.magic = WM_MAGIC;
+    req.type = WM_REQ_SET_ALPHA;
+    req.owner_pid = getpid();
+    req.alpha = alpha > 255 ? 255 : alpha;
+    strncpy(req.shm_name, shm_name, sizeof(req.shm_name) - 1);
+    return pipe_write(g_inbox_w, &req, sizeof(req)) == sizeof(req) ? 0 : -1;
+}
 #endif

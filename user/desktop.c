@@ -17,6 +17,8 @@
 #include "methylui/mui_textbox.h"
 #include "methylui/mui_scroll.h"
 #include "methylui/mui_dialog.h"
+#include "methylui/mui_bmpload.h"
+#include "ime_dict.h"
 
 #define PANEL_H     28
 #define MENU_ITEM_H 24
@@ -45,8 +47,7 @@ int g_inbox_w = -1;
 static uint32_t g_tick = 0;
 
 static unsigned int *g_wall_pixels;
-static int g_wall_bmp_state = 0;
-static unsigned int *g_wall_bmp_cache = NULL;
+static struct mui_bitmap g_wall_bmp;
 static struct shm_hdr *g_wall_hdr;
 static char g_wall_shm[16];
 static int g_wall_ev = -1;
@@ -80,6 +81,7 @@ static void spawn_term(int cw, int ch, int x, int y);
 static void spawn_term_argv(int cw, int ch, int x, int y,
                             char *const extra[], const char *title);
 static void open_source_file(const char *path);
+static void open_photo_file(const char *path);
 static struct fm_win *open_folder_window(const char *path);
 static void desktop_refresh_icons(void);
 static void toggle_safeguard(void);
@@ -87,7 +89,6 @@ static void shm_publish(struct shm_hdr *h);
 static void shm_mark_rect(struct shm_hdr *h, int x0, int y0, int x1, int y1);
 static void open_context_menu(int x, int y);
 static void open_context_item_menu(int file_idx, int x, int y);
-
 /* ============================================================
  *                   桌面图标逻辑
  * ============================================================ */
@@ -169,31 +170,51 @@ static int is_c_source(const char *name) {
            (name[len - 1] == 'c' || name[len - 1] == 'C');
 }
 
-/* 取壁纸 (x, y) 处的像素：BMP 壁纸优先，否则回退渐变。
- * 供图标局部重绘使用，避免在 BMP 壁纸上盖出渐变补丁。 */
-static inline unsigned int wall_bg_pixel(int x, int y) {
-    if (g_wall_bmp_state == 1 && g_wall_bmp_cache)
-        return g_wall_bmp_cache[(size_t)y * g_W + x];
+static int is_image_file(const char *name) {
+    if (!name) return 0;
+    size_t len = strlen(name);
+    if (len < 4) return 0;
+    const char *e = name + len - 4;
+    if ((e[0] == '.') && (e[1] == 'j' || e[1] == 'J') &&
+        (e[2] == 'p' || e[2] == 'P') && (e[3] == 'g' || e[3] == 'G')) return 1;
+    if ((e[0] == '.') && (e[1] == 'p' || e[1] == 'P') &&
+        (e[2] == 'n' || e[2] == 'N') && (e[3] == 'g' || e[3] == 'G')) return 1;
+    if (len >= 5 && e[-1] == '.' && (e[0] == 'j' || e[0] == 'J') &&
+        (e[1] == 'p' || e[1] == 'P') && (e[2] == 'e' || e[2] == 'E') &&
+        (e[3] == 'g' || e[3] == 'G')) return 1;
+    return 0;
+}
+
+static unsigned int wallpaper_pixel(int x, int y) {
+    if (g_wall_bmp.pixels && g_wall_bmp.w > 0 && g_wall_bmp.h > 0) {
+        int sx = x * g_wall_bmp.w / g_W;
+        int sy = y * g_wall_bmp.h / g_H;
+        if (sx < 0) sx = 0;
+        if (sy < 0) sy = 0;
+        if (sx >= g_wall_bmp.w) sx = g_wall_bmp.w - 1;
+        if (sy >= g_wall_bmp.h) sy = g_wall_bmp.h - 1;
+        return g_wall_bmp.pixels[sy * g_wall_bmp.w + sx] & 0xFFFFFFu;
+    }
     return gfx_lerp(WALL_TOP, WALL_BOTTOM, y, g_H);
 }
 
 static void draw_file_icon(int idx) {
     struct fs_entry_info *f = &g_files[idx];
     int selected = desk_is_selected(idx);
-
+    
     int col = idx % g_desk_cols;
     int row = idx / g_desk_cols;
     int px = ICON_PAD_X + col * ICON_CELL_W;
     int py = ICON_PAD_Y + row * ICON_CELL_H;
-
+    
     int ix = px + (ICON_CELL_W - ICON_SIZE) / 2;
     int iy = py;
 
-    /* 背景从实际壁纸取像素（BMP 优先，回退渐变），避免 BMP 壁纸上盖出渐变补丁 */
     for (int j = 0; j < ICON_SIZE; j++) {
-        unsigned int *row_p = g_wall_pixels + (iy + j) * g_W + ix;
-        for (int i = 0; i < ICON_SIZE; i++)
-            row_p[i] = wall_bg_pixel(ix + i, iy + j);
+        for (int i = 0; i < ICON_SIZE; i++) {
+            g_wall_pixels[(iy + j) * g_W + ix + i] =
+                wallpaper_pixel(ix + i, iy + j);
+        }
     }
 
     if (f->is_dir) {
@@ -209,10 +230,10 @@ static void draw_file_icon(int idx) {
 
     if (selected) {
         unsigned int edge = 0xFFFFFF;
-        gfx_fill_rect(g_wall_pixels, g_W, g_H, ix, iy, ICON_SIZE, 1, edge);
-        gfx_fill_rect(g_wall_pixels, g_W, g_H, ix, iy + ICON_SIZE - 1, ICON_SIZE, 1, edge);
-        gfx_fill_rect(g_wall_pixels, g_W, g_H, ix, iy, 1, ICON_SIZE, edge);
-        gfx_fill_rect(g_wall_pixels, g_W, g_H, ix + ICON_SIZE - 1, iy, 1, ICON_SIZE, edge);
+        gfx_fill_rect(g_wall_pixels, g_W, g_H, ix, iy, ICON_SIZE, 1, edge); 
+        gfx_fill_rect(g_wall_pixels, g_W, g_H, ix, iy + ICON_SIZE - 1, ICON_SIZE, 1, edge); 
+        gfx_fill_rect(g_wall_pixels, g_W, g_H, ix, iy, 1, ICON_SIZE, edge); 
+        gfx_fill_rect(g_wall_pixels, g_W, g_H, ix + ICON_SIZE - 1, iy, 1, ICON_SIZE, edge); 
     }
 
     char label[64];
@@ -232,15 +253,10 @@ static void draw_file_icon(int idx) {
     label[n] = '\0';
 
     int ly = iy + ICON_SIZE + 4;
-    int lx = px + 2;
-    int lw = ICON_CELL_W - 4;
-    unsigned int lbg = selected ? 0x3A6EA5 : 0x1A1A2E;
-
-    gfx_fill_rect(g_wall_pixels, g_W, g_H, lx, ly, lw, 16, lbg);
-
     int tx = px + (ICON_CELL_W - tw) / 2;
     if (tx < px + 2) tx = px + 2;
-    gfx_draw_text(g_wall_pixels, g_W, tx, ly, label, 0xFFFFFF, lbg);
+    gfx_draw_text(g_wall_pixels, g_W, tx + 1, ly + 1, label, 0x000000, 0xFFFFFFFFu);
+    gfx_draw_text(g_wall_pixels, g_W, tx, ly, label, 0xFFFFFF, 0xFFFFFFFFu);
 }
 
 static void draw_all_files(void) {
@@ -420,7 +436,10 @@ static void fm_paint_topbar(struct fm_win *w) {
     mui_fill(s, 0, 0, w->cw, FM_TOP_BAR_H, 0x2A2A3E);
 
     /* 顶栏：输入框 > 状态消息 > 当前路径 */
-    if (w->input_mode != FM_INPUT_NONE) {
+    if (w->status[0]) {
+        mui_text(s, 4, (FM_TOP_BAR_H - MUI_FONT_H) / 2,
+                 w->status, 0xFFC040, 0x2A2A3E);
+    } else if (w->input_mode != FM_INPUT_NONE) {
         mui_text(s, 4, (FM_TOP_BAR_H - MUI_FONT_H) / 2,
                  w->input_prompt, 0xFFFFFF, 0x2A2A3E);
         int px = 4 + mui_text_width(w->input_prompt);
@@ -432,9 +451,6 @@ static void fm_paint_topbar(struct fm_win *w) {
             w->input_box.base.dirty = 1;
             mui_widget_paint(&w->input_box.base, s, px, 0);
         }
-    } else if (w->status[0]) {
-        mui_text(s, 4, (FM_TOP_BAR_H - MUI_FONT_H) / 2,
-                 w->status, 0xFFC040, 0x2A2A3E);
     } else {
         char bar[160];
         snprintf(bar, sizeof(bar), "%s", w->path);
@@ -562,7 +578,7 @@ static void exec_elf(const char *path) {
         spawn_term(600, 400, 200, 100);
         return;
     }
-
+    
     char *argv[] = { (char*)path, NULL };
     struct spawn_params sp = {
         .size = sizeof(sp),
@@ -577,6 +593,7 @@ static void exec_elf(const char *path) {
     };
     spawn(path, argv, &sp);
 }
+
 
 /* ============================================================
  *        文件窗口：路径辅助 / 文件操作 / 右键菜单 / 键盘
@@ -768,8 +785,8 @@ static int fm_menu_count(struct fm_win *w) {
 }
 
 static const char *fm_menu_label(struct fm_win *w, int i) {
-    static const char *bg_labels[FM_MENU_MAX_ITEMS]   = { "Refresh", "Paste", "New Dir", "New C Source", NULL };
-    static const char *item_labels[FM_MENU_MAX_ITEMS] = { "Copy", "Cut", "Delete", "Rename", "Compile" };
+    static const char *bg_labels[FM_MENU_MAX_ITEMS]   = { "\xE5\x88\xB7\xE6\x96\xB0", "\xE7\xB2\x98\xE8\xB4\xB4", "\xE6\x96\xB0\xE5\xBB\xBA\xE6\x96\x87\xE4\xBB\xB6\xE5\xA4\xB9", "\xE6\x96\xB0\xE5\xBB\xBA\x20\x43\x20\xE6\xBA\x90\xE6\x96\x87\xE4\xBB\xB6", NULL };
+    static const char *item_labels[FM_MENU_MAX_ITEMS] = { "\xE5\xA4\x8D\xE5\x88\xB6", "\xE5\x89\xAA\xE5\x88\x87", "\xE5\x88\xA0\xE9\x99\xA4", "\xE9\x87\x8D\xE5\x91\xBD\xE5\x90\x8D", "\xE7\xBC\x96\xE8\xAF\x91" };
     return (w->menu_target >= 0) ? item_labels[i] : bg_labels[i];
 }
 
@@ -1024,6 +1041,8 @@ static void fm_open_selected(struct fm_win *w, int new_window) {
         else            fm_navigate(w, path);
     } else if (is_c_source(w->list.items[idx].text)) {
         open_source_file(path);
+    } else if (is_image_file(w->list.items[idx].text)) {
+        open_photo_file(path);
     } else if (icon == MUI_LIST_ICON_EXEC) {
         exec_elf(path);
     } else {
@@ -1178,7 +1197,7 @@ static void fm_finish_drag(struct fm_win *w, int mx, int my) {
     fm_drop_to_dir(w, dest);
 }
 
-/* 编译单个 C 源文件（TCC -xc -o <out> <src>） */
+/* 执行右键菜单项 */
 static int compile_source_path(const char *src) {
     if (!src || !is_c_source(src)) return 0;
     char parent[256], stem[128], out[256];
@@ -1225,7 +1244,6 @@ static void desk_compile_file(int idx) {
     if (compile_source_path(src)) desktop_refresh_icons();
 }
 
-/* 执行右键菜单项 */
 static void fm_menu_action(struct fm_win *w, int item) {
     int target = w->menu_target;
 
@@ -1340,7 +1358,114 @@ static void fm_handle_esc_seq(struct fm_win *w, const char *seq, unsigned int mo
     }
 }
 
+
+/* ---------- Desktop-side pinyin IME for file-name fields ---------- */
+static int  g_ime_on, g_ime_len, g_ime_show;
+static char g_ime_buf[32];
+
+static struct mui_textbox *fm_ime_target(struct fm_win *w) {
+    if (!w) return NULL;
+    if (w->dialog.active) return &w->dialog.input;
+    if (w->input_mode != FM_INPUT_NONE) return &w->input_box;
+    return NULL;
+}
+
+static void ime_hint_build(char *out, int size) {
+    if (!out || size <= 0) return;
+    out[0] = '\0';
+    if (!g_ime_on || !g_ime_show) return;
+    if (!g_ime_len) {
+        snprintf(out, size, "IME: pinyin");
+        return;
+    }
+    int n = snprintf(out, size, "IME: %s", g_ime_buf);
+    const struct ime_word *word = ime_lookup_pinyin(g_ime_buf);
+    if (word) for (int i = 0; i < 3 && word->cand[i]; i++) {
+        if (n >= size - 1) break;
+        n += snprintf(out + n, size - n, " %d:%s", i + 1, word->cand[i]);
+    }
+}
+
+static int ime_handle_key(int key, unsigned int mods,
+                          struct mui_textbox *target) {
+    if (key == ' ' && (mods & WM_MOD_CTRL)) {
+        if (!target) return 0;
+        g_ime_on = !g_ime_on;
+        g_ime_len = 0;
+        g_ime_buf[0] = '\0';
+        g_ime_show = g_ime_on;
+        return 1;
+    }
+    if (!g_ime_on) return 0;
+    if (key >= 'A' && key <= 'Z') key = key - 'A' + 'a';
+    if (key >= 'a' && key <= 'z') {
+        if (g_ime_len < (int)sizeof(g_ime_buf) - 1) {
+            g_ime_buf[g_ime_len++] = (char)key;
+            g_ime_buf[g_ime_len] = '\0';
+        }
+        g_ime_show = 1;
+        return 1;
+    }
+    if (key == '\b' || key == 127) {
+        if (!g_ime_len) return 0;
+        g_ime_buf[--g_ime_len] = '\0';
+        g_ime_show = 1;
+        return 1;
+    }
+    if (key == ' ' || key == '\r' || key == '\n') {
+        if (!g_ime_len) return 0;
+        const struct ime_word *word = ime_lookup_pinyin(g_ime_buf);
+        if (word && word->cand[0]) {
+            mui_textbox_insert_utf8(target, word->cand[0]);
+            g_ime_len = 0;
+            g_ime_buf[0] = '\0';
+            g_ime_show = 0;
+        }
+        return 1;
+    }
+    if (key >= '1' && key <= '9') {
+        if (!g_ime_len) return 0;
+        const struct ime_word *word = ime_lookup_pinyin(g_ime_buf);
+        int pick = key - '1';
+        if (word && pick < 5 && word->cand[pick]) {
+            mui_textbox_insert_utf8(target, word->cand[pick]);
+            g_ime_len = 0;
+            g_ime_buf[0] = '\0';
+            g_ime_show = 0;
+        }
+        return 1;
+    }
+    if (key == 27) {
+        if (!g_ime_len && !g_ime_show) return 0;
+        g_ime_len = 0;
+        g_ime_buf[0] = '\0';
+        g_ime_show = 0;
+        return 1;
+    }
+    return 0;
+}
+
+static int desk_ime_key(struct fm_win *w, int key, unsigned int mods) {
+    struct mui_textbox *target = fm_ime_target(w);
+    if (!target) return 0;
+    if (!ime_handle_key(key, mods, target)) return 0;
+
+    char hint[96];
+    ime_hint_build(hint, sizeof(hint));
+    if (w->dialog.active) {
+        strncpy(w->dialog.error, hint, sizeof(w->dialog.error) - 1);
+        w->dialog.error[sizeof(w->dialog.error) - 1] = '\0';
+        fm_redraw(w);
+    } else {
+        strncpy(w->status, hint, sizeof(w->status) - 1);
+        w->status[sizeof(w->status) - 1] = '\0';
+        fm_redraw_topbar(w);
+    }
+    return 1;
+}
+
 static void fm_handle_key(struct fm_win *w, int key, unsigned int mods) {
+    if (desk_ime_key(w, key, mods)) return;
     /* Rename 对话框（mui_dialog）：键盘模态 */
     if (w->dialog.active) {
         mui_dialog_key(&w->dialog, key, g_tick);
@@ -1846,135 +1971,27 @@ static void handle_fm_event(struct fm_win *w, struct wm_event *ev) {
 }
 
 /* ============================================================
- *                   BMP 壁纸（部门 A 合并）
- * ============================================================ */
-
-#define BMP_MAX_DIM  4096
-
-struct bmp_file_hdr {
-    uint16_t magic;
-    uint32_t file_size;
-    uint16_t reserved1;
-    uint16_t reserved2;
-    uint32_t data_offset;
-} __attribute__((packed));
-
-struct bmp_dib_hdr {
-    uint32_t header_size;
-    int32_t  width;
-    int32_t  height;
-    uint16_t planes;
-    uint16_t bpp;
-    uint32_t compression;
-    uint32_t image_size;
-    int32_t  x_ppm;
-    int32_t  y_ppm;
-    uint32_t colors_used;
-    uint32_t colors_important;
-} __attribute__((packed));
-
-/* 解码 BMP，最近邻拉伸到 g_W × g_H，结果 malloc 到 *out。 */
-static int decode_bmp_to_fullscreen(const char *path,
-                                    unsigned int **out) {
-    *out = NULL;
-
-    int fd = fs_open(path, FS_O_RDONLY);
-    if (fd < 0) return -1;
-
-    struct bmp_file_hdr fh;
-    struct bmp_dib_hdr dh;
-    uint8_t *src = NULL;
-
-    if (fs_read(fd, &fh, sizeof(fh)) != sizeof(fh)) goto fail;
-    if (fh.magic != 0x4D42) goto fail;           /* 'BM' */
-    if (fs_read(fd, &dh, sizeof(dh)) != sizeof(dh)) goto fail;
-    if (dh.header_size < 40) goto fail;
-    if (dh.compression != 0) goto fail;          /* 只支持 BI_RGB */
-    if (dh.bpp != 24 && dh.bpp != 32) goto fail;
-
-    int src_w = dh.width;
-    int src_h = dh.height < 0 ? -dh.height : dh.height;
-    int bottom_up = dh.height > 0;
-    if (src_w <= 0 || src_h <= 0 ||
-        src_w > BMP_MAX_DIM || src_h > BMP_MAX_DIM) goto fail;
-
-    int src_stride = ((src_w * dh.bpp + 31) / 32) * 4;
-    size_t src_size = (size_t)src_stride * src_h;
-
-    src = (uint8_t*)malloc(src_size);
-    if (!src) goto fail;
-
-    if (fs_seek(fd, fh.data_offset) < 0) goto fail;
-    if (fs_read(fd, src, src_size) != (int)src_size) goto fail;
-
-    unsigned int *dst = (unsigned int*)malloc((size_t)g_W * g_H * 4);
-    if (!dst) goto fail;
-
-    int bpp_bytes = dh.bpp / 8;
-    for (int dy = 0; dy < g_H; dy++) {
-        int sy = dy * src_h / g_H;
-        if (bottom_up) sy = src_h - 1 - sy;
-        uint8_t *row = src + (size_t)sy * src_stride;
-        unsigned int *drow = dst + dy * g_W;
-
-        for (int dx = 0; dx < g_W; dx++) {
-            int sx = dx * src_w / g_W;
-            uint8_t *p = row + sx * bpp_bytes;
-            unsigned int b = p[0];
-            unsigned int g = p[1];
-            unsigned int r = p[2];
-            drow[dx] = (r << 16) | (g << 8) | b;
-        }
-    }
-
-    free(src);
-    fs_close(fd);
-    *out = dst;
-    return 0;
-
-fail:
-    if (src) free(src);
-    fs_close(fd);
-    return -1;
-}
-
-static void ensure_wall_bmp(void) {
-    if (g_wall_bmp_state != 0) return;
-
-    if (decode_bmp_to_fullscreen("SYS:/background.bmp",
-                                 &g_wall_bmp_cache) == 0) {
-        g_wall_bmp_state = 1;
-        dprintf(2, "desktop: wallpaper loaded from BMP\n");
-    } else {
-        g_wall_bmp_state = 2;
-        dprintf(2, "desktop: no BMP, using gradient\n");
-    }
-}
-
-/* 画壁纸到 g_wall_pixels。BMP 优先，失败回退渐变。 */
-static void draw_wallpaper_pixels(void) {
-    ensure_wall_bmp();
-
-    if (g_wall_bmp_state == 1 && g_wall_bmp_cache) {
-        memcpy(g_wall_pixels, g_wall_bmp_cache, (size_t)g_W * g_H * 4);
-        return;
-    }
-
-    /* 渐变回退 */
-    for (int y = 0; y < g_H; y++) {
-        unsigned int c = gfx_lerp(WALL_TOP, WALL_BOTTOM, y, g_H);
-        unsigned int *row = g_wall_pixels + y * g_W;
-        for (int x = 0; x < g_W; x++) row[x] = c;
-    }
-}
-
-/* ============================================================
  *                   系统组件
  * ============================================================ */
 
 static void draw_wallpaper(void) {
-    draw_wallpaper_pixels();   /* BMP 或渐变 */
-
+    if (g_wall_bmp.pixels && g_wall_bmp.w > 0 && g_wall_bmp.h > 0) {
+        for (int y = 0; y < g_H; y++) {
+            int sy = y * g_wall_bmp.h / g_H;
+            if (sy >= g_wall_bmp.h) sy = g_wall_bmp.h - 1;
+            for (int x = 0; x < g_W; x++) {
+                int sx = x * g_wall_bmp.w / g_W;
+                if (sx >= g_wall_bmp.w) sx = g_wall_bmp.w - 1;
+                g_wall_pixels[y * g_W + x] =
+                    g_wall_bmp.pixels[sy * g_wall_bmp.w + sx] & 0xFFFFFFu;
+            }
+        }
+    } else {
+        for (int y = 0; y < g_H; y++) {
+            unsigned int c = gfx_lerp(WALL_TOP, WALL_BOTTOM, y, g_H);
+            for (int x = 0; x < g_W; x++) g_wall_pixels[y * g_W + x] = c;
+        }
+    }
     draw_all_files();
 
     if (g_desk_dialog.active) {
@@ -2088,6 +2105,8 @@ static void wall_open_selected(void) {
         open_folder_window(path);
     } else if (is_c_source(g_files[idx].name)) {
         open_source_file(path);
+    } else if (is_image_file(g_files[idx].name)) {
+        open_photo_file(path);
     } else if (g_files[idx].is_exec) {
         exec_elf(path);
     }
@@ -2156,6 +2175,14 @@ static void handle_wall_event(struct wm_event *ev) {
 
         /* Rename 对话框：键盘模态，直接交给 MUI */
         if (g_desk_dialog.active) {
+            if (ime_handle_key(key, ev->extra, &g_desk_dialog.input)) {
+                char hint[96];
+                ime_hint_build(hint, sizeof(hint));
+                strncpy(g_desk_dialog.error, hint, sizeof(g_desk_dialog.error) - 1);
+                g_desk_dialog.error[sizeof(g_desk_dialog.error) - 1] = '\0';
+                desk_dialog_redraw();
+                return;
+            }
             mui_dialog_key(&g_desk_dialog, key, g_tick);
             if (!g_desk_dialog.active) {
                 if (g_desk_dialog.result > 0) desktop_refresh_icons();
@@ -2253,6 +2280,7 @@ static void handle_wall_event(struct wm_event *ev) {
         return;
     }
 
+    
     if (ev->type != WM_EV_MOUSE_DOWN || ev->code != 1) return;
     if (g_drag_active) drag_clear();
 
@@ -2294,6 +2322,8 @@ static void handle_wall_event(struct wm_event *ev) {
                 open_folder_window(path);
             } else if (is_c_source(g_files[hit].name)) {
                 open_source_file(path);
+            } else if (is_image_file(g_files[hit].name)) {
+                open_photo_file(path);
             } else if (g_files[hit].is_exec) {
                 exec_elf(path);
             }
@@ -2352,7 +2382,7 @@ static void draw_clock_region(void) {
 
 static void draw_panel(void) {
     gfx_fill_rect(g_panel_pixels, g_W, PANEL_H, 0, 0, g_W, PANEL_H, COL_PANEL);
-    gfx_draw_text(g_panel_pixels, g_W, 8, (PANEL_H - 16) / 2, "Start", COL_PANEL_FG, COL_PANEL);
+    gfx_draw_text(g_panel_pixels, g_W, 8, (PANEL_H - 16) / 2, "\xE5\xBC\x80\xE5\xA7\x8B", COL_PANEL_FG, COL_PANEL);
     draw_window_items();
     draw_clock_region();
     shm_mark_rect(g_panel_hdr, 0, 0, g_W, PANEL_H);
@@ -2374,15 +2404,15 @@ static void update_clock(void) {
 static int g_menu_state = MENU_STATE_MAIN;
 
 #define MAIN_MENU_ITEMS 3
-static const char *g_main_labels[MAIN_MENU_ITEMS] = { "Power Options", "Terminal", "About" };
+static const char *g_main_labels[MAIN_MENU_ITEMS] = { "\xE7\x94\xB5\xE6\xBA\x90\xE9\x80\x89\xE9\xA1\xB9", "\xE7\xBB\x88\xE7\xAB\xAF", "\xE5\x85\xB3\xE4\xBA\x8E" };
 #define POWER_MENU_ITEMS 2
-static const char *g_power_labels[POWER_MENU_ITEMS] = { "  Reset", "  Power Off" };
+static const char *g_power_labels[POWER_MENU_ITEMS] = { "\xE9\x87\x8D\xE5\x90\xAF", "\xE5\x85\xB3\xE6\x9C\xBA" };
 #define CONTEXT_MENU_ITEMS 4
 #define CONTEXT_ITEM_MAX_ITEMS 5
 static const char *g_context_labels[CONTEXT_MENU_ITEMS] =
-    { "Refresh", "Paste", "New Dir", "New C Source" };
+    { "\xE5\x88\xB7\xE6\x96\xB0", "\xE7\xB2\x98\xE8\xB4\xB4", "\xE6\x96\xB0\xE5\xBB\xBA\xE6\x96\x87\xE4\xBB\xB6\xE5\xA4\xB9", "\xE6\x96\xB0\xE5\xBB\xBA\x20\x43\x20\xE6\xBA\x90\xE6\x96\x87\xE4\xBB\xB6" };
 static const char *g_context_item_labels[CONTEXT_ITEM_MAX_ITEMS] =
-    { "Copy", "Cut", "Delete", "Rename", "Compile" };
+    { "\xE5\xA4\x8D\xE5\x88\xB6", "\xE5\x89\xAA\xE5\x88\x87", "\xE5\x88\xA0\xE9\x99\xA4", "\xE9\x87\x8D\xE5\x91\xBD\xE5\x90\x8D", "\xE7\xBC\x96\xE8\xAF\x91" };
 
 static int g_context_file = -1;
 
@@ -2395,7 +2425,7 @@ static int context_item_count(void) {
 }
 #define CONTEXT_MULTI_ITEMS 3
 static const char *g_context_multi_labels[CONTEXT_MULTI_ITEMS] =
-    { "Copy", "Cut", "Delete" };
+    { "\xE5\xA4\x8D\xE5\x88\xB6", "\xE5\x89\xAA\xE5\x88\x87", "\xE5\x88\xA0\xE9\x99\xA4" };
 
 static void draw_menu(int hover) {
     gfx_fill_rect(g_menu_pixels, g_menu_w, g_menu_h, 0, 0, g_menu_w, g_menu_h, COL_MENU_BG);
@@ -2488,7 +2518,35 @@ static void spawn_term(int cw, int ch, int x, int y) {
     spawn_term_argv(cw, ch, x, y, NULL, "Terminal");
 }
 
+/* 「开始 → 关于」：拉起独立的 ABOUT 程序弹出对话框 */
+static void spawn_about(void) {
+    char *argv[] = { "ABOUT", NULL };
+    struct spawn_params sp = {
+        .size = sizeof(sp),
+        .in_fd = SPAWN_FD_INHERIT,
+        .out_fd = SPAWN_FD_INHERIT,
+        .err_fd = SPAWN_FD_INHERIT,
+        .in_pipe = -1, .out_pipe = -1, .err_pipe = -1,
+        .in_pty = -1, .out_pty = -1, .err_pty = -1,
+        .flags = 0, .envp = 0, .out_pid = 0,
+        .child_class = CLASS_USER, .child_caps = 0,
+    };
+    spawn("ABOUT", argv, &sp);
+}
+
 /* 用 kilo 打开 C 源文件：开一个终端窗口，里面直接跑 KILO <path> */
+static void open_photo_file(const char *path) {
+    if (!path || !path[0]) return;
+    char *argv[] = { "PHOTOS", (char*)path, NULL };
+    struct spawn_params sp = {
+        .size = sizeof(sp), .in_fd = SPAWN_FD_INHERIT, .out_fd = SPAWN_FD_INHERIT,
+        .err_fd = SPAWN_FD_INHERIT, .in_pipe = -1, .out_pipe = -1, .err_pipe = -1,
+        .in_pty = -1, .out_pty = -1, .err_pty = -1, .flags = 0, .envp = 0,
+        .out_pid = 0, .child_class = CLASS_USER, .child_caps = 0,
+    };
+    spawn("PHOTOS", argv, &sp);
+}
+
 static void open_source_file(const char *path) {
     if (!path || !path[0]) return;
 
@@ -2539,7 +2597,7 @@ static void desktop_paste(void) {
     desktop_refresh_icons();
 }
 
-/* 桌面右键新建：打开根目录 Files 窗口并进入输入状态 */
+/* 桌面右键新建：打开根目录 Files 窗口并进入输入状态（Rename 已改走 MUI 对话框） */
 static void desktop_open_fm_input(int mode) {
     struct fm_win *w = open_folder_window(ROOT_PATH);
     if (!w) return;
@@ -2584,7 +2642,7 @@ static void open_context_menu(int x, int y) {
     g_menu_visible = 1;
 }
 
-/* 桌面图标右键菜单：Copy / Cut / Delete / Rename / Compile */
+/* 桌面图标右键菜单：Copy / Cut / Delete / Rename */
 static void open_context_item_menu(int file_idx, int x, int y) {
     if (g_menu_visible) return;
 
@@ -2661,7 +2719,7 @@ static void handle_menu_event(struct wm_event *ev) {
                 } else if (item == 2) {
                     desktop_open_fm_input(FM_INPUT_NEWDIR);
                 } else if (item == 3) {
-                                        desktop_open_fm_input(FM_INPUT_NEWFILE);
+                    desktop_open_fm_input(FM_INPUT_NEWFILE);
                 }
             } else if (g_menu_state == MENU_STATE_CONTEXT_MULTI) {
                 if (item == 0)      desk_copy_selection(0);
@@ -2678,12 +2736,13 @@ static void handle_menu_event(struct wm_event *ev) {
                     mui_dialog_open_rename(&g_desk_dialog, ROOT_PATH,
                                            g_files[idx].name);
                     draw_wallpaper();
-                } else if (item == 4) {                /* Compile（仅 C 源文件） */
+                } else if (item == 4) {
                     desk_compile_file(idx);
                 }
             } else if (g_menu_state == MENU_STATE_MAIN) {
                 if (item == 0) { g_menu_state = MENU_STATE_POWER; draw_menu(-1); return; }
                 else if (item == 1) spawn_term(600, 400, 200, 100);
+                else if (item == 2) spawn_about();
             } else {
                 if (item == 0) sys_reboot();
                 else if (item == 1) sys_halt();
@@ -2746,6 +2805,7 @@ int main(int argc, char **argv) {
     calc_desk_cols();
 
     icons_load();
+    mui_bmp_load(&g_wall_bmp, "SYS:\\background.bmp");
 
     strcpy(g_wall_shm, "wall-shm");
     char ev_wall[24]; strcpy(ev_wall, "wall-ev");

@@ -1,6 +1,6 @@
-/* term — 终端模拟器（支持完整 unifont.hex + TTF 回退 + 输入法）
+/* term — 终端模拟器（支持完整 unifont.hex）
  *
- * 用法: TERM <shm_name> <client_w> <client_h> <event_pipe> [prog [args...]]
+ * 用法: TERM <shm_name> <client_w> <client_h> <event_pipe>
  */
 #include "syscall.h"
 #include "stdio.h"
@@ -11,7 +11,7 @@
 #include "methylui/mui_surface.h"
 #include "methylui/mui_widget.h"
 #include "methylui/mui_scroll.h"
-#include "ttf.h"
+#include "ime_dict.h"
 #include <stdint.h>
 
 static int g_master = -1;
@@ -23,17 +23,10 @@ static int g_master = -1;
 
 /* ---------- 字体 ---------- */
 
-static unsigned char **g_glyph_ptr   = NULL;
+static unsigned char **g_glyph_ptr  = NULL;
 static unsigned char  *g_glyph_width = NULL;
 static unsigned char  *g_glyph_data  = NULL;
 static unsigned int    g_glyph_data_used = 0;
-
-#define TTF_CACHE_SIZE (128 * 1024)
-static unsigned char *g_ttf_cache = NULL;
-static unsigned char *g_ttf_state = NULL;   /* 0 unknown, 1 miss, 2 rendered */
-static uint16_t      *g_ttf_off = NULL;
-static unsigned int   g_ttf_cache_used = 0;
-static int            g_ttf_ok = 0;
 
 static int hexval(char c) {
     if (c >= '0' && c <= '9') return c - '0';
@@ -106,9 +99,9 @@ static int load_unifont(void) {
 }
 
 static void load_font(void) {
-    g_glyph_ptr   = (unsigned char**)malloc(MAX_CP * sizeof(unsigned char*));
+    g_glyph_ptr = (unsigned char**)malloc(MAX_CP * sizeof(unsigned char*));
     g_glyph_width = (unsigned char*)malloc(MAX_CP);
-    g_glyph_data  = (unsigned char*)malloc(GLYPH_DATA_MAX);
+    g_glyph_data = (unsigned char*)malloc(GLYPH_DATA_MAX);
     if (!g_glyph_ptr || !g_glyph_width || !g_glyph_data) {
         dprintf(2, "term: font alloc failed\n");
         return;
@@ -117,43 +110,9 @@ static void load_font(void) {
     memset(g_glyph_width, 0, MAX_CP);
     g_glyph_data_used = 0;
 
-    // if (ttf_load("SYS:/CONSOLA.TTF", FONT_H) == 0) {
-    //     g_ttf_cache = (unsigned char*)malloc(TTF_CACHE_SIZE);
-    //     g_ttf_state = (unsigned char*)malloc(MAX_CP);
-    //     g_ttf_off   = (uint16_t*)malloc(MAX_CP * sizeof(uint16_t));
-    //     if (g_ttf_cache && g_ttf_state && g_ttf_off) {
-    //         memset(g_ttf_state, 0, MAX_CP);
-    //         g_ttf_cache_used = 0;
-    //         g_ttf_ok = 1;
-    //     }
-    // }
-
-    int fallback = load_unifont();
-    dprintf(2, "term: TTF=%s unifont=%d\n", g_ttf_ok ? "yes" : "no", fallback);
+    int loaded = load_unifont();
+    dprintf(2, "term: unifont=%d\n", loaded);
 }
-
-/* Rasterise a codepoint on first use and cache its 8x16 1-bit mask.
- * TTF glyphs only provide coverage; ANSI fg/bg colours still come from
- * the terminal state and are applied by draw_char_at(). */
-static unsigned char *ttf_glyph(uint32_t cp) {
-    if (!g_ttf_ok || cp >= MAX_CP) return NULL;
-    if (g_ttf_state[cp] == 0) {
-        unsigned int used = g_ttf_cache_used;
-        if (used + FONT_H <= TTF_CACHE_SIZE) {
-            unsigned char *dst = g_ttf_cache + used;
-            if (ttf_render_glyph(cp, dst, CELL_W, FONT_H) > 0) {
-                g_ttf_off[cp] = (uint16_t)used;
-                g_ttf_cache_used += FONT_H;
-                g_ttf_state[cp] = 2;
-                return dst;
-            }
-        }
-        g_ttf_state[cp] = 1;
-    }
-    return g_ttf_state[cp] == 2 ? g_ttf_cache + g_ttf_off[cp] : NULL;
-}
-
-/* ---------- 渲染 ---------- */
 
 #define COL_BG 0x000000
 #define COL_FG 0xCCCCCC
@@ -242,12 +201,12 @@ static void fill_rect(int x, int y, int w, int h, unsigned int rgb) {
     mark_dirty(x, y, x + w, y + h);
 }
 
+
 static void draw_char_at(int px, int py, uint32_t cp,
                          uint32_t fg, uint32_t bg) {
     int width = CELL_W;
-    unsigned char *g = ttf_glyph(cp);
-
-    if (!g && g_glyph_ptr && g_glyph_width && cp < MAX_CP) {
+    unsigned char *g = NULL;
+    if (g_glyph_ptr && g_glyph_width && cp < MAX_CP) {
         g = g_glyph_ptr[cp];
         if (g && g_glyph_width[cp]) width = g_glyph_width[cp];
     }
@@ -364,7 +323,7 @@ static void render_cp(uint32_t cp) {
         g_pending_wrap = 0;
     }
 
-    int width = CELL_W;
+    int width = 8;
     uint32_t to_draw = cp;
     if (g_glyph_ptr && g_glyph_width) {
         if (cp < MAX_CP && g_glyph_width[cp] != 0) {
@@ -867,32 +826,14 @@ static int term_resize(int new_w, int new_h) {
     return 0;
 }
 
+/* ---------- main ---------- */
+
+
 /* ---------- Simple pinyin IME ---------- */
 #define IME_BAR_W 480
 #define IME_BUF_MAX 32
 
-struct ime_word { const char *py; const char *cand[5]; };
-static const struct ime_word g_ime_words[] = {
-    { "ni",       { "\xE4\xBD\xA0", "\xE5\xB0\xBC", "\xE6\xB3\xA5", NULL, NULL } },
-    { "hao",      { "\xE5\xA5\xBD", "\xE5\x8F\xB7", "\xE6\xAF\xAB", NULL, NULL } },
-    { "wo",       { "\xE6\x88\x91", NULL, NULL, NULL, NULL } },
-    { "shi",      { "\xE6\x98\xAF", "\xE4\xBA\x8B", "\xE6\x97\xB6", "\xE5\xB8\x82", "\xE8\xAF\x95" } },
-    { "de",       { "\xE7\x9A\x84", "\xE5\xBE\x97", "\xE5\x9C\xB0", NULL, NULL } },
-    { "zhong",    { "\xE4\xB8\xAD", "\xE7\xA7\x8D", "\xE9\x87\x8D", NULL, NULL } },
-    { "guo",      { "\xE5\x9B\xBD", "\xE8\xBF\x87", "\xE6\x9E\x9C", NULL, NULL } },
-    { "ren",      { "\xE4\xBA\xBA", "\xE8\xAE\xA4", "\xE4\xBB\x81", NULL, NULL } },
-    { "min",      { "\xE6\xB0\x91", NULL, NULL, NULL, NULL } },
-    { "wen",      { "\xE6\x96\x87", "\xE9\x97\xAE", "\xE9\x97\xBB", NULL, NULL } },
-    { "zi",       { "\xE5\xAD\x97", "\xE8\x87\xAA", "\xE5\xAD\x90", NULL, NULL } },
-    { "shu",      { "\xE8\xBE\x93", "\xE4\xB9\xA6", "\xE6\x95\xB0", NULL, NULL } },
-    { "ru",       { "\xE5\x85\xA5", NULL, NULL, NULL, NULL } },
-    { "fa",       { "\xE6\xB3\x95", "\xE5\x8F\x91", "\xE7\xBD\x9A", NULL, NULL } },
-    { "ce",       { "\xE6\xB5\x8B", "\xE7\xAD\x96", NULL, NULL, NULL } },
-    { "nihao",    { "\xE4\xBD\xA0\xE5\xA5\xBD", NULL, NULL, NULL, NULL } },
-    { "zhongwen", { "\xE4\xB8\xAD\xE6\x96\x87", NULL, NULL, NULL, NULL } },
-    { "shuru",    { "\xE8\xBE\x93\xE5\x85\xA5", NULL, NULL, NULL, NULL } },
-    { "ceshi",    { "\xE6\xB5\x8B\xE8\xAF\x95", NULL, NULL, NULL, NULL } },
-};
+
 static int g_ime_on, g_ime_visible;
 static char g_ime_buf[IME_BUF_MAX];
 static int g_ime_len;
@@ -900,12 +841,9 @@ static uint32_t g_ime_save[IME_BAR_W * FONT_H];
 static int g_ime_saved_w;
 
 static const struct ime_word *ime_lookup(void) {
-    for (unsigned i = 0; i < sizeof(g_ime_words)/sizeof(g_ime_words[0]); i++)
-        if (strcmp(g_ime_words[i].py, g_ime_buf) == 0) return &g_ime_words[i];
-    return NULL;
+    return ime_lookup_pinyin(g_ime_buf);
 }
 static int ime_cp_width(uint32_t cp) {
-    if (ttf_glyph(cp)) return CELL_W;
     if (g_glyph_ptr && cp < MAX_CP && g_glyph_width[cp]) return g_glyph_width[cp];
     return CELL_W;
 }
@@ -998,8 +936,6 @@ static int ime_key(int key, unsigned int mods) {
     return 0;
 }
 
-/* ---------- main ---------- */
-
 int main(int argc, char **argv) {
     if (argc < 5) {
         dprintf(2, "usage: TERM <shm_name> <w> <h> <event_pipe> [prog [args...]]\n");
@@ -1076,15 +1012,6 @@ int main(int argc, char **argv) {
      * 此时若还是 0x0 会退化成 DSR 查询（终端不响应）而启动失败。 */
     pty_set_winsize(g_master, g_cols, g_rows);
 
-    /* shell 进程的环境变量。整条链上（kmain → desktop → TERM → SHELL）
-     * 目前都没传 envp，所以 TERM 这里给 shell 一份最低限度的环境。 */
-    static char *shell_envp[] = {
-        "PATH=SYS:/",
-        "HOME=SYS:/",
-        "TERM=helium",
-        NULL,
-    };
-
     struct spawn_params sp = {
         .size = sizeof(sp),
         .in_fd = SPAWN_FD_INHERIT,
@@ -1092,7 +1019,7 @@ int main(int argc, char **argv) {
         .err_fd = SPAWN_FD_INHERIT,
         .in_pipe = -1, .out_pipe = -1, .err_pipe = -1,
         .in_pty = slave, .out_pty = slave, .err_pty = slave,
-        .flags = 0, .envp = (uint32_t)shell_envp, .out_pid = 0,
+        .flags = 0, .envp = 0, .out_pid = 0,
     };
     /* 默认在 pty 上起交互 shell；若带第 6 个及以后的参数，
      * 则直接运行该命令 —— 桌面用 "TERM ... KILO SYS:\kmain.c"
@@ -1111,9 +1038,6 @@ int main(int argc, char **argv) {
     dprintf(2, "term: cols=%d rows=%d ch=%d\n", g_cols, g_rows, g_ch);
     if (sh < 0) { dprintf(2, "term: spawn %s %d\n", argc >= 6 ? argv[5] : "SHELL", sh); return 1; }
     pty_set_fg(g_master, sp.out_pid);
-
-    /* 关闭我们持有的 slave 副本，让子进程退出后 master 能读到 EOF。 */
-    pty_close(slave);
 
     for (;;) {
         while (pipe_avail(ev_rd) >= (int)sizeof(struct wm_event)) {
@@ -1190,47 +1114,7 @@ int main(int argc, char **argv) {
             /* 鼠标 / 焦点事件忽略 */
         }
 
-        int av = pty_avail(g_master);
-        if (av < 0) {
-            /* 子进程已退出，pty slave 端所有 handle 关闭 → EOF。
-             * 先把缓冲区里剩余的输出读完，再发布，再销毁窗口退出。 */
-            while ((av = pty_avail(g_master)) > 0) {
-                char buf[256];
-                int n = pty_read(g_master, buf, sizeof(buf));
-                if (n <= 0) break;
-                for (int i = 0; i < n; i++)
-                    process_byte((unsigned char)buf[i]);
-            }
-
-            ime_restore();
-            cursor_restore();
-            if (!g_scrolled) cursor_draw();
-
-            /* 发布最后一帧（如果有未发布脏区） */
-            if (g_shm &&
-                (g_shm->pub_x0 == SHM_DIRTY_EMPTY ||
-                 g_shm->pub_x1 <= g_shm->pub_x0) &&
-                g_shm->cur_x0 != SHM_DIRTY_EMPTY &&
-                g_shm->cur_x1 > g_shm->cur_x0) {
-                g_shm->pub_x0 = g_shm->cur_x0;
-                g_shm->pub_y0 = g_shm->cur_y0;
-                g_shm->pub_x1 = g_shm->cur_x1;
-                g_shm->pub_y1 = g_shm->cur_y1;
-                g_shm->counter++;
-            }
-
-            /* 通知 WM 销毁窗口 */
-            struct wm_destroy_request dr;
-            dr.magic = WM_MAGIC;
-            dr.type = WM_REQ_DESTROY;
-            dr.owner_pid = getpid();
-            strncpy(dr.shm_name, g_my_shm_name, sizeof(dr.shm_name) - 1);
-            pipe_write(g_inbox_w, &dr, sizeof(dr));
-
-            return 0;
-        }
-
-        if (av > 0) {
+        if (pty_avail(g_master) > 0) {
             ime_restore();
             cursor_restore();
 

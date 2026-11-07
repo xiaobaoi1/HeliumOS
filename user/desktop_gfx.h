@@ -35,7 +35,8 @@ static void gfx_draw_text(unsigned int *pixels, int pw, int px, int py,
                 int bit;
                 if (gw == 16) bit = g ? (g[r * 2 + (j >> 3)] & (0x80 >> (j & 7))) : 0;
                 else          bit = g ? (g[r] & (0x80 >> j)) : 0;
-                pixels[y * pw + x] = bit ? fg : bg;
+                if (bit) pixels[y * pw + x] = fg;
+                else if (bg != 0xFFFFFFFFu) pixels[y * pw + x] = bg;
             }
         }
         px += gw;
