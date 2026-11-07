@@ -2456,8 +2456,8 @@ static void update_clock(void) {
 #define MENU_STATE_CONTEXT_MULTI 4
 static int g_menu_state = MENU_STATE_MAIN;
 
-#define MAIN_MENU_ITEMS 3
-static const char *g_main_labels[MAIN_MENU_ITEMS] = { "\xE7\x94\xB5\xE6\xBA\x90\xE9\x80\x89\xE9\xA1\xB9", "\xE7\xBB\x88\xE7\xAB\xAF", "\xE5\x85\xB3\xE4\xBA\x8E" };
+#define MAIN_MENU_ITEMS 4
+static const char *g_main_labels[MAIN_MENU_ITEMS] = { "\xE7\x94\xB5\xE6\xBA\x90\xE9\x80\x89\xE9\xA1\xB9", "\xE7\xBB\x88\xE7\xAB\xAF", "\xE6\xB5\x8F\xE8\xA7\x88\xE5\x99\xA8", "\xE5\x85\xB3\xE4\xBA\x8E" };
 #define POWER_MENU_ITEMS 2
 static const char *g_power_labels[POWER_MENU_ITEMS] = { "\xE9\x87\x8D\xE5\x90\xAF", "\xE5\x85\xB3\xE6\x9C\xBA" };
 #define CONTEXT_MENU_ITEMS 4
@@ -2565,6 +2565,19 @@ static void spawn_term_argv(int cw, int ch, int x, int y,
 
 static void spawn_term(int cw, int ch, int x, int y) {
     spawn_term_argv(cw, ch, x, y, NULL, "Terminal");
+}
+
+static void spawn_netsurf(void) {
+    char *argv[] = { "NETSURF", NULL };
+    struct spawn_params sp = {
+        .size = sizeof(sp), .in_fd = SPAWN_FD_INHERIT,
+        .out_fd = SPAWN_FD_INHERIT, .err_fd = SPAWN_FD_INHERIT,
+        .in_pipe = -1, .out_pipe = -1, .err_pipe = -1,
+        .in_pty = -1, .out_pty = -1, .err_pty = -1,
+        .flags = 0, .envp = 0, .out_pid = 0,
+        .child_class = CLASS_USER, .child_caps = 0,
+    };
+    spawn("NETSURF", argv, &sp);
 }
 
 static void spawn_about(void) {
@@ -2782,7 +2795,8 @@ static void handle_menu_event(struct wm_event *ev) {
             } else if (g_menu_state == MENU_STATE_MAIN) {
                 if (item == 0) { g_menu_state = MENU_STATE_POWER; draw_menu(-1); return; }
                 else if (item == 1) spawn_term(600, 400, 200, 100);
-                else if (item == 2) spawn_about();
+                else if (item == 2) spawn_netsurf();
+                else if (item == 3) spawn_about();
             } else {
                 if (item == 0) sys_reboot();
                 else if (item == 1) sys_halt();

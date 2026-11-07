@@ -12,6 +12,7 @@
 #include "methylui/mui_widget.h"
 #include "methylui/mui_scroll.h"
 #include "ime_dict.h"
+#include "unicode_font.h"
 #include <stdint.h>
 
 static int g_master = -1;
@@ -99,19 +100,8 @@ static int load_unifont(void) {
 }
 
 static void load_font(void) {
-    g_glyph_ptr   = (unsigned char**)malloc(MAX_CP * sizeof(unsigned char*));
-    g_glyph_width = (unsigned char*)malloc(MAX_CP);
-    g_glyph_data  = (unsigned char*)malloc(GLYPH_DATA_MAX);
-    if (!g_glyph_ptr || !g_glyph_width || !g_glyph_data) {
-        dprintf(2, "term: font alloc failed\n");
-        return;
-    }
-    memset(g_glyph_ptr, 0, MAX_CP * sizeof(unsigned char*));
-    memset(g_glyph_width, 0, MAX_CP);
-    g_glyph_data_used = 0;
-
-    int loaded = load_unifont();
-    dprintf(2, "term: unifont=%d\n", loaded);
+    int loaded = ufont_load();
+    dprintf(2, "term: unifont=%d\n", loaded == 0 ? 57086 : 0);
 }
 
 /* ---------- 渲染 ---------- */
@@ -203,12 +193,9 @@ static void fill_rect(int x, int y, int w, int h, unsigned int rgb) {
 
 static void draw_char_at(int px, int py, uint32_t cp,
                          uint32_t fg, uint32_t bg) {
-    int width = CELL_W;
-    unsigned char *g = NULL;
-    if (g_glyph_ptr && g_glyph_width && cp < MAX_CP) {
-        g = g_glyph_ptr[cp];
-        if (g && g_glyph_width[cp]) width = g_glyph_width[cp];
-    }
+    int width = ufont_width(cp);
+    const unsigned char *g = ufont_glyph(cp);
+    if (!width) width = CELL_W;
 
     fill_rect(px, py, width, FONT_H, bg);
 
@@ -313,15 +300,14 @@ static void render_cp(uint32_t cp) {
         g_pending_wrap = 0;
     }
 
-    int width = CELL_W;
+    int width = ufont_width(cp);
     uint32_t to_draw = cp;
-    if (g_glyph_ptr && g_glyph_width) {
-        if (cp < MAX_CP && g_glyph_width[cp] != 0) {
-            width = g_glyph_width[cp];
-        } else if (cp != ' ') {
+    if (!width) {
+        if (cp != ' ') {
             to_draw = '?';
-            if (g_glyph_width['?'] != 0) width = g_glyph_width['?'];
+            width = ufont_width('?');
         }
+        if (!width) width = CELL_W;
     }
 
     int cells = (width + CELL_W - 1) / CELL_W;
@@ -832,8 +818,8 @@ static const struct ime_word *ime_lookup(void) {
 }
 
 static int ime_cp_width(uint32_t cp) {
-    if (g_glyph_ptr && cp < MAX_CP && g_glyph_width[cp]) return g_glyph_width[cp];
-    return CELL_W;
+    int w = ufont_width(cp);
+    return w ? w : CELL_W;
 }
 
 static void ime_draw_text(const char *text, int x, int y, uint32_t fg, uint32_t bg) {
