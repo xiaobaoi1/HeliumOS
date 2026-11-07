@@ -34,8 +34,8 @@
 #define WM_EV_CLOSE         11  /* WM 主动销毁时通知（POPUP） */
 #define WM_EV_WINDOW_LIST   12  /* 后接 n 个 wm_window_entry */
 #define WM_EV_WHEEL         13  /* code = 滚轮增量，x/y 客户区坐标 */
-#define WM_EV_DROP          14
-#define WM_EV_NEW_TAB       15  /* 拖放释放到本窗口：x/y 客户区坐标 */
+#define WM_EV_DROP          14  /* 拖放释放到本窗口：x/y 客户区坐标 */
+#define WM_EV_NEW_TAB       15  /* 新建标签页请求 */
 
 #define WM_BTN_LEFT         1
 #define WM_BTN_RIGHT        2

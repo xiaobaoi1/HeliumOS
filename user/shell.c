@@ -28,9 +28,88 @@ static int read_line(char *buf, int max) {
                 // putchar('\n');
                 break;
             }
-            if (c == '\b' && i > 0) {
-                i--;
-                // printf("\b \b");
+            if (sl >= 2 && (seq[0] == '[' || seq[0] == 'O')) {
+                char final = seq[sl - 1];
+
+                if (final == 'A') {              /* 上：历史 */
+                    if (g_hist_count == 0) continue;
+                    if (hist_pos == -1) {
+                        strncpy(saved, buf, CMD_MAX - 1);
+                        saved[CMD_MAX - 1] = '\0';
+                        have_saved = 1;
+                        hist_pos = g_hist_count - 1;
+                    } else if (hist_pos > 0) {
+                        hist_pos--;
+                    } else {
+                        continue;
+                    }
+                    strncpy(buf, g_history[hist_pos], CMD_MAX - 1);
+                    buf[CMD_MAX - 1] = '\0';
+                    len = strlen(buf);
+                    cursor = len;
+                    line_redraw(buf, len, cursor);
+                } else if (final == 'B') {       /* 下：历史 */
+                    if (hist_pos == -1) continue;
+                    hist_pos++;
+                    if (hist_pos >= g_hist_count) {
+                        hist_pos = -1;
+                        if (have_saved) {
+                            strncpy(buf, saved, CMD_MAX - 1);
+                            buf[CMD_MAX - 1] = '\0';
+                        } else {
+                            buf[0] = '\0';
+                        }
+                    } else {
+                        strncpy(buf, g_history[hist_pos], CMD_MAX - 1);
+                        buf[CMD_MAX - 1] = '\0';
+                    }
+                    len = strlen(buf);
+                    cursor = len;
+                    line_redraw(buf, len, cursor);
+                } else if (final == 'C') {       /* 右 */
+                    if (cursor < len) { cursor++; write(1, "\x1b[C", 3); }
+                } else if (final == 'D') {       /* 左 */
+                    if (cursor > 0) { cursor--; write(1, "\x1b[D", 3); }
+                } else if (final == 'H') {       /* Home */
+                    while (cursor > 0) { cursor--; write(1, "\x1b[D", 3); }
+                } else if (final == 'F') {       /* End */
+                    while (cursor < len) { cursor++; write(1, "\x1b[C", 3); }
+                } else if (final == '~' && sl >= 3 && seq[1] == '5') {
+                    /* PageUp：跳到历史最老一条 */
+                    if (g_hist_count == 0) continue;
+                    if (hist_pos == -1) {
+                        strncpy(saved, buf, CMD_MAX - 1);
+                        saved[CMD_MAX - 1] = '\0';
+                        have_saved = 1;
+                    }
+                    hist_pos = 0;
+                    strncpy(buf, g_history[hist_pos], CMD_MAX - 1);
+                    buf[CMD_MAX - 1] = '\0';
+                    len = strlen(buf);
+                    cursor = len;
+                    line_redraw(buf, len, cursor);
+                } else if (final == '~' && sl >= 3 && seq[1] == '6') {
+                    /* PageDown：跳到最新一条或恢复草稿 */
+                    if (hist_pos == -1) continue;
+                    hist_pos = -1;
+                    if (have_saved) {
+                        strncpy(buf, saved, CMD_MAX - 1);
+                        buf[CMD_MAX - 1] = '\0';
+                    } else {
+                        buf[0] = '\0';
+                    }
+                    len = strlen(buf);
+                    cursor = len;
+                    line_redraw(buf, len, cursor);
+                } else if (sl >= 3 && seq[1] == '3' && seq[2] == '~') {
+                    /* Delete */
+                    if (cursor < len) {
+                        for (int i = cursor; i < len - 1; i++) buf[i] = buf[i + 1];
+                        len--;
+                        buf[len] = '\0';
+                        line_redraw(buf, len, cursor);
+                    }
+                }
                 continue;
             }
             if (c != '\b' && i < max - 1) {
@@ -217,8 +296,10 @@ static void cmd_pwd(void) {
     }
 }
 
+/* 清屏 + 光标归位。term.c 支持 ANSI CSI 序列（\x1b[J 等），这里用 2J 清整屏，
+ * H 不带参数即回到 (1,1)。 */
 static void cmd_clear(void) {
-    // tty_clear();
+    write(1, "\x1b[2J\x1b[H", 7);
 }
 
 static void cmd_touch(int argc, char **argv) {
@@ -609,7 +690,7 @@ static void cmd_date(void) {
     }
     /* 2026-05-15 14:30:00 Sun */
     static const char *wd[7] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
-    const char *w = (t.weekday < 7) ? wd[t.weekday] : "???";
+    const char *w = (t.weekday < 7) ? wd[t.weekday] : "???"; 
     printf("%d-%d-%d %d:%d:%d %s\n",
            t.year, t.month, t.day, t.hour, t.minute, t.second, w);
 }
@@ -637,6 +718,7 @@ static void cmd_reboot(void) {
         set_color(VGA_LIGHT_GRAY, VGA_BLACK);
     }
 }
+
 static void cmd_ps(void) {
     unsigned int pids[32];
     int n = proc_list(pids, 32);
