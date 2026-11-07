@@ -92,6 +92,10 @@ OBJS = $(BUILD_DIR)/start.o \
 	   $(BUILD_DIR)/input.o \
 	   $(BUILD_DIR)/pty.o \
 	   $(BUILD_DIR)/file_map.o \
+	   $(BUILD_DIR)/ata_ahci.o \
+	   $(BUILD_DIR)/ata_bmide.o \
+	   $(BUILD_DIR)/ahci.o \
+
 
 	   
 
@@ -127,6 +131,10 @@ METHYLUI_OBJS = $(BUILD_DIR)/unicode_font.o \
                 $(BUILD_DIR)/methylui/mui_dialog.o
 
 
+SEVENZ_NAMES := 7zAlloc 7zArcIn 7zBuf 7zBuf2 7zCrc 7zCrcOpt 7zDec 7zFile 7zStream \
+                Bcj2 Bra Bra86 BraIA64 CpuArch Delta Lzma2Dec LzmaDec Ppmd7 Ppmd7Dec
+SEVENZ_OBJS := $(addprefix $(BUILD_DIR)/7zip/,$(addsuffix .o,$(SEVENZ_NAMES)))
+
 USER_APPS = shell idle test testkill sleeper argtest test_write \
             test_fault test_env count methylate cat echo head tail wc \
             test_mmap test_stack ping test_dns nc tcpserver \
@@ -134,7 +142,7 @@ USER_APPS = shell idle test testkill sleeper argtest test_write \
 			test_createwin test_ansi\
 			dhcpclient desktop test_raw kilo test_malloc_loop \
 			grep find hexdump test_mui_draw test_mui_button test_mui_form \
-			test_dl test_libc test_malloc_big http about photos calc netsurf
+			test_dl test_libc test_malloc_big http about photos calc netsurf 7z
 
 # 需要 POSIX 兼容层的应用
 PHOTO_PY ?= /mnt/d/Local/Python314/python.exe
@@ -294,9 +302,12 @@ run: $(ISO)
 
 # 运行硬盘镜像（测试文件系统时使用）
 run-disk: $(DISK_IMG)
-	$(QEMU) -drive file=$(DISK_IMG),format=raw -serial stdio -m 1024 \
+	$(QEMU) -drive if=none,id=disk0,file=$(DISK_IMG),format=raw \
+	        -device ide-hd,drive=disk0,bus=ide.0 \
+	        -serial stdio -m 1024 \
 	        -netdev user,id=n0 -device rtl8139,netdev=n0 \
-	        -audiodev none,id=snd -device AC97,audiodev=snd
+	        -audiodev none,id=snd -device AC97,audiodev=snd \
+	        -machine q35
 
 run-tcp: $(DISK_IMG)
 	$(QEMU) -drive file=$(DISK_IMG),format=raw -serial stdio -m 1024 \
@@ -384,6 +395,7 @@ EXTRA_OBJS_about   := $(BUILD_DIR)/wm_font.o $(BUILD_DIR)/unicode_font.o
 EXTRA_OBJS_photos  := $(BUILD_DIR)/image.o
 EXTRA_OBJS_calc    := $(BUILD_DIR)/wm_font.o $(BUILD_DIR)/unicode_font.o $(BUILD_DIR)/math_lib.o
 EXTRA_OBJS_netsurf := $(BUILD_DIR)/wm_font.o $(BUILD_DIR)/unicode_font.o $(BUILD_DIR)/bearssl/libbearssl.a
+EXTRA_OBJS_7z      := $(SEVENZ_OBJS)
 EXTRA_OBJS_desktop := $(BUILD_DIR)/wm_font.o $(METHYLUI_OBJS) $(BUILD_DIR)/ime_dict.o
 EXTRA_OBJS_test_mui_draw := $(METHYLUI_OBJS)
 EXTRA_OBJS_test_mui_button := $(METHYLUI_OBJS)
@@ -408,6 +420,10 @@ $(BUILD_DIR)/bearssl/%.o: user/BearSSL-master/src/%.c
 $(BUILD_DIR)/bearssl/libbearssl.a: $(BEARSSL_OBJS)
 	@mkdir -p $(BUILD_DIR)/bearssl
 	ar rcs $@ $(BEARSSL_OBJS)
+
+$(BUILD_DIR)/7zip/%.o: user/7zip/C/%.c
+	@mkdir -p $(BUILD_DIR)/7zip
+	$(CC) $(USER_CFLAGS) -Iuser/7zip/C -DUSE_FOPEN -DZ7_PPMD_SUPPORT -DZ7_EXTRACT_ONLY -include user/7zip/helium_compat.h -c $< -o $@
 
 .SECONDEXPANSION:
 $(BUILD_DIR)/%.ELF: $(BUILD_DIR)/%.o $(BUILD_DIR)/crt0.o $(LIBC_OBJS) $$(EXTRA_OBJS_$$*) user/linker.ld

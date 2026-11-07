@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <input.h>
+#include <idt.h>
 
 #define PS2_DATA    0x60
 #define PS2_STATUS  0x64
@@ -60,6 +61,7 @@ static void mouse_cmd(uint8_t cmd) {
 }
 
 void mouse_init(void) {
+    pic_mask_irq(1);
     /* 1. 启用 auxiliary device（鼠标） */
     ps2_write_cmd(0xA8);
 
@@ -91,6 +93,7 @@ void mouse_init(void) {
     /* 7. 注册 IRQ 12 */
     irq_register(12, mouse_handle_irq, "mouse");
 
+    pic_unmask_irq(1);
     /* 初始位置——屏幕中心 */
     struct fb_info *fb = fb_get();
     if (fb && fb->valid) {
@@ -106,13 +109,7 @@ struct mouse_state *mouse_get(void) { return &g_mouse; }
 
 /* ---------- IRQ 处理 ---------- */
 
-void mouse_handle_irq(void) {
-    uint8_t status = inb(PS2_STATUS);
-    if (!(status & STATUS_OBF)) return;
-    if (!(status & 0x20)) return;   /* bit5 = 数据来自鼠标 */
-
-    uint8_t b = inb(PS2_DATA);
-
+void mouse_handle_byte(uint8_t b) {
     /* 第一字节必须 bit3 = 1（有效包） */
     if (g_packet_idx == 0 && !(b & 0x08)) return;
 
@@ -124,19 +121,15 @@ void mouse_handle_irq(void) {
     int8_t  dx_raw = (int8_t)g_packet[1];
     int8_t  dy_raw = (int8_t)g_packet[2];
 
-    /* 符号扩展：9 位有符号 */
     int dx = dx_raw;
     int dy = dy_raw;
-    if (flags & 0x10) dx |= 0xFFFFFF00;   /* 已由 int8_t 处理 */
+    if (flags & 0x10) dx |= 0xFFFFFF00;
     if (flags & 0x20) dy |= 0xFFFFFF00;
-
-    /* Y 轴反向：PS/2 向上为负，屏幕向下为正 */
     dy = -dy;
 
     g_mouse.x += dx;
     g_mouse.y += dy;
 
-    /* 边界夹紧 */
     struct fb_info *fb = fb_get();
     if (fb && fb->valid) {
         if (g_mouse.x < 0) g_mouse.x = 0;
@@ -146,11 +139,10 @@ void mouse_handle_irq(void) {
     }
 
     uint8_t prev_buttons = g_mouse.buttons;
-
     g_mouse.buttons = flags & 0x07;
     g_mouse.irq_count++;
 
-        struct input_event ev_move = {
+    struct input_event ev_move = {
         .type = INPUT_MOUSE_MOVE,
         .code = 0,
         .x = g_mouse.x,
@@ -159,7 +151,6 @@ void mouse_handle_irq(void) {
     };
     input_post(&ev_move);
 
-    /* 按钮变化时也投递 */
     if (g_mouse.buttons != prev_buttons) {
         struct input_event ev_btn = {
             .type = INPUT_MOUSE_BTN,
@@ -171,7 +162,6 @@ void mouse_handle_irq(void) {
         input_post(&ev_btn);
     }
 
-    /* IntelliMouse 第 4 字节：低 4 位是有符号滚轮增量 */
     if (g_packet_size == 4) {
         int wheel = (int8_t)(g_packet[3] << 4);
         wheel >>= 4;
@@ -186,4 +176,12 @@ void mouse_handle_irq(void) {
             input_post(&ev_wheel);
         }
     }
+}
+
+void mouse_handle_irq(void) {
+    uint8_t status = inb(PS2_STATUS);
+    if (!(status & STATUS_OBF)) return;
+    if (!(status & 0x20)) return;
+    uint8_t b = inb(PS2_DATA);
+    mouse_handle_byte(b);
 }

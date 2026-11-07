@@ -25,6 +25,7 @@ void idt_init(void);
 void idt_set_gate(uint8_t num, uint32_t base, uint16_t sel, uint8_t flags);
 
 /* 取消屏蔽特定 IRQ。irq < 8 操作主 PIC，>= 8 操作从 PIC。 */
+void pic_mask_irq(uint8_t irq);
 void pic_unmask_irq(uint8_t irq);
 
 #endif

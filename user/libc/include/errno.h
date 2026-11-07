@@ -27,5 +27,6 @@
 #define EADDRINUSE -22
 #define ETIMEDOUT  -23
 #define ECONNREFUSED -24
+#define EBADF -25
 
 #endif

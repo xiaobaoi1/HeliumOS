@@ -35,7 +35,7 @@ static void putc_str(char c, void *ctx) {
 
 /* ---------- 无符号整数 ---------- */
 
-static void print_uint(putc_fn putc, void *ctx, uint32_t v,
+static void print_uint(putc_fn putc, void *ctx, uint64_t v,
                        int base, int uppercase,
                        int width, int zero_pad, int left_align) {
     char buf[32];
@@ -160,20 +160,27 @@ static void vformat(putc_fn putc, void *ctx, const char *fmt, va_list ap) {
         }
 
         int is_long = 0;
-        if (*fmt == 'l') { is_long = 1; fmt++; }
+        int is_longlong = 0;
+        if (*fmt == 'l') {
+            is_long = 1; fmt++;
+            if (*fmt == 'l') { is_longlong = 1; fmt++; }
+        }
 
         switch (*fmt) {
             case 'd':
             case 'i': {
-                int64_t v = is_long ? (int64_t)va_arg(ap, long)
-                                    : (int64_t)va_arg(ap, int);
+                int64_t v;
+                if (is_longlong)      v = va_arg(ap, long long);
+                else if (is_long)     v = va_arg(ap, long);
+                else                  v = va_arg(ap, int);
                 print_int(putc, ctx, v, width, zero_pad, left_align);
                 break;
             }
             case 'u': {
-                uint32_t v = is_long
-                    ? (uint32_t)va_arg(ap, unsigned long)
-                    : va_arg(ap, unsigned int);
+                uint64_t v;
+                if (is_longlong)      v = va_arg(ap, unsigned long long);
+                else if (is_long)     v = va_arg(ap, unsigned long);
+                else                  v = va_arg(ap, unsigned int);
                 print_uint(putc, ctx, v, 10, 0, width, zero_pad, left_align);
                 break;
             }
