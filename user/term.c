@@ -12,6 +12,7 @@
 #include "methylui/mui_widget.h"
 #include "methylui/mui_scroll.h"
 #include "ttf.h"
+#include "ime_dict.h"
 #include <stdint.h>
 
 static int g_master = -1;
@@ -30,8 +31,8 @@ static unsigned int    g_glyph_data_used = 0;
 
 #define TTF_CACHE_SIZE (128 * 1024)
 static unsigned char *g_ttf_cache = NULL;
-static unsigned char *g_ttf_state = NULL;   /* 0 unknown, 1 miss, 2 rendered */
-static uint16_t      *g_ttf_off = NULL;
+static unsigned char *g_ttf_state = NULL;
+static uint16_t      *g_ttf_off   = NULL;
 static unsigned int   g_ttf_cache_used = 0;
 static int            g_ttf_ok = 0;
 
@@ -117,6 +118,9 @@ static void load_font(void) {
     memset(g_glyph_width, 0, MAX_CP);
     g_glyph_data_used = 0;
 
+    /* TTF 回退启用开关：把下面注释解开即可。
+     * 若 CONSOLA.TTF 加载失败，ttf_glyph() 会一律返回 NULL，
+     * 所有字形自动退回 unifont。 */
     // if (ttf_load("SYS:/CONSOLA.TTF", FONT_H) == 0) {
     //     g_ttf_cache = (unsigned char*)malloc(TTF_CACHE_SIZE);
     //     g_ttf_state = (unsigned char*)malloc(MAX_CP);
@@ -218,13 +222,11 @@ static void shm_mark_dirty(int x0, int y0, int x1, int y1) {
     }
 }
 
-/* 滚回历史时，实时屏幕的绘制不可见，不标记 shm 脏区 */
 static void mark_dirty(int x0, int y0, int x1, int y1) {
     if (g_scrolled) return;
     shm_mark_dirty(x0, y0, x1, y1);
 }
 
-/* 历史视图 / 滚动条本身的绘制需要强制标记 */
 static void view_mark_dirty(int x0, int y0, int x1, int y1) {
     shm_mark_dirty(x0, y0, x1, y1);
 }
@@ -298,7 +300,6 @@ static void scroll(void) {
     unsigned int *src = (g_scrolled && g_live) ? g_live : g_pixels;
     int at_bottom = (g_scroll.value >= g_hist_count);
 
-    /* 即将滚出的顶部一行进入历史 */
     hist_push_line(src);
 
     for (int y = 0; y < g_ch - FONT_H; y++) {
@@ -329,16 +330,8 @@ static void newline(void) {
 }
 
 static void render_cp(uint32_t cp) {
-    if (cp == '\n') {
-        g_pending_wrap = 0;
-        newline();
-        return;
-    }
-    if (cp == '\r') {
-        g_cx = 0;
-        g_pending_wrap = 0;
-        return;
-    }
+    if (cp == '\n') { g_pending_wrap = 0; newline(); return; }
+    if (cp == '\r') { g_cx = 0; g_pending_wrap = 0; return; }
     if (cp == '\b') {
         g_pending_wrap = 0;
         if (g_cx > 0) {
@@ -733,13 +726,6 @@ static char g_my_shm_name[16];
 static char g_my_ev_name[24];
 static int  g_resize_gen = 0;
 
-/* 请求 WM 将自己的窗口 resize 到 (new_w, new_h) 客户区。
- * 自己创建新 shm（新名字），通知 WM 切换。
- *
- * 两个调用路径共用：
- *   1. 应用主动：term_request_resize(w, h)
- *   2. WM 主动（最大化）：收到 WM_EV_RESIZE 后调用
- */
 static int term_resize(int new_w, int new_h) {
     if (!g_shm || g_inbox_w < 0) return -1;
     if (new_w < 80 || new_h < 48) return -1;
@@ -754,7 +740,6 @@ static int term_resize(int new_w, int new_h) {
     unsigned int *new_live = (unsigned int*)malloc(new_live_size);
     if (new_live) memset(new_live, 0, new_live_size);
 
-    /* 回滚缓冲是可选优化：分配失败不应阻止 canvas 跟随窗口 resize。 */
     size_t new_hist_size = (size_t)TERM_HIST_LINES * FONT_H *
                            (size_t)new_w * 4;
     unsigned int *new_hist = (unsigned int*)malloc(new_hist_size);
@@ -772,8 +757,6 @@ static int term_resize(int new_w, int new_h) {
     struct shm_hdr *new_hdr = (struct shm_hdr*)new_addr;
     unsigned int *new_pixels = (unsigned int*)(new_addr + SHM_HDR_SIZE);
 
-    /* 保留旧内容：按 min 尺寸逐行拷贝，左上角对齐。
-     * 滚回历史时实时屏幕在 g_live；否则在 shm 中（先擦掉光标）。 */
     if (!g_scrolled) cursor_restore();
     unsigned int *old_src = (g_scrolled && g_live) ? g_live : g_pixels;
 
@@ -782,8 +765,6 @@ static int term_resize(int new_w, int new_h) {
         live_dst[i] = g_bg;
 
     if (old_src) {
-        /* 只复制旧文本区，不要复制旧的滚动条列——
-         * 否则 resize 后窗口中间会留下一条旧滚动条。 */
         int copy_w = (g_text_w < new_w) ? g_text_w : new_w;
         int copy_h = (g_ch < new_h) ? g_ch : new_h;
         for (int y = 0; y < copy_h; y++) {
@@ -801,7 +782,6 @@ static int term_resize(int new_w, int new_h) {
     new_hdr->pub_x0 = SHM_DIRTY_EMPTY; new_hdr->pub_y0 = 0;
     new_hdr->pub_x1 = 0; new_hdr->pub_y1 = 0;
 
-    /* 通知 WM 切换 shm */
     struct wm_resize_request req;
     memset(&req, 0, sizeof(req));
     req.magic = WM_MAGIC;
@@ -818,7 +798,6 @@ static int term_resize(int new_w, int new_h) {
         return -1;
     }
 
-    /* 切换 shm */
     munmap((unsigned int)g_shm, shm_total_size(g_cw, g_ch));
 
     if (g_live) free(g_live);
@@ -845,7 +824,6 @@ static int term_resize(int new_w, int new_h) {
     term_scrollbar_paint();
     if (!g_scrolled) cursor_draw();
 
-    /* 全屏脏区——首帧全绘 */
     g_shm->cur_x0 = 0;
     g_shm->cur_y0 = 0;
     g_shm->cur_x1 = g_cw;
@@ -857,8 +835,6 @@ static int term_resize(int new_w, int new_h) {
             g_cols, g_rows, g_ch);
     pty_set_winsize(g_master, g_cols, g_rows);
 
-    /* 通知前台应用窗口尺寸已变化：kilo 识别 ESC W 后重新查询尺寸并重绘。
-     * cooked 模式下这个序列会被行规程过滤掉，对 shell 无影响。 */
     if (g_master >= 0) {
         char note[2] = { 0x1B, 'W' };
         pty_write(g_master, note, 2);
@@ -867,32 +843,10 @@ static int term_resize(int new_w, int new_h) {
     return 0;
 }
 
-/* ---------- Simple pinyin IME ---------- */
+/* ---------- Simple pinyin IME (uses shared ime_dict.h) ---------- */
 #define IME_BAR_W 480
 #define IME_BUF_MAX 32
 
-struct ime_word { const char *py; const char *cand[5]; };
-static const struct ime_word g_ime_words[] = {
-    { "ni",       { "\xE4\xBD\xA0", "\xE5\xB0\xBC", "\xE6\xB3\xA5", NULL, NULL } },
-    { "hao",      { "\xE5\xA5\xBD", "\xE5\x8F\xB7", "\xE6\xAF\xAB", NULL, NULL } },
-    { "wo",       { "\xE6\x88\x91", NULL, NULL, NULL, NULL } },
-    { "shi",      { "\xE6\x98\xAF", "\xE4\xBA\x8B", "\xE6\x97\xB6", "\xE5\xB8\x82", "\xE8\xAF\x95" } },
-    { "de",       { "\xE7\x9A\x84", "\xE5\xBE\x97", "\xE5\x9C\xB0", NULL, NULL } },
-    { "zhong",    { "\xE4\xB8\xAD", "\xE7\xA7\x8D", "\xE9\x87\x8D", NULL, NULL } },
-    { "guo",      { "\xE5\x9B\xBD", "\xE8\xBF\x87", "\xE6\x9E\x9C", NULL, NULL } },
-    { "ren",      { "\xE4\xBA\xBA", "\xE8\xAE\xA4", "\xE4\xBB\x81", NULL, NULL } },
-    { "min",      { "\xE6\xB0\x91", NULL, NULL, NULL, NULL } },
-    { "wen",      { "\xE6\x96\x87", "\xE9\x97\xAE", "\xE9\x97\xBB", NULL, NULL } },
-    { "zi",       { "\xE5\xAD\x97", "\xE8\x87\xAA", "\xE5\xAD\x90", NULL, NULL } },
-    { "shu",      { "\xE8\xBE\x93", "\xE4\xB9\xA6", "\xE6\x95\xB0", NULL, NULL } },
-    { "ru",       { "\xE5\x85\xA5", NULL, NULL, NULL, NULL } },
-    { "fa",       { "\xE6\xB3\x95", "\xE5\x8F\x91", "\xE7\xBD\x9A", NULL, NULL } },
-    { "ce",       { "\xE6\xB5\x8B", "\xE7\xAD\x96", NULL, NULL, NULL } },
-    { "nihao",    { "\xE4\xBD\xA0\xE5\xA5\xBD", NULL, NULL, NULL, NULL } },
-    { "zhongwen", { "\xE4\xB8\xAD\xE6\x96\x87", NULL, NULL, NULL, NULL } },
-    { "shuru",    { "\xE8\xBE\x93\xE5\x85\xA5", NULL, NULL, NULL, NULL } },
-    { "ceshi",    { "\xE6\xB5\x8B\xE8\xAF\x95", NULL, NULL, NULL, NULL } },
-};
 static int g_ime_on, g_ime_visible;
 static char g_ime_buf[IME_BUF_MAX];
 static int g_ime_len;
@@ -900,15 +854,15 @@ static uint32_t g_ime_save[IME_BAR_W * FONT_H];
 static int g_ime_saved_w;
 
 static const struct ime_word *ime_lookup(void) {
-    for (unsigned i = 0; i < sizeof(g_ime_words)/sizeof(g_ime_words[0]); i++)
-        if (strcmp(g_ime_words[i].py, g_ime_buf) == 0) return &g_ime_words[i];
-    return NULL;
+    return ime_lookup_pinyin(g_ime_buf);
 }
+
 static int ime_cp_width(uint32_t cp) {
     if (ttf_glyph(cp)) return CELL_W;
     if (g_glyph_ptr && cp < MAX_CP && g_glyph_width[cp]) return g_glyph_width[cp];
     return CELL_W;
 }
+
 static void ime_draw_text(const char *text, int x, int y, uint32_t fg, uint32_t bg) {
     const unsigned char *p = (const unsigned char*)text;
     int limit = x + g_ime_saved_w - 4;
@@ -925,6 +879,7 @@ static void ime_draw_text(const char *text, int x, int y, uint32_t fg, uint32_t 
         x += w; p += n;
     }
 }
+
 static void ime_restore(void) {
     if (!g_ime_visible || !g_ime_saved_w || !g_pixels) return;
     int y = g_ch - FONT_H;
@@ -936,6 +891,7 @@ static void ime_restore(void) {
     mark_dirty(0, y, g_ime_saved_w, y + FONT_H);
     g_ime_visible = 0;
 }
+
 static void ime_draw(void) {
     ime_restore();
     if (!g_ime_on || g_scrolled || !g_pixels) return;
@@ -956,6 +912,7 @@ static void ime_draw(void) {
     g_ime_visible = 1;
     mark_dirty(0, y, w, y + FONT_H);
 }
+
 static int ime_commit(int pick) {
     const struct ime_word *word = ime_lookup();
     if (!word || pick < 0 || pick >= 5 || !word->cand[pick]) return 0;
@@ -966,6 +923,7 @@ static int ime_commit(int pick) {
     ime_draw();
     return 1;
 }
+
 static int ime_key(int key, unsigned int mods) {
     if (key == ' ' && (mods & WM_MOD_CTRL)) {
         g_ime_on = !g_ime_on; g_ime_len = 0; g_ime_buf[0] = '\0';
@@ -996,6 +954,45 @@ static int ime_key(int key, unsigned int mods) {
     }
     if (key == 27) { ime_restore(); g_ime_len = 0; g_ime_buf[0] = '\0'; return 1; }
     return 0;
+}
+
+/* ---------- 新标签页（WM_EV_NEW_TAB 处理） ---------- */
+
+static int g_tab_gen = 0;
+
+static void term_spawn_tab(void) {
+    char shm[16], ev[16], wbuf[8], hbuf[8];
+    int gen = ++g_tab_gen;
+    snprintf(shm, sizeof(shm), "tt-%d-%d", getpid() & 0xFFFF, gen);
+    snprintf(ev, sizeof(ev), "te-%d-%d", getpid() & 0xFFFF, gen);
+    int size = shm_total_size(g_cw, g_ch);
+    if (shm_open(shm, size, 0) < 0) return;
+    pipe_unlink(ev);
+    int fds[2];
+    if (pipe_named(ev, fds) < 0) return;
+    ipc_close(fds[0]); ipc_close(fds[1]);
+
+    struct wm_request req;
+    memset(&req, 0, sizeof(req));
+    req.magic = WM_MAGIC; req.type = WM_REQ_CREATE; req.kind = WM_KIND_NORMAL;
+    req.x = 200; req.y = 100; req.w = g_cw; req.h = g_ch;
+    req.owner_pid = getpid();
+    strncpy(req.shm_name, shm, sizeof(req.shm_name) - 1);
+    strncpy(req.ev_name, ev, sizeof(req.ev_name) - 1);
+    strncpy(req.title, "Terminal", sizeof(req.title) - 1);
+    if (pipe_write(g_inbox_w, &req, sizeof(req)) != sizeof(req)) return;
+
+    snprintf(wbuf, sizeof(wbuf), "%d", g_cw);
+    snprintf(hbuf, sizeof(hbuf), "%d", g_ch);
+    char *argv[] = { "TERM", shm, wbuf, hbuf, ev, NULL };
+    struct spawn_params sp = {
+        .size = sizeof(sp), .in_fd = SPAWN_FD_INHERIT,
+        .out_fd = SPAWN_FD_INHERIT, .err_fd = SPAWN_FD_INHERIT,
+        .in_pipe = -1, .out_pipe = -1, .err_pipe = -1,
+        .in_pty = -1, .out_pty = -1, .err_pty = -1,
+        .flags = 0, .envp = 0, .out_pid = 0,
+    };
+    spawn("TERM", argv, &sp);
 }
 
 /* ---------- main ---------- */
@@ -1133,10 +1130,10 @@ int main(int argc, char **argv) {
                 }
             } else if (ev.type == WM_EV_RESIZE) {
                 ime_restore();
-                /* WM 主动 resize（最大化 / 还原）——重建 shm 并通知 WM 切换 */
                 term_resize((int)ev.code, (int)ev.extra);
+            } else if (ev.type == WM_EV_NEW_TAB) {
+                term_spawn_tab();
             } else if (ev.type == WM_EV_CLOSE_REQUEST) {
-                /* 用户点了关闭按钮——主动销毁窗口，然后退出 */
                 struct wm_destroy_request dr;
                 dr.magic = WM_MAGIC;
                 dr.type = WM_REQ_DESTROY;

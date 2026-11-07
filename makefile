@@ -75,6 +75,7 @@ OBJS = $(BUILD_DIR)/start.o \
 	   $(BUILD_DIR)/shm.o \
 	   $(BUILD_DIR)/net.o \
 	   $(BUILD_DIR)/rtl8139.o \
+	   $(BUILD_DIR)/ac97.o \
 	   $(BUILD_DIR)/e1000.o \
 	   $(BUILD_DIR)/net_proto.o \
 	   $(BUILD_DIR)/net_sock.o \
@@ -133,9 +134,12 @@ USER_APPS = shell idle test testkill sleeper argtest test_write \
 			test_createwin test_ansi\
 			dhcpclient desktop test_raw kilo test_malloc_loop \
 			grep find hexdump test_mui_draw test_mui_button test_mui_form \
-			test_dl test_libc test_malloc_big http test_printf_ll
+			test_dl test_libc test_malloc_big http about photos calc
 
 # 需要 POSIX 兼容层的应用
+PHOTO_PY ?= /mnt/d/Local/Python314/python.exe
+PHOTO_SRCS := $(wildcard user/*.jpg user/*.jpeg user/*.png)
+
 POSIX_APPS = kilo
 POSIX_DIR  = user/posix
 POSIX_CFLAGS = -I$(POSIX_DIR)/include
@@ -286,17 +290,20 @@ run: $(ISO)
 # 运行硬盘镜像（测试文件系统时使用）
 run-disk: $(DISK_IMG)
 	$(QEMU) -drive file=$(DISK_IMG),format=raw -serial stdio -m 1024 \
-	        -netdev user,id=n0 -device rtl8139,netdev=n0
+	        -netdev user,id=n0 -device rtl8139,netdev=n0 \
+	        -audiodev none,id=snd -device AC97,audiodev=snd
 
 run-tcp: $(DISK_IMG)
 	$(QEMU) -drive file=$(DISK_IMG),format=raw -serial stdio -m 1024 \
 	        -netdev user,id=n0,hostfwd=tcp::12345-:12345 \
-	        -device rtl8139,netdev=n0
+	        -device rtl8139,netdev=n0 \
+	        -audiodev none,id=snd -device AC97,audiodev=snd
 
 # debug
 debug-disk: $(DISK_IMG)
 	$(QEMU) -drive file=$(DISK_IMG),format=raw -serial stdio -m 1024 \
-	        -netdev user,id=n0 -device rtl8139,netdev=n0 -s -S
+	        -netdev user,id=n0 -device rtl8139,netdev=n0 \
+	        -audiodev none,id=snd -device AC97,audiodev=snd -s -S
 # ==================== 清理 ====================
 clean:
 	rm -rf $(BUILD_DIR) $(ISO) $(DISK_IMG)
@@ -368,19 +375,26 @@ $(BUILD_DIR)/lib%.so: user/lib/lib%.c
 
 # 附加对象映射（只有两个程序需要，直接赋值最清晰）
 EXTRA_OBJS_wm      := $(BUILD_DIR)/wm_font.o $(BUILD_DIR)/unicode_font.o
-EXTRA_OBJS_desktop := $(BUILD_DIR)/wm_font.o $(METHYLUI_OBJS)
+EXTRA_OBJS_about   := $(BUILD_DIR)/wm_font.o $(BUILD_DIR)/unicode_font.o
+EXTRA_OBJS_photos  := $(BUILD_DIR)/image.o
+EXTRA_OBJS_calc    := $(BUILD_DIR)/wm_font.o $(BUILD_DIR)/unicode_font.o $(BUILD_DIR)/math_lib.o
+EXTRA_OBJS_desktop := $(BUILD_DIR)/wm_font.o $(METHYLUI_OBJS) $(BUILD_DIR)/ime_dict.o
 EXTRA_OBJS_test_mui_draw := $(METHYLUI_OBJS)
 EXTRA_OBJS_test_mui_button := $(METHYLUI_OBJS)
 EXTRA_OBJS_test_mui_form := $(METHYLUI_OBJS)
 EXTRA_OBJS_kilo := $(POSIX_OBJS)
 EXTRA_OBJS_methylate := $(METHYLUI_OBJS)
-EXTRA_OBJS_term      := $(BUILD_DIR)/ttf.o $(BUILD_DIR)/unicode_font.o \
+EXTRA_OBJS_term      := $(BUILD_DIR)/ttf.o $(BUILD_DIR)/unicode_font.o $(BUILD_DIR)/ime_dict.o \
                         $(BUILD_DIR)/methylui/mui_font.o \
                         $(BUILD_DIR)/methylui/mui_surface.o \
                         $(BUILD_DIR)/methylui/mui_widget.o \
                         $(BUILD_DIR)/methylui/mui_scroll.o
 
 # 统一链接规则（二次展开拿 EXTRA_OBJS_<stem>）
+$(BUILD_DIR)/math_lib.o: user/lib/libmath.c user/libc/include/math.h
+	@mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
 .SECONDEXPANSION:
 $(BUILD_DIR)/%.ELF: $(BUILD_DIR)/%.o $(BUILD_DIR)/crt0.o $(LIBC_OBJS) $$(EXTRA_OBJS_$$*) user/linker.ld
 	$(LD) -m elf_i386 -T user/linker.ld -o $@ \
@@ -419,5 +433,5 @@ dc:
 
 
 # 声明伪目标
-.PHONY: all run run-disk debug debug-disk clean gdb pack run-net run-tcp tcc-prepare tcc $(DISK_IMG)
+.PHONY: all run run-disk debug debug-disk clean gdb pack run-net run-tcp $(DISK_IMG)
 -include $(wildcard $(BUILD_DIR)/*.d)

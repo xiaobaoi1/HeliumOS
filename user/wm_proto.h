@@ -12,6 +12,7 @@
 #define WM_REQ_RESIZE       3
 #define WM_REQ_WIN_ACTION   4
 #define WM_REQ_SET_CURSOR   5
+#define WM_REQ_SET_ALPHA    6
 
 /* 窗口 kind */
 #define WM_KIND_NORMAL      0
@@ -34,6 +35,7 @@
 #define WM_EV_WINDOW_LIST   12  /* 后接 n 个 wm_window_entry */
 #define WM_EV_WHEEL         13  /* code = 滚轮增量，x/y 客户区坐标 */
 #define WM_EV_DROP          14  /* 拖放释放到本窗口：x/y 客户区坐标 */
+#define WM_EV_NEW_TAB       15  /* 新建标签页请求 */
 
 #define WM_BTN_LEFT         1
 #define WM_BTN_RIGHT        2
@@ -117,6 +119,14 @@ struct wm_set_cursor_request {
     uint32_t type;
     uint32_t owner_pid;
     uint32_t cursor;
+};
+
+struct wm_set_alpha_request {
+    uint32_t magic;
+    uint32_t type;
+    uint32_t owner_pid;
+    uint32_t alpha;
+    char     shm_name[16];
 };
 
 #endif
