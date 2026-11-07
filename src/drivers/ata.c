@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
-#include <driver.h>
+
 
 static struct ata_device g_devices[ATA_MAX_DEVICES];
 static int g_count = 0;
@@ -59,7 +59,7 @@ static int ata_probe(uint16_t io_base, uint16_t ctrl_base, uint8_t drive) {
     return 0;
 }
 
-int ata_init(void) {
+void ata_init(void) {
     kprintf("[ATA] Initializing...\n");
     g_count = 0;
 
@@ -96,10 +96,7 @@ int ata_init(void) {
     } else {
         kprintf("[ATA] %d drive(s) detected.\n", g_count);
     }
-
-    return (g_count > 0) ? 0 : -1;
 }
-DRIVER_INIT(ata_init);
 
 int ata_device_count(void) { return g_count; }
 

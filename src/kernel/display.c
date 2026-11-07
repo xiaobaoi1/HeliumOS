@@ -14,6 +14,9 @@ static int cur_y = -1;
 
 static uint32_t g_fb_owner = 0;
 
+static void mouse_restore(void);
+static void mouse_draw(int mx, int my);
+
 
 /* ---------- 脏区 ---------- */
 
@@ -36,6 +39,7 @@ void display_dirty(int x0, int y0, int x1, int y1) {
 
 void display_set_owner(uint32_t pid) {
     uint32_t old = g_fb_owner;
+    if (pid != 0 && old == 0) mouse_restore();
     g_fb_owner = pid;
 
     /* WM 退出——内核恢复渲染 */
@@ -187,13 +191,13 @@ void display_init(void) {
 
 /* ---------- 鼠标合成 ---------- */
 
-#define CURSOR_W 8
-#define CURSOR_H 12
+#define MOUSE_W 8
+#define MOUSE_H 12
 
 static int mouse_prev_x = -1, mouse_prev_y = -1;
-static uint32_t mouse_save[CURSOR_W * CURSOR_H];
+static uint32_t mouse_save[MOUSE_W * MOUSE_H];
 
-static const uint8_t mouse_cursor[CURSOR_H] = {
+static const uint8_t mouse_cursor[MOUSE_H] = {
     0x80, 0xC0, 0xE0, 0xF0, 0xF8, 0xFC,
     0xFE, 0xFF, 0xF8, 0xD8, 0x88, 0x00
 };
@@ -202,13 +206,13 @@ static void mouse_restore(void) {
     if (mouse_prev_x < 0) return;
     struct fb_info *fb = fb_get();
     if (!fb || !fb->valid) return;
-    for (int y = 0; y < CURSOR_H; y++) {
-        for (int x = 0; x < CURSOR_W; x++) {
+    for (int y = 0; y < MOUSE_H; y++) {
+        for (int x = 0; x < MOUSE_W; x++) {
             int px = mouse_prev_x + x, py = mouse_prev_y + y;
             if (px < 0 || py < 0 || px >= (int)fb->width || py >= (int)fb->height)
                 continue;
             fb->virt[(py * fb->pitch + px * 4) / 4] =
-                mouse_save[y * CURSOR_W + x];
+                mouse_save[y * MOUSE_W + x];
         }
     }
     mouse_prev_x = -1;
@@ -218,20 +222,20 @@ static void mouse_restore(void) {
 static void mouse_draw(int mx, int my) {
     struct fb_info *fb = fb_get();
     if (!fb || !fb->valid) return;
-    for (int y = 0; y < CURSOR_H; y++) {
-        for (int x = 0; x < CURSOR_W; x++) {
+    for (int y = 0; y < MOUSE_H; y++) {
+        for (int x = 0; x < MOUSE_W; x++) {
             int px = mx + x, py = my + y;
             if (px < 0 || py < 0 || px >= (int)fb->width || py >= (int)fb->height) {
-                mouse_save[y * CURSOR_W + x] = 0;
+                mouse_save[y * MOUSE_W + x] = 0;
                 continue;
             }
-            mouse_save[y * CURSOR_W + x] =
-                fb->screen[(py * fb->pitch + px * 4) / 4];
+            mouse_save[y * MOUSE_W + x] =
+                fb->virt[(py * fb->pitch + px * 4) / 4];
         }
     }
-    for (int y = 0; y < CURSOR_H; y++) {
+    for (int y = 0; y < MOUSE_H; y++) {
         uint8_t row = mouse_cursor[y];
-        for (int x = 0; x < CURSOR_W; x++) {
+        for (int x = 0; x < MOUSE_W; x++) {
             if (row & (0x80 >> x)) {
                 int px = mx + x, py = my + y;
                 if (px < 0 || py < 0 ||
@@ -242,6 +246,17 @@ static void mouse_draw(int mx, int my) {
     }
     mouse_prev_x = mx;
     mouse_prev_y = my;
+}
+
+void display_cursor_hide(void) {
+    mouse_restore();
+}
+
+void display_cursor_sync(void) {
+    struct mouse_state *m = mouse_get();
+    if (!m) return;
+    mouse_restore();
+    mouse_draw(m->x, m->y);
 }
 
 /* ---------- flush ---------- */

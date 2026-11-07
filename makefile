@@ -75,6 +75,7 @@ OBJS = $(BUILD_DIR)/start.o \
 	   $(BUILD_DIR)/shm.o \
 	   $(BUILD_DIR)/net.o \
 	   $(BUILD_DIR)/rtl8139.o \
+	   $(BUILD_DIR)/ac97.o \
 	   $(BUILD_DIR)/e1000.o \
 	   $(BUILD_DIR)/net_proto.o \
 	   $(BUILD_DIR)/net_sock.o \
@@ -133,9 +134,12 @@ USER_APPS = shell idle test testkill sleeper argtest test_write \
 			test_createwin test_ansi\
 			dhcpclient desktop test_raw kilo test_malloc_loop \
 			grep find hexdump test_mui_draw test_mui_button test_mui_form \
-			test_dl test_libc test_malloc_big http test_printf_ll
+			test_dl test_libc test_malloc_big http about photos
 
 # 需要 POSIX 兼容层的应用
+PHOTO_PY ?= /mnt/d/Local/Python314/python.exe
+PHOTO_SRCS := $(wildcard user/*.jpg user/*.jpeg user/*.png)
+
 POSIX_APPS = kilo
 POSIX_DIR  = user/posix
 POSIX_CFLAGS = -I$(POSIX_DIR)/include
@@ -156,6 +160,12 @@ LIBC_SRCS = string printf malloc signal env assert ctype qsort \
 LIBC_OBJS = $(addprefix $(BUILD_DIR)/libc_,$(addsuffix .o,$(LIBC_SRCS))) \
             $(BUILD_DIR)/libc_sigreturn.o \
             $(BUILD_DIR)/libc_setjmp.o
+
+
+POSIX_DIR  = user/posix
+POSIX_OBJS = $(BUILD_DIR)/posix_fd.o \
+             $(BUILD_DIR)/posix_io.o \
+             $(BUILD_DIR)/posix_sys.o
 
 
 # ==================== 编译规则 ====================
@@ -219,25 +229,21 @@ $(ISO): $(KERNEL_ELF)
 # ==================== 硬盘镜像（用于测试文件系统写入） ====================
 $(DISK_IMG): $(KERNEL_ELF) $(USER_ELFS) $(USER_LIB_SOS) tcc-prepare $(BUILD_DIR)/TCC.ELF
 	@echo "正在创建 FAT32 硬盘镜像 (需要 sudo 权限)..."
-	sudo umount /mnt/build 2>/dev/null || true
-	sudo losetup -d /dev/loop22 2>/dev/null || true
-	sudo losetup -d /dev/loop23 2>/dev/null || true
+	sudo umount /dev/loop23 || true  
+	sudo losetup -d /dev/loop22 || true 
+	sudo losetup -d /dev/loop23 || true 
 	dd if=/dev/zero of=$(DISK_IMG) bs=1M count=64 status=none
 	(echo o; echo n; echo p; echo 1; echo 2048; echo; echo t; echo c; echo a; echo 1; echo w) | fdisk $(DISK_IMG) > /dev/null 2>&1
 	@OFFSET=$$((2048*512)); \
-	DISK_LOOP=$$(sudo losetup -f --show $(DISK_IMG)); \
-	PART_LOOP=$$(sudo losetup -f --show -o $$OFFSET $(DISK_IMG)); \
-	if [ -z "$$DISK_LOOP" ] || [ -z "$$PART_LOOP" ]; then \
-	    echo "losetup -f 失败"; exit 1; \
-	fi; \
-	echo "loop 分配: disk=$$DISK_LOOP part=$$PART_LOOP"; \
-	sudo mkfs.vfat -F 32 $$PART_LOOP > /dev/null; \
-	sudo mount $$PART_LOOP /mnt/build; \
+	sudo losetup /dev/loop22 $(DISK_IMG); \
+	sudo losetup /dev/loop23 $(DISK_IMG) -o $$OFFSET; \
+
+	sudo mkfs.vfat -F 32 /dev/loop23 > /dev/null; \
+	sudo mount /dev/loop23 /mnt/build; \
 	sudo mkdir -p /mnt/build/boot/grub; \
 	sudo cp $(KERNEL_ELF) /mnt/build/boot/; \
 	sudo cp tools/unifont.hex /mnt/build/UNIFONT.HEX; \
 	sudo cp tools/unifont-17.0.03.hex /mnt/build/UNIFONT-17.HEX; \
-	sudo cp tools/consola.ttf /mnt/build/CONSOLA.TTF; \
 	for app in $(USER_APPS); do \
 	    sudo cp $(BUILD_DIR)/$$app.ELF /mnt/build/$$app; \
 	done; \
@@ -247,23 +253,33 @@ $(DISK_IMG): $(KERNEL_ELF) $(USER_ELFS) $(USER_LIB_SOS) tcc-prepare $(BUILD_DIR)
 	sudo cp $(SRC_DIR)/kernel/kmain.c /mnt/build/kmain.c; \
 	sudo cp user/idle.c /mnt/build/idle.c; \
 	sudo cp user/kilo.c /mnt/build/kilo.c; \
+
 	sudo cp $(BUILD_DIR)/TCC.ELF /mnt/build/TCC; \
-	sudo mkdir -p /mnt/build/INCLUDE /mnt/build/LIB; \
+
+	sudo mkdir -p /mnt/build/INCLUDE; \
+	sudo mkdir -p /mnt/build/LIB; \
 	sudo cp -r $(BUILD_DIR)/tcc_sysroot/include/* /mnt/build/INCLUDE/; \
 	sudo cp -r $(BUILD_DIR)/tcc_sysroot/lib/* /mnt/build/LIB/; \
+	sudo cp $(BUILD_DIR)/tcc_sysroot/lib/* /mnt/build/LIB/; \
+
 	sudo cp user/folder.bmp /mnt/build/folder.bmp; \
 	sudo cp user/exec.bmp /mnt/build/exec.bmp; \
 	sudo cp user/background.bmp /mnt/build/background.bmp; \
-	sudo sh -c 'echo "int main() { return 42; }" > /mnt/build/test.c'; \
+	for img in $(PHOTO_SRCS); do \
+	    sudo cp $$img /mnt/build/$$(basename $$img); \
+	done; \
+
+	sudo echo "int main() { return 42; }" | sudo tee /mnt/build/test.c > /dev/null; \
+
 	echo "set timeout=5" | sudo tee /mnt/build/boot/grub/grub.cfg > /dev/null; \
 	echo "menuentry \"HeliumOS\" {" | sudo tee -a /mnt/build/boot/grub/grub.cfg > /dev/null; \
 	echo "  multiboot2 /boot/kernel.elf" | sudo tee -a /mnt/build/boot/grub/grub.cfg > /dev/null; \
 	echo "}" | sudo tee -a /mnt/build/boot/grub/grub.cfg > /dev/null; \
-	sudo grub-install --target=i386-pc --boot-directory=/mnt/build/boot --modules="biosdisk part_msdos fat" $$DISK_LOOP > /dev/null 2>&1; \
+	sudo grub-install --target=i386-pc --boot-directory=/mnt/build/boot --modules="biosdisk part_msdos fat" /dev/loop22 > /dev/null 2>&1; \
 	sync; \
 	sudo umount /mnt/build; \
-	sudo losetup -d $$PART_LOOP; \
-	sudo losetup -d $$DISK_LOOP
+	sudo losetup -d /dev/loop23; \
+	sudo losetup -d /dev/loop22
 	@echo "硬盘镜像生成成功: $(DISK_IMG)"
 
 # 	test
@@ -286,17 +302,20 @@ run: $(ISO)
 # 运行硬盘镜像（测试文件系统时使用）
 run-disk: $(DISK_IMG)
 	$(QEMU) -drive file=$(DISK_IMG),format=raw -serial stdio -m 1024 \
-	        -netdev user,id=n0 -device rtl8139,netdev=n0
+	        -netdev user,id=n0 -device rtl8139,netdev=n0 \
+	        -audiodev none,id=snd -device AC97,audiodev=snd
 
 run-tcp: $(DISK_IMG)
 	$(QEMU) -drive file=$(DISK_IMG),format=raw -serial stdio -m 1024 \
 	        -netdev user,id=n0,hostfwd=tcp::12345-:12345 \
-	        -device rtl8139,netdev=n0
+	        -device rtl8139,netdev=n0 \
+	        -audiodev none,id=snd -device AC97,audiodev=snd
 
 # debug
 debug-disk: $(DISK_IMG)
 	$(QEMU) -drive file=$(DISK_IMG),format=raw -serial stdio -m 1024 \
-	        -netdev user,id=n0 -device rtl8139,netdev=n0 -s -S
+	        -netdev user,id=n0 -device rtl8139,netdev=n0 \
+	        -audiodev none,id=snd -device AC97,audiodev=snd -s -S
 # ==================== 清理 ====================
 clean:
 	rm -rf $(BUILD_DIR) $(ISO) $(DISK_IMG)
@@ -368,13 +387,15 @@ $(BUILD_DIR)/lib%.so: user/lib/lib%.c
 
 # 附加对象映射（只有两个程序需要，直接赋值最清晰）
 EXTRA_OBJS_wm      := $(BUILD_DIR)/wm_font.o $(BUILD_DIR)/unicode_font.o
-EXTRA_OBJS_desktop := $(BUILD_DIR)/wm_font.o $(METHYLUI_OBJS)
+EXTRA_OBJS_about   := $(BUILD_DIR)/wm_font.o $(BUILD_DIR)/unicode_font.o
+EXTRA_OBJS_photos  := $(BUILD_DIR)/image.o
+EXTRA_OBJS_desktop := $(BUILD_DIR)/wm_font.o $(METHYLUI_OBJS) $(BUILD_DIR)/ime_dict.o
 EXTRA_OBJS_test_mui_draw := $(METHYLUI_OBJS)
 EXTRA_OBJS_test_mui_button := $(METHYLUI_OBJS)
 EXTRA_OBJS_test_mui_form := $(METHYLUI_OBJS)
 EXTRA_OBJS_kilo := $(POSIX_OBJS)
 EXTRA_OBJS_methylate := $(METHYLUI_OBJS)
-EXTRA_OBJS_term      := $(BUILD_DIR)/ttf.o $(BUILD_DIR)/unicode_font.o \
+EXTRA_OBJS_term      := $(BUILD_DIR)/unicode_font.o $(BUILD_DIR)/ime_dict.o \
                         $(BUILD_DIR)/methylui/mui_font.o \
                         $(BUILD_DIR)/methylui/mui_surface.o \
                         $(BUILD_DIR)/methylui/mui_widget.o \
@@ -419,5 +440,5 @@ dc:
 
 
 # 声明伪目标
-.PHONY: all run run-disk debug debug-disk clean gdb pack run-net run-tcp tcc-prepare tcc $(DISK_IMG)
+.PHONY: all run run-disk debug debug-disk clean gdb pack run-net run-tcp $(DISK_IMG)
 -include $(wildcard $(BUILD_DIR)/*.d)

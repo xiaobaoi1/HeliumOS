@@ -12,6 +12,7 @@
 #define WM_REQ_RESIZE       3
 #define WM_REQ_WIN_ACTION   4
 #define WM_REQ_SET_CURSOR   5
+#define WM_REQ_SET_ALPHA    6
 
 /* 窗口 kind */
 #define WM_KIND_NORMAL      0
@@ -117,6 +118,14 @@ struct wm_set_cursor_request {
     uint32_t type;
     uint32_t owner_pid;
     uint32_t cursor;
+};
+
+struct wm_set_alpha_request {
+    uint32_t magic;
+    uint32_t type;
+    uint32_t owner_pid;
+    uint32_t alpha;
+    char     shm_name[16];
 };
 
 #endif

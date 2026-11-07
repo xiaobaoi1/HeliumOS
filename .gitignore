@@ -14,4 +14,3 @@ build/
 diff.txt
 project.txt
 compile_commands.json
-*.log

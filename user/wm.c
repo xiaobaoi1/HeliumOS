@@ -16,6 +16,7 @@ static void mouse_draw(void);
 /* ==================== 屏幕 ==================== */
 static unsigned int *g_fb;
 static unsigned int *g_back;
+static unsigned int *g_scratch;
 static unsigned int  g_W, g_H, g_pitch_px;
 static struct window *g_dragging = NULL;  /* 拖动中的窗口，合成时跳过 */
 static int g_no_present = 0;
@@ -96,7 +97,7 @@ struct window {
 
     int shm_idx;
     unsigned int *pixels;
-    volatile uint64_t *counter;
+    uint64_t *counter;
     uint64_t last_seen;
     struct shm_hdr *shm;
 
@@ -111,6 +112,7 @@ struct window {
     int closing;
     uint32_t close_tick;
     uint32_t cursor;
+    uint32_t alpha;
 };
 
 static int g_inbox_rd = -1;
@@ -233,11 +235,40 @@ static void blit_shm_to_back(struct window *w, int rx0, int ry0, int rx1, int ry
 
     int sx = x0 - cx;
     int sy = y0 - cy;
+    int blend = (w->kind != WM_KIND_NORMAL && w->alpha > 0 && w->alpha < 255);
+    unsigned int a = w->alpha;
 
     for (int y = y0; y < y1; y++) {
         unsigned int *dst = g_back + y * g_pitch_px + x0;
         unsigned int *src = w->pixels + (sy + (y - y0)) * cw + sx;
-        memcpy(dst, src, (x1 - x0) * 4);
+        if (!blend) {
+            memcpy(dst, src, (x1 - x0) * 4);
+        } else {
+            for (int x = 0; x < x1 - x0; x++) {
+                unsigned int c = src[x];
+                unsigned int d = dst[x];
+                unsigned int r = (((c >> 16) & 255) * a + ((d >> 16) & 255) * (255 - a)) / 255;
+                unsigned int g = (((c >> 8) & 255) * a + ((d >> 8) & 255) * (255 - a)) / 255;
+                unsigned int b = ((c & 255) * a + (d & 255) * (255 - a)) / 255;
+                dst[x] = (r << 16) | (g << 8) | b;
+            }
+        }
+    }
+}
+
+static void alpha_blit_rect(unsigned int *src, unsigned int *dst, int stride,
+                            int x0, int y0, int x1, int y1, unsigned int a) {
+    for (int y = y0; y < y1; y++) {
+        unsigned int *s = src + y * stride + x0;
+        unsigned int *d = dst + y * stride + x0;
+        for (int x = x0; x < x1; x++) {
+            unsigned int c = *s++;
+            unsigned int bg = *d;
+            unsigned int r = (((c >> 16) & 255) * a + ((bg >> 16) & 255) * (255 - a)) / 255;
+            unsigned int g = (((c >> 8) & 255) * a + ((bg >> 8) & 255) * (255 - a)) / 255;
+            unsigned int b = ((c & 255) * a + (bg & 255) * (255 - a)) / 255;
+            *d++ = (r << 16) | (g << 8) | b;
+        }
     }
 }
 
@@ -392,6 +423,26 @@ static void redraw_region(int x0, int y0, int x1, int y1) {
                 if (layer == 1) {
                     if (w->x + 4 >= x1 || w->x + w->w + 4 <= x0) continue;
                     if (w->y + 4 >= y1 || w->y + w->h + 4 <= y0) continue;
+                    if (w->alpha > 0 && w->alpha < 255 && g_scratch) {
+                        unsigned int *real_back = g_back;
+                        int bx0 = w->x, by0 = w->y;
+                        int bx1 = w->x + w->w + 4, by1 = w->y + w->h + 4;
+                        if (bx0 < x0) bx0 = x0;
+                        if (by0 < y0) by0 = y0;
+                        if (bx1 > x1) bx1 = x1;
+                        if (by1 > y1) by1 = y1;
+                        for (int yy = by0; yy < by1; yy++)
+                            memcpy(g_scratch + yy * g_pitch_px + bx0,
+                                   real_back + yy * g_pitch_px + bx0,
+                                   (bx1 - bx0) * 4);
+                        g_back = g_scratch;
+                        render_win_frame(w);
+                        blit_shm_to_back(w, x0, y0, x1, y1);
+                        g_back = real_back;
+                        alpha_blit_rect(g_scratch, real_back, g_pitch_px,
+                                        bx0, by0, bx1, by1, w->alpha);
+                        continue;
+                    }
                     render_win_frame(w);
                 } else {
                     if (w->x >= x1 || w->x + w->w <= x0) continue;
@@ -425,53 +476,24 @@ static void win_bbox(struct window *w, int *x0, int *y0, int *x1, int *y1) {
 #define CUR_W 12
 #define CUR_H 16
 
-static const unsigned short cursor_bits[CUR_H] = {
-    0x8000, 0xC000, 0xE000, 0xF000,
-    0xF800, 0xFC00, 0xFE00, 0xFF00,
-    0xFF80, 0xFFC0, 0xE000, 0xD000,
-    0x8800, 0x0000, 0x0000, 0x0000,
-};
-
 static int mouse_x = 0, mouse_y = 0;
 static int mouse_prev_x = -1, mouse_prev_y = -1;
-static unsigned int mouse_save[CUR_W * CUR_H];
 
 static int mouse_intersects_rect(int x0, int y0, int x1, int y1) {
     return x1 > mouse_x && x0 < mouse_x + CUR_W &&
            y1 > mouse_y && y0 < mouse_y + CUR_H;
 }
 
-/* The stdvga front buffer doubles as the render target, so the cursor
- * must save/restore the VRAM pixels directly instead of relying on a
- * separate system-RAM composition buffer. */
+/* Cursor pixels are owned by the kernel display layer.  Clients only
+ * bracket framebuffer updates with hide/sync calls. */
 static void mouse_restore(void) {
-    if (mouse_prev_x < 0) return;
-    for (int j = 0; j < CUR_H; j++) {
-        int py = mouse_prev_y + j;
-        if (py < 0 || py >= (int)g_H) continue;
-        for (int i = 0; i < CUR_W; i++) {
-            int px = mouse_prev_x + i;
-            if (px < 0 || px >= (int)g_W) continue;
-            g_fb[py * g_pitch_px + px] = mouse_save[j * CUR_W + i];
-        }
-    }
+    fb_cursor_hide();
     mouse_prev_x = -1;
     mouse_prev_y = -1;
 }
 
 static void mouse_draw(void) {
-    for (int j = 0; j < CUR_H; j++) {
-        unsigned short row = cursor_bits[j];
-        int py = mouse_y + j;
-        if (py < 0 || py >= (int)g_H) continue;
-        for (int i = 0; i < CUR_W; i++) {
-            int px = mouse_x + i;
-            if (px < 0 || px >= (int)g_W) continue;
-            int off = py * g_pitch_px + px;
-            mouse_save[j * CUR_W + i] = g_fb[off];
-            if (row & (0x8000 >> i)) g_fb[off] = 0xFFFFFF;
-        }
-    }
+    fb_cursor_sync();
     mouse_prev_x = mouse_x;
     mouse_prev_y = mouse_y;
 }
@@ -1174,6 +1196,22 @@ static void handle_inbox(void) {
             if (pipe_avail(g_inbox_rd) < rem) break;
             if (pipe_read(g_inbox_rd, (char*)&req + 8, rem) != rem) break;
             handle_resize_request(&req);
+        } else if (hdr[1] == WM_REQ_SET_ALPHA) {
+            struct wm_set_alpha_request req;
+            req.magic = hdr[0];
+            req.type = hdr[1];
+            int rem = sizeof(req) - 8;
+            if (pipe_avail(g_inbox_rd) < rem) break;
+            if (pipe_read(g_inbox_rd, (char*)&req + 8, rem) != rem) break;
+            struct window *w = find_by_shm(req.shm_name);
+            if (w && w->owner_pid == (int)req.owner_pid) {
+                w->alpha = req.alpha > 255 ? 255 : req.alpha;
+                int x0, y0, x1, y1;
+                win_bbox(w, &x0, &y0, &x1, &y1);
+                mouse_restore();
+                redraw_region(x0, y0, x1, y1);
+                mouse_draw();
+            }
         } else if (hdr[1] == WM_REQ_SET_CURSOR) {
             struct wm_set_cursor_request req;
             req.magic = hdr[0];
@@ -1219,6 +1257,10 @@ int main(int argc, char **argv) {
                                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if ((int)back_addr <= 0) { printf("wm: back mmap failed\n"); return 1; }
     g_back = (unsigned int*)back_addr;
+    unsigned int scratch_addr = mmap(0, back_size,
+                                     PROT_READ | PROT_WRITE,
+                                     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if ((int)scratch_addr > 0) g_scratch = (unsigned int*)scratch_addr;
     memset(g_back, 0, back_size);
     fill_rect_buf(g_back, 0, 0, g_W, g_H, COL_BG);
     reset_clip();
@@ -1474,7 +1516,7 @@ int main(int argc, char **argv) {
             int sx1 = cli_x(w) + dx1;
             int sy1 = cli_y(w) + dy1;
 
-            int occluded = 0;
+            int occluded = (w->alpha > 0 && w->alpha < 255) ? 1 : 0;
             for (int j = 0; j < MAX_WINDOWS; j++) {
                 struct window *o = &g_wins[j];
                 if (!o->used || o == w || o->minimized) continue;
