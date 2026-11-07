@@ -25,6 +25,7 @@ static char g_url[192] = "http://example.com/";
 static char g_page[PAGE_MAX];
 static int g_page_len = 0;
 static char g_status[64] = "NetSurf ready - type a URL and press Enter";
+static int g_url_fresh = 1;
 
 static void fill_rect(int x, int y, int w, int h, unsigned int c) {
     for (int j = 0; j < h; j++) {
@@ -170,6 +171,7 @@ static int fetch_http(const char *url, char *out, int out_size) {
 }
 
 static void load_url(void) {
+    g_url_fresh = 0;
     strcpy(g_status, "Loading...");
     g_page_len = 0;
     g_page[0] = '\0';
@@ -200,6 +202,13 @@ static void render(void) {
     fill_rect(0, 0, CW, TOOL_H, 0x2A2A3E);
     fill_rect(6, 5, CW - 74, 20, 0x080810);
     draw_text(10, 7, CW - 80, g_url, 0xFFFFFF, 0x080810);
+    int cx = 10;
+    for (const unsigned char *u = (const unsigned char*)g_url; *u; ) {
+        uint32_t cp; int n = ufont_utf8_decode(u, &cp);
+        int w = wm_font_width((int)cp); if (!w) w = 8;
+        cx += w; u += n;
+    }
+    if (cx < CW - 72) fill_rect(cx + 1, 7, 2, 16, 0xFFFFFF);
     fill_rect(CW - 62, 5, 54, 20, 0x3A6EA5);
     draw_text(CW - 52, 7, CW - 10, "Go", 0xFFFFFF, 0x3A6EA5);
 
@@ -266,6 +275,7 @@ int main(void) {
             if (ev.type == WM_EV_CLOSE_REQUEST || ev.type == WM_EV_CLOSE) return 0;
             if (ev.type == WM_EV_MOUSE_DOWN) {
                 if (ev.y < TOOL_H && ev.x >= CW - 62) load_url();
+                else if (ev.y < TOOL_H) { g_url_fresh = 1; render(); }
             } else if (ev.type == WM_EV_KEY) {
                 int k = (int)ev.code;
                 if (k == '\r' || k == '\n') load_url();
@@ -273,9 +283,13 @@ int main(void) {
                     int n = strlen(g_url);
                     if (n) g_url[n - 1] = '\0';
                     render();
-                } else if (k >= 0x20 && k < 0x7F && strlen(g_url) < sizeof(g_url) - 1) {
+                } else if (k >= 0x20 && k < 0x7F) {
+                    if (g_url_fresh) { g_url[0] = '\0'; g_url_fresh = 0; }
                     int n = strlen(g_url);
-                    g_url[n] = (char)k; g_url[n + 1] = '\0';
+                    if (n < (int)sizeof(g_url) - 1) {
+                        g_url[n] = (char)k; g_url[n + 1] = '\0';
+                    }
+                    g_status[0] = '\0';
                     render();
                 }
             }
