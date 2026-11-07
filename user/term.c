@@ -936,43 +936,6 @@ static int ime_key(int key, unsigned int mods) {
     return 0;
 }
 
-static int g_tab_gen = 0;
-
-static void term_spawn_tab(void) {
-    char shm[16], ev[16], wbuf[8], hbuf[8];
-    int gen = ++g_tab_gen;
-    snprintf(shm, sizeof(shm), "tt-%d-%d", getpid() & 0xFFFF, gen);
-    snprintf(ev, sizeof(ev), "te-%d-%d", getpid() & 0xFFFF, gen);
-    int size = shm_total_size(g_cw, g_ch);
-    if (shm_open(shm, size, 0) < 0) return;
-    pipe_unlink(ev);
-    int fds[2];
-    if (pipe_named(ev, fds) < 0) return;
-    ipc_close(fds[0]); ipc_close(fds[1]);
-
-    struct wm_request req;
-    memset(&req, 0, sizeof(req));
-    req.magic = WM_MAGIC; req.type = WM_REQ_CREATE; req.kind = WM_KIND_NORMAL;
-    req.x = 200; req.y = 100; req.w = g_cw; req.h = g_ch;
-    req.owner_pid = getpid();
-    strncpy(req.shm_name, shm, sizeof(req.shm_name) - 1);
-    strncpy(req.ev_name, ev, sizeof(req.ev_name) - 1);
-    strncpy(req.title, "Terminal", sizeof(req.title) - 1);
-    if (pipe_write(g_inbox_w, &req, sizeof(req)) != sizeof(req)) return;
-
-    snprintf(wbuf, sizeof(wbuf), "%d", g_cw);
-    snprintf(hbuf, sizeof(hbuf), "%d", g_ch);
-    char *argv[] = { "TERM", shm, wbuf, hbuf, ev, NULL };
-    struct spawn_params sp = {
-        .size = sizeof(sp), .in_fd = SPAWN_FD_INHERIT,
-        .out_fd = SPAWN_FD_INHERIT, .err_fd = SPAWN_FD_INHERIT,
-        .in_pipe = -1, .out_pipe = -1, .err_pipe = -1,
-        .in_pty = -1, .out_pty = -1, .err_pty = -1,
-        .flags = 0, .envp = 0, .out_pid = 0,
-    };
-    spawn("TERM", argv, &sp);
-}
-
 int main(int argc, char **argv) {
     if (argc < 5) {
         dprintf(2, "usage: TERM <shm_name> <w> <h> <event_pipe> [prog [args...]]\n");
@@ -1096,8 +1059,6 @@ int main(int argc, char **argv) {
                 ime_restore();
                 /* WM 主动 resize（最大化 / 还原）——重建 shm 并通知 WM 切换 */
                 term_resize((int)ev.code, (int)ev.extra);
-            } else if (ev.type == WM_EV_NEW_TAB) {
-                term_spawn_tab();
             } else if (ev.type == WM_EV_CLOSE_REQUEST) {
                 /* 用户点了关闭按钮——主动销毁窗口，然后退出 */
                 struct wm_destroy_request dr;

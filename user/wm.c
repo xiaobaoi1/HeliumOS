@@ -113,13 +113,9 @@ struct window {
     uint32_t close_tick;
     uint32_t cursor;
     uint32_t alpha;
-    int tab_seq;
 };
 
 static int g_inbox_rd = -1;
-static int g_tab_seq = 1;
-#define TAB_W 96
-#define TAB_GAP 2
 static struct window g_wins[MAX_WINDOWS];
 static int g_next_z = 1;
 static struct window *g_mouse_entered = NULL;
@@ -306,33 +302,6 @@ static void draw_ctrl_close(int bx, int by, unsigned int color) {
 
 /* ---------- 窗口装饰 ---------- */
 
-static int tab_group_of(struct window *w) {
-    if (!w || w->kind != WM_KIND_NORMAL) return 0;
-    if (strncmp(w->title, "Files", 5) == 0 || strncmp(w->title, "File", 4) == 0) return 1;
-    if (strncmp(w->title, "Terminal", 8) == 0) return 2;
-    return 0;
-}
-
-static int tab_count(int group) {
-    int n = 0;
-    for (int i = 0; i < MAX_WINDOWS; i++)
-        if (g_wins[i].used && tab_group_of(&g_wins[i]) == group) n++;
-    return n;
-}
-
-static struct window *tab_nth(int group, int n) {
-    for (int seq = 1; seq < g_tab_seq; seq++)
-        for (int i = 0; i < MAX_WINDOWS; i++) {
-            struct window *w = &g_wins[i];
-            if (w->used && tab_group_of(w) == group && w->tab_seq == seq) {
-                if (n-- == 0) return w;
-            }
-        }
-    return NULL;
-}
-
-static void draw_tab_bar(struct window *w);
-
 static void render_win_frame(struct window *w) {
     if (w->kind != WM_KIND_NORMAL) return;
 
@@ -353,8 +322,7 @@ static void render_win_frame(struct window *w) {
     int actual_ch = w->h - TITLE_H - 2 * BORDER;
     fill_rect_buf(g_back, cli_x(w), cli_y(w), actual_cw, actual_ch, 0x000000);
 
-    if (tab_group_of(w)) draw_tab_bar(w);
-    else draw_title_text(w);
+    draw_title_text(w);
 
     /* 三按钮 */
     int by = w->y + (TITLE_H - CTRL_BTN_SIZE) / 2;
@@ -400,57 +368,6 @@ static void draw_title_text(struct window *w) {
         }
         tx += gw;
         p += n;
-    }
-}
-
-static void draw_tab_text(int x, int y, int limit, const char *s) {
-    const unsigned char *p = (const unsigned char*)s;
-    while (*p) {
-        uint32_t cp;
-        int n = ufont_utf8_decode(p, &cp);
-        const uint8_t *g = wm_font_glyph((int)cp);
-        int gw = wm_font_width((int)cp);
-        if (!g) { g = wm_font_glyph('?'); gw = wm_font_width('?'); }
-        if (!gw) gw = FONT_W;
-        if (x + gw > limit) break;
-        if (g) for (int r = 0; r < FONT_H; r++) for (int j = 0; j < gw; j++) {
-            int bit = gw == 16 ? (g[r*2 + (j>>3)] & (0x80 >> (j&7)))
-                               : (g[r] & (0x80 >> j));
-            if (bit) put_pixel_buf(g_back, x + j, y + r, 0xFFFFFF);
-        }
-        x += gw; p += n;
-    }
-}
-
-static void draw_tab_bar(struct window *w) {
-    if (!wm_font_loaded()) return;
-    int group = tab_group_of(w);
-    int start = w->x + 4;
-    int limit = w->x + w->w - CTRL_BTN_MARGIN - CTRL_BTN_SIZE * 3 - CTRL_BTN_GAP * 2 - 4;
-    int ty = w->y + 2;
-    int n = tab_count(group);
-    for (int i = 0; i < n; i++) {
-        struct window *t = tab_nth(group, i);
-        if (!t) break;
-        int x = start + i * (TAB_W + TAB_GAP);
-        if (x + TAB_W > limit) break;
-        fill_rect_buf(g_back, x, ty, TAB_W, TITLE_H - 4,
-                      t == w ? 0x3A6EA5 : 0x2A3A50);
-        char label[40];
-        if (group == 2) snprintf(label, sizeof(label), "Term %d", i + 1);
-        else snprintf(label, sizeof(label), "%s", t->title);
-        draw_tab_text(x + 4, w->y + (TITLE_H - FONT_H) / 2,
-                      x + TAB_W - 16, label);
-        for (int k = 0; k < 10; k++) {
-            put_pixel_buf(g_back, x + TAB_W - 12 + k, w->y + 6 + k, 0xE0E0E0);
-            put_pixel_buf(g_back, x + TAB_W - 2 - k, w->y + 6 + k, 0xE0E0E0);
-        }
-    }
-    int px = start + n * (TAB_W + TAB_GAP);
-    if (px + 18 <= limit) {
-        fill_rect_buf(g_back, px, ty, 18, TITLE_H - 4, 0x2A3A50);
-        fill_rect_buf(g_back, px + 8, w->y + 6, 2, 12, 0xFFFFFF);
-        fill_rect_buf(g_back, px + 3, w->y + 11, 12, 2, 0xFFFFFF);
     }
 }
 
@@ -642,56 +559,6 @@ static void push_window_list(void) {
 
 /* ==================== 窗口创建/销毁 ==================== */
 
-static void activate_tab(struct window *w) {
-    int g = tab_group_of(w);
-    if (!g) { set_focus(w); return; }
-    struct window *old = g_focus;
-    int ox = (old && tab_group_of(old) == g) ? old->x : w->x;
-    int oy = (old && tab_group_of(old) == g) ? old->y : w->y;
-    for (int i = 0; i < MAX_WINDOWS; i++) {
-        struct window *o = &g_wins[i];
-        if (!o->used || tab_group_of(o) != g) continue;
-        if (o == w) {
-            o->minimized = 0;
-            o->x = ox; o->y = oy;
-            o->z = g_next_z++;
-        } else {
-            o->minimized = 1;
-        }
-    }
-    set_focus(w);
-    mouse_restore();
-    redraw_region(0, 0, g_W, g_H);
-    mouse_draw();
-    push_window_list();
-}
-
-static int tab_hit_test(struct window *w, int mx, int my,
-                        struct window **out, int *close_hit, int *plus_hit) {
-    if (!w || !tab_group_of(w)) return 0;
-    if (my < w->y || my >= w->y + TITLE_H) return 0;
-    int group = tab_group_of(w);
-    int start = w->x + 4;
-    int limit = w->x + w->w - CTRL_BTN_MARGIN - CTRL_BTN_SIZE * 3 - CTRL_BTN_GAP * 2 - 4;
-    int n = tab_count(group);
-    for (int i = 0; i < n; i++) {
-        int x = start + i * (TAB_W + TAB_GAP);
-        if (x + TAB_W > limit) break;
-        if (mx >= x && mx < x + TAB_W) {
-            *out = tab_nth(group, i);
-            *close_hit = mx >= x + TAB_W - 14;
-            *plus_hit = 0;
-            return *out != NULL;
-        }
-    }
-    int px = start + n * (TAB_W + TAB_GAP);
-    if (px + 18 <= limit && mx >= px && mx < px + 18) {
-        *out = w; *close_hit = 0; *plus_hit = 1;
-        return 1;
-    }
-    return 0;
-}
-
 static struct window *make_app_window(struct wm_request *req) {
     if (req->w == 0 || req->h == 0) return NULL;
     if (req->w > 2048 || req->h > 1536) return NULL;
@@ -719,7 +586,6 @@ static struct window *make_app_window(struct wm_request *req) {
     w->max_h = req->max_h;
     strncpy(w->title, req->title, sizeof(w->title) - 1);
     strncpy(w->shm_name, req->shm_name, sizeof(w->shm_name) - 1);
-    w->tab_seq = g_tab_seq++;
 
     if (req->kind == WM_KIND_NORMAL) {
         w->w = req->w + 2 * BORDER;
@@ -902,21 +768,11 @@ static void destroy_window(struct window *w) {
     }
     if (w->shm_name[0]) shm_unlink(w->shm_name);
 
-    int tab_group = tab_group_of(w);
     w->used = 0;
     w->event_w = -1;
     if (g_focus == w) set_focus(NULL);
     if (g_mouse_entered == w) g_mouse_entered = NULL;
     if (g_dragging == w) g_dragging = NULL;
-    if (tab_group) {
-        struct window *next = tab_nth(tab_group, 0);
-        if (next) {
-            next->minimized = 0;
-            next->x = x0; next->y = y0;
-            next->z = g_next_z++;
-            set_focus(next);
-        }
-    }
     forget_window_buttons(w);
 
     mouse_restore();
@@ -1133,24 +989,6 @@ static void handle_mouse_press(int mx, int my,
         }
 
         /* 标题栏拖动 */
-        /* tabs: switch / close / new */
-        if (my >= hit->y && my < hit->y + TITLE_H && tab_group_of(hit)) {
-            struct window *clicked = NULL;
-            int close_hit = 0, plus_hit = 0;
-            if (tab_hit_test(hit, mx, my, &clicked, &close_hit, &plus_hit)) {
-                if (plus_hit) {
-                    send_event(hit, WM_EV_NEW_TAB, 0, 0, 0, 0);
-                } else if (clicked && close_hit) {
-                    send_event(clicked, WM_EV_CLOSE_REQUEST, 0, 0, 0, 0);
-                    clicked->closing = 1;
-                    clicked->close_tick = g_wm_tick;
-                } else if (clicked) {
-                    activate_tab(clicked);
-                }
-                return;
-            }
-        }
-
         if (my >= hit->y && my < hit->y + TITLE_H) {
             if (!hit->maximized) {
                 *drag_win = hit;
