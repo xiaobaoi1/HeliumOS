@@ -46,6 +46,7 @@ fd_t fs_open(const char *path, int flags) {
     h->fs_type = rp.vol->fs_type;
     h->obj_type = FS_OBJ_FILE;
     h->offset = 0;
+    h->open_flags = (uint8_t)(flags & (FS_O_RDONLY | FS_O_WRONLY | FS_O_RDWR | FS_O_APPEND));
 
     switch (rp.vol->fs_type) {
         case VOL_FS_FAT32: {
@@ -84,6 +85,10 @@ fd_t fs_open(const char *path, int flags) {
 int fs_read(fd_t fd, void *buf, uint32_t n) {
     struct fs_handle *h = fs_get(fd);
     if (!h || h->obj_type != FS_OBJ_FILE) return EINVAL;
+
+    int mode = h->open_flags & 0x03;
+    if (mode != FS_O_RDONLY && mode != FS_O_RDWR) return EBADF;
+
     if (!buf || n == 0) return EINVAL;
 
     /* EOF */
@@ -149,14 +154,24 @@ int fs_close(fd_t fd) {
 int fs_write(fd_t fd, const void *buf, uint32_t n) {
     struct fs_handle *h = fs_get(fd);
     if (!h || h->obj_type != FS_OBJ_FILE) return EINVAL;
-    if (!buf || n == 0) return EINVAL;
 
-    uint32_t old_fc = h->u.fat32_file.first_cluster;
+    int mode = h->open_flags & 0x03;
+    if (mode != FS_O_WRONLY && mode != FS_O_RDWR) return EBADF;
+
+    if (!buf || n == 0) return EINVAL;
 
     switch (h->fs_type) {
         case VOL_FS_FAT32: {
             struct fat32_volume *fvol = (struct fat32_volume*)h->vol->fs_private;
             if (!fvol) return EINVAL;
+
+            /* O_APPEND：每次写前定位到文件末尾 */
+            if (h->open_flags & FS_O_APPEND) {
+                h->offset = h->u.fat32_file.file_size;
+            }
+
+            uint32_t old_fc = h->u.fat32_file.first_cluster;
+
             int r = fat32_write_file(fvol, &h->u.fat32_file,
                                      (const uint8_t*)buf, h->offset, n);
             if (r > 0) {
@@ -182,37 +197,25 @@ int fs_write(fd_t fd, const void *buf, uint32_t n) {
     }
 }
 
-static void fat32_decode_time(uint16_t d, uint16_t t, struct fs_time *out) {
-    out->year   = (uint16_t)(1980 + ((d >> 9) & 0x7F));
-    out->month  = (d >> 5) & 0x0F;
-    out->day    = d & 0x1F;
-    out->hour   = (t >> 11) & 0x1F;
-    out->minute = (t >> 5) & 0x3F;
-    out->second = (uint8_t)((t & 0x1F) * 2);
-    out->reserved = 0;
-}
-
 int fs_fstat(fd_t fd, struct fstat_buf *out) {
     struct fs_handle *h = fs_get(fd);
     if (!h || !out) return EINVAL;
 
-    if (h->obj_type == FS_OBJ_FILE) {
-        out->size = h->u.fat32_file.file_size;
-        out->attributes = 0x20;
-        fat32_decode_time(h->u.fat32_file.create_date,
-                          h->u.fat32_file.create_time, &out->ctime);
-        fat32_decode_time(h->u.fat32_file.mod_date,
-                          h->u.fat32_file.mod_time, &out->mtime);
-    } else if (h->obj_type == FS_OBJ_DIR) {
-        out->size = 0;
-        out->attributes = 0x10;
-        memset(&out->ctime, 0, sizeof(out->ctime));
-        memset(&out->mtime, 0, sizeof(out->mtime));
-    } else {
-        return EINVAL;
+    memset(out, 0, sizeof(*out));
+
+    switch (h->fs_type) {
+        case VOL_FS_FAT32:
+            if (h->obj_type == FS_OBJ_FILE)
+                return fat32_fstat_file(&h->u.fat32_file, out);
+            if (h->obj_type == FS_OBJ_DIR) {
+                out->size = 0;
+                out->attributes = FS_ATTR_DIR;
+                return OK;
+            }
+            return EINVAL;
+        default:
+            return ENOSYS;
     }
-    memset(out->reserved, 0, sizeof(out->reserved));
-    return OK;
 }
 
 /* ---------- 目录 ---------- */
@@ -228,6 +231,7 @@ fd_t fs_opendir(const char *path) {
     h->fs_type = rp.vol->fs_type;
     h->obj_type = FS_OBJ_DIR;
     h->offset = 0;
+    h->open_flags = FS_O_RDONLY;   /* 目录只读 */
 
     switch (rp.vol->fs_type) {
         case VOL_FS_FAT32: {
@@ -398,6 +402,12 @@ fd_t fs_dup_handle(struct task *src_task, fd_t src_fd, struct task *dst_task) {
     }
     if (new_fd == FD_INVALID) return FD_INVALID;
 
+    /* 前提：struct fs_handle 是纯数据（当前 FAT32 满足——全是值，
+     * 无指针、无引用计数）。
+     * 若将来引入带指针/引用计数的 FS（如 RAMFS 的 inode 引用），
+     * 此整块拷贝会破坏引用计数，必须改为 per-FS 的 dup 回调，
+     * 或只拷贝 {obj_type, fs_type, open_flags, offset, vol, fm}
+     * 并让新 FS 在 open 路径重建自己的 priv。 */
     dst_task->fs_handles[new_fd] = src_task->fs_handles[src_fd];
     if (dst_task->fs_handles[new_fd].fm) {
         file_map_ref(dst_task->fs_handles[new_fd].fm);

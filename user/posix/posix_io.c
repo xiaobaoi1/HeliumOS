@@ -45,6 +45,7 @@ int open(const char *path, int flags, ...) {
     else if ((flags & 3) == O_RDWR)   helio_flags |= FS_O_RDWR;
 
     if (flags & O_CREAT)  helio_flags |= FS_O_CREAT;
+    if (flags & O_APPEND) helio_flags |= FS_O_APPEND;
     /* 不在标志里带 O_TRUNC，手动处理更稳妥 */
     // if (flags & O_TRUNC)  helio_flags |= FS_O_TRUNC;
 

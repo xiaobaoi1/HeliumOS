@@ -238,6 +238,7 @@ static inline int __syscall6(int num, int a, int b, int c, int d, int e, int f) 
 #define FS_O_RDWR     0x03
 #define FS_O_CREAT    0x04
 #define FS_O_TRUNC    0x08
+#define FS_O_APPEND   0x10
 
 /* ---------- dirent（和内核一致） ---------- */
 #define DIRENT_NAME_MAX  256

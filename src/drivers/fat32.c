@@ -6,6 +6,7 @@
 #include <stddef.h>
 #include <path.h>
 #include <rtc.h>
+#include <fs.h>
 
 #define FAT32_MAX_VOLUMES 4
 
@@ -1816,5 +1817,25 @@ int fat32_rename(struct fat32_volume *vol, const char *old_path,
     entries[old_idx].name[0] = 0xE5;
     ata_write_sector(vol->dev, old_lba, sector);
     ata_flush(vol->dev);
+    return OK;
+}
+
+static void fat32_decode_time(uint16_t d, uint16_t t, struct fs_time *out) {
+    out->year   = (uint16_t)(1980 + ((d >> 9) & 0x7F));
+    out->month  = (d >> 5) & 0x0F;
+    out->day    = d & 0x1F;
+    out->hour   = (t >> 11) & 0x1F;
+    out->minute = (t >> 5) & 0x3F;
+    out->second = (uint8_t)((t & 0x1F) * 2);
+    out->reserved = 0;
+}
+
+int fat32_fstat_file(struct fat32_file *file, struct fstat_buf *out) {
+    if (!file || !out) return EINVAL;
+    out->size = file->file_size;
+    out->attributes = FS_ATTR_FILE;   /* ARCHIVE */
+    fat32_decode_time(file->create_date, file->create_time, &out->ctime);
+    fat32_decode_time(file->mod_date,    file->mod_time,    &out->mtime);
+    memset(out->reserved, 0, sizeof(out->reserved));
     return OK;
 }

@@ -148,4 +148,9 @@ int fat32_rmdir(struct fat32_volume *vol, const char *path);
 int fat32_rename(struct fat32_volume *vol, const char *old_path,
                  const char *new_path, uint32_t *out_old_first_cluster);
 
+struct fstat_buf;   /* 前向声明 */
+
+/* 填充文件的 fstat 信息（含 FAT32 时间解码）。out 由调用者清零。 */
+int fat32_fstat_file(struct fat32_file *file, struct fstat_buf *out);
+
 #endif

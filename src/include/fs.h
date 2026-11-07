@@ -17,10 +17,17 @@ struct file_mapping;    /* 前向声明，避免包含 file_map.h */
 #define FS_O_RDWR        0x03
 #define FS_O_CREAT       0x04
 #define FS_O_TRUNC       0x08
+#define FS_O_APPEND      0x10
 
 /* 对象类型 */
 #define FS_OBJ_FILE      1
 #define FS_OBJ_DIR       2
+
+/* 通用属性编码（值沿用 FAT32：0x10 = 目录，0x20 = 归档）。
+ * 用户态代码长期依赖 0x10 判断目录，此处保留值不变，
+ * 只把字面量收进宏，将来若换编码只改这两行。 */
+#define FS_ATTR_DIR      0x10
+#define FS_ATTR_FILE     0x20
 
 typedef int fd_t;
 
@@ -30,7 +37,7 @@ struct fs_handle {
     uint8_t         used;
     uint8_t         obj_type;
     uint8_t         fs_type;
-    uint8_t         reserved;
+    uint8_t         open_flags;
     uint32_t        offset;
     struct volume  *vol;
     struct file_mapping *fm;   /* 新增：page cache 引用；FS_OBJ_DIR 时为 NULL */
