@@ -142,7 +142,7 @@ USER_APPS = shell idle test testkill sleeper argtest test_write \
 			test_createwin test_ansi\
 			dhcpclient desktop test_raw kilo test_malloc_loop \
 			grep find hexdump test_mui_draw test_mui_button test_mui_form \
-			test_dl test_libc test_malloc_big http about photos calc netsurf 7z 7zgui
+			test_dl test_libc test_malloc_big http about photos calc netsurf 7zgui
 
 # 需要 POSIX 兼容层的应用
 PHOTO_PY ?= /mnt/d/Local/Python314/python.exe
@@ -395,7 +395,6 @@ EXTRA_OBJS_about   := $(BUILD_DIR)/wm_font.o $(BUILD_DIR)/unicode_font.o
 EXTRA_OBJS_photos  := $(BUILD_DIR)/image.o
 EXTRA_OBJS_calc    := $(BUILD_DIR)/wm_font.o $(BUILD_DIR)/unicode_font.o $(BUILD_DIR)/math_lib.o
 EXTRA_OBJS_netsurf := $(BUILD_DIR)/wm_font.o $(BUILD_DIR)/unicode_font.o $(BUILD_DIR)/bearssl/libbearssl.a
-EXTRA_OBJS_7z      := $(SEVENZ_OBJS)
 EXTRA_OBJS_desktop := $(BUILD_DIR)/wm_font.o $(METHYLUI_OBJS) $(BUILD_DIR)/ime_dict.o
 EXTRA_OBJS_test_mui_draw := $(METHYLUI_OBJS)
 EXTRA_OBJS_test_mui_button := $(METHYLUI_OBJS)

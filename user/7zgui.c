@@ -1,4 +1,4 @@
-/* 7zgui.c - 7-Zip GUI（文件管理器风格，带 Deflate 压缩与下拉菜单） */
+/* 7zgui.c - 7-Zip GUI（带 Deflate 压缩、下拉菜单、滚动条与最大化自适应） */
 #include "syscall.h"
 #include "stdio.h"
 #include "stdlib.h"
@@ -23,6 +23,7 @@
 #define PATH_H       22
 #define ROW_H        20
 #define STATUS_H     28
+#define SCROLL_W     8
 #define MAX_ENTRIES  512
 
 #define COL_BG        0x1E1E28
@@ -58,6 +59,8 @@ struct app {
     int win_w, win_h;
 
     int  shm_id;
+    char shm_name[24];
+    uint32_t map_size;
     struct shm_hdr *shm;
     unsigned int   *pixels;
 
@@ -69,6 +72,13 @@ struct app {
     int n_entries;
     int sel;
     int scroll;
+    int scroll_dragging;
+    int drag_offset;
+    int scroll_hover;
+
+    int esc_state;
+    int esc_len;
+    char esc_buf[8];
 
     int  in_archive;
     char archive_path[256];
@@ -90,6 +100,7 @@ static void redraw_all(struct app *a);
 static void do_extract(struct app *a);
 static void on_double_click(struct app *a, int idx);
 static void do_open_archive(struct app *a, const char *path);
+static void handle_resize(struct app *a, int new_w, int new_h);
 
 /* ==================== 基础绘图 ==================== */
 static void fill_rect(unsigned int *buf, int bw, int bh,
@@ -843,6 +854,20 @@ static void do_create_zip(struct app *a, int is_7z) {
     snprintf(a->status, sizeof(a->status), "%s: %s", r == 0 ? "Created" : "Failed", name);
 }
 
+static void ensure_sel_visible(struct app *a) {
+    if (a->sel < 0) return;
+    int list_y = TOOLBAR_H + PATH_H;
+    int list_h = a->win_h - list_y - STATUS_H;
+    int visible = list_h / ROW_H;
+    if (visible < 1) visible = 1;
+
+    if (a->sel < a->scroll) {
+        a->scroll = a->sel;
+    } else if (a->sel >= a->scroll + visible) {
+        a->scroll = a->sel - visible + 1;
+    }
+}
+
 static void draw_ui(struct app *a) {
     unsigned int *buf = a->pixels;
     int bw = a->win_w, bh = a->win_h;
@@ -898,7 +923,7 @@ static void draw_ui(struct app *a) {
 
         struct file_entry *e = &a->entries[idx];
         uint32_t bgc = (idx == a->sel) ? COL_ROW_SEL : ((i & 1) ? COL_ROW_ODD : COL_ROW_EVEN);
-        fill_rect(buf, bw, bh, 0, ry, bw, ROW_H, bgc);
+        fill_rect(buf, bw, bh, 0, ry, bw - SCROLL_W, ROW_H, bgc);
 
         int icon_x = 8;
         if (e->is_dir) {
@@ -920,6 +945,19 @@ static void draw_ui(struct app *a) {
         }
     }
 
+    /* 绘制滚动条 */
+    if (a->n_entries > visible) {
+        int sb_x = bw - SCROLL_W;
+        fill_rect(buf, bw, bh, sb_x, list_y, SCROLL_W, list_h, 0x14141A);
+        int thumb_h = list_h * visible / a->n_entries;
+        if (thumb_h < 12) thumb_h = 12;
+        int max_scroll = a->n_entries - visible;
+        int range = list_h - thumb_h;
+        int thumb_y = list_y + (range * a->scroll / max_scroll);
+        uint32_t thumb_color = a->scroll_dragging ? 0x8A8AAE : (a->scroll_hover ? 0x6A6A8E : 0x5A5A7E);
+        fill_rect(buf, bw, bh, sb_x + 1, thumb_y, SCROLL_W - 2, thumb_h, thumb_color);
+    }
+
     if (a->menu_open) {
         int mx = 250, my = TOOLBAR_H;
         fill_rect(buf, bw, bh, mx, my, 100, 56, COL_MENU_BG);
@@ -938,6 +976,64 @@ static void draw_ui(struct app *a) {
 static void redraw_all(struct app *a) {
     draw_ui(a);
     mark_dirty(a, 0, 0, a->win_w, a->win_h);
+}
+
+static void handle_resize(struct app *a, int new_w, int new_h) {
+    if (new_w <= 0 || new_h <= 0) return;
+    if (new_w > 2048 || new_h > 1536) return;
+    if (new_w == a->win_w && new_h == a->win_h) return;
+
+    static int shm_gen = 0;
+    char new_shm[24];
+    snprintf(new_shm, sizeof(new_shm), "shm%d_%d", getpid(), ++shm_gen);
+
+    int shm_size = (int)shm_total_size(new_w, new_h);
+    int shm_id = shm_open(new_shm, shm_size, 0);
+    if (shm_id < 0) return;
+
+    unsigned int addr = mmap(0, shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_id, 0);
+    if ((int)addr <= 0) return;
+
+    struct shm_hdr *new_hdr = (struct shm_hdr*)addr;
+    unsigned int *new_pixels = (unsigned int*)(addr + SHM_HDR_SIZE);
+    
+    new_hdr->counter = 0;
+    new_hdr->cur_x0 = SHM_DIRTY_EMPTY; new_hdr->cur_y0 = 0;
+    new_hdr->cur_x1 = 0; new_hdr->cur_y1 = 0;
+    new_hdr->pub_x0 = SHM_DIRTY_EMPTY; new_hdr->pub_y0 = 0;
+    new_hdr->pub_x1 = 0; new_hdr->pub_y1 = 0;
+
+    struct wm_resize_request req;
+    memset(&req, 0, sizeof(req));
+    req.magic = WM_MAGIC;
+    req.type = WM_REQ_RESIZE;
+    req.owner_pid = getpid();
+    strncpy(req.old_shm, a->shm_name, sizeof(req.old_shm) - 1);
+    strncpy(req.new_shm, new_shm, sizeof(req.new_shm) - 1);
+    req.new_w = new_w;
+    req.new_h = new_h;
+    pipe_write(a->wm_fd, &req, sizeof(req));
+
+    munmap((unsigned int)a->shm, a->map_size);
+
+    a->win_w = new_w;
+    a->win_h = new_h;
+    a->shm_id = shm_id;
+    a->shm = new_hdr;
+    a->pixels = new_pixels;
+    a->map_size = shm_size;
+    strncpy(a->shm_name, new_shm, sizeof(a->shm_name) - 1);
+
+    int list_h = a->win_h - TOOLBAR_H - PATH_H - STATUS_H;
+    int visible = list_h / ROW_H;
+    if (visible < 1) visible = 1;
+    int maxscroll = a->n_entries - visible;
+    if (maxscroll < 0) maxscroll = 0;
+    if (a->scroll > maxscroll) a->scroll = maxscroll;
+
+    redraw_all(a);
+    mark_dirty(a, 0, 0, a->win_w, a->win_h);
+    publish(a);
 }
 
 static void read_dir(struct app *a) {
@@ -986,6 +1082,14 @@ static void read_dir(struct app *a) {
             *prev = tmp;
         }
     }
+    
+    int list_h = a->win_h - TOOLBAR_H - PATH_H - STATUS_H;
+    int visible = list_h / ROW_H;
+    if (visible < 1) visible = 1;
+    int maxscroll = a->n_entries - visible;
+    if (maxscroll < 0) maxscroll = 0;
+    if (a->scroll > maxscroll) a->scroll = maxscroll;
+
     snprintf(a->status, sizeof(a->status), "%s  -  %d entries", a->cwd, a->n_entries);
 }
 
@@ -1097,6 +1201,10 @@ static void on_double_click(struct app *a, int idx) {
 /* ==================== 事件处理 ==================== */
 static void handle_event(struct app *a, struct wm_event *ev) {
     switch (ev->type) {
+    case WM_EV_RESIZE:
+        handle_resize(a, (int)ev->code, (int)ev->extra);
+        break;
+
     case WM_EV_MOUSE_DOWN:
         if (ev->code != WM_BTN_LEFT) break;
         {
@@ -1150,7 +1258,34 @@ static void handle_event(struct app *a, struct wm_event *ev) {
 
             int list_y = TOOLBAR_H + PATH_H;
             int list_h = a->win_h - list_y - STATUS_H;
-            if (my >= list_y && my < list_y + list_h) {
+            int visible = list_h / ROW_H;
+            int sb_x = a->win_w - SCROLL_W;
+
+            if (mx >= sb_x && my >= list_y && my < list_y + list_h) {
+                if (a->n_entries > visible) {
+                    int thumb_h = list_h * visible / a->n_entries;
+                    if (thumb_h < 12) thumb_h = 12;
+                    int max_scroll = a->n_entries - visible;
+                    int range = list_h - thumb_h;
+                    int thumb_y = list_y + (range * a->scroll / max_scroll);
+                    
+                    if (my >= thumb_y && my < thumb_y + thumb_h) {
+                        a->scroll_dragging = 1;
+                        a->drag_offset = my - thumb_y;
+                    } else if (my < thumb_y) {
+                        a->scroll -= visible - 1;
+                        if (a->scroll < 0) a->scroll = 0;
+                        redraw_all(a);
+                    } else {
+                        a->scroll += visible - 1;
+                        if (a->scroll > max_scroll) a->scroll = max_scroll;
+                        redraw_all(a);
+                    }
+                }
+                return;
+            }
+
+            if (my >= list_y && my < list_y + list_h && mx < sb_x) {
                 int row = (my - list_y) / ROW_H;
                 int idx = a->scroll + row;
                 if (idx >= 0 && idx < a->n_entries) {
@@ -1161,20 +1296,142 @@ static void handle_event(struct app *a, struct wm_event *ev) {
             }
         }
         break;
+
+    case WM_EV_MOUSE_MOVE:
+        {
+            int list_y = TOOLBAR_H + PATH_H;
+            int list_h = a->win_h - list_y - STATUS_H;
+            int visible = list_h / ROW_H;
+            int sb_x = a->win_w - SCROLL_W;
+
+            if (a->scroll_dragging) {
+                if (a->n_entries > visible) {
+                    int thumb_h = list_h * visible / a->n_entries;
+                    if (thumb_h < 12) thumb_h = 12;
+                    int range = list_h - thumb_h;
+                    if (range > 0) {
+                        int my = ev->y - list_y - a->drag_offset;
+                        if (my < 0) my = 0;
+                        if (my > range) my = range;
+                        a->scroll = my * (a->n_entries - visible) / range;
+                        redraw_all(a);
+                    }
+                }
+            } else {
+                if (ev->x >= sb_x && ev->y >= list_y && ev->y < list_y + list_h && a->n_entries > visible) {
+                    if (!a->scroll_hover) { a->scroll_hover = 1; redraw_all(a); }
+                } else {
+                    if (a->scroll_hover) { a->scroll_hover = 0; redraw_all(a); }
+                }
+            }
+        }
+        break;
+
+    case WM_EV_MOUSE_UP:
+        if (a->scroll_dragging) {
+            a->scroll_dragging = 0;
+            redraw_all(a);
+        }
+        break;
+
     case WM_EV_WHEEL:
         if (a->menu_open) break;
-        a->scroll -= ev->code / 120;
-        if (a->scroll < 0) a->scroll = 0;
-        { int maxscroll = a->n_entries - (a->win_h - TOOLBAR_H - PATH_H - STATUS_H) / ROW_H;
-          if (maxscroll < 0) maxscroll = 0; if (a->scroll > maxscroll) a->scroll = maxscroll; }
-        redraw_all(a);
+        {
+            int list_h = a->win_h - TOOLBAR_H - PATH_H - STATUS_H;
+            int visible = list_h / ROW_H;
+            int maxscroll = a->n_entries - visible;
+            if (maxscroll < 0) maxscroll = 0;
+
+            a->scroll -= ev->code / 120;
+            if (a->scroll < 0) a->scroll = 0;
+            if (a->scroll > maxscroll) a->scroll = maxscroll;
+            redraw_all(a);
+        }
         break;
-    case WM_EV_CLOSE_REQUEST: _exit(0); break;
+
+    case WM_EV_CLOSE_REQUEST:
+        _exit(0);
+        break;
+
     case WM_EV_KEY:
-        if (ev->code == 27) { if (a->menu_open) { a->menu_open = 0; redraw_all(a); } else _exit(0); }
-        else if (ev->code == 0x151) { if (a->sel < a->n_entries - 1) a->sel++; redraw_all(a); }
-        else if (ev->code == 0x150) { if (a->sel > 0) a->sel--; redraw_all(a); }
-        else if (ev->code == '\n' && a->sel >= 0) on_double_click(a, a->sel);
+        if (a->esc_state) {
+            if (a->esc_state == 1) {
+                if (ev->code == '[') {
+                    a->esc_state = 2;
+                    a->esc_len = 1;
+                    a->esc_buf[0] = '[';
+                    a->esc_buf[1] = '\0';
+                    return;
+                }
+                a->esc_state = 0;
+            } else {
+                if (a->esc_len < (int)sizeof(a->esc_buf) - 1) {
+                    a->esc_buf[a->esc_len++] = (char)ev->code;
+                    a->esc_buf[a->esc_len] = '\0';
+                }
+                if (ev->code == '~' || (ev->code >= 'A' && ev->code <= 'Z')) {
+                    a->esc_state = 0;
+                    if (strcmp(a->esc_buf, "[A") == 0) { /* Up */
+                        if (a->sel > 0) a->sel--;
+                        else if (a->sel < 0 && a->n_entries > 0) a->sel = 0;
+                        ensure_sel_visible(a);
+                        redraw_all(a);
+                    } else if (strcmp(a->esc_buf, "[B") == 0) { /* Down */
+                        if (a->sel < a->n_entries - 1) a->sel++;
+                        else if (a->sel < 0 && a->n_entries > 0) a->sel = 0;
+                        ensure_sel_visible(a);
+                        redraw_all(a);
+                    } else if (strcmp(a->esc_buf, "[5~") == 0) { /* Page Up */
+                        int list_h = a->win_h - TOOLBAR_H - PATH_H - STATUS_H;
+                        int visible = list_h / ROW_H;
+                        a->sel -= visible - 1;
+                        if (a->sel < 0) a->sel = 0;
+                        if (a->n_entries > 0 && a->sel >= a->n_entries) a->sel = a->n_entries - 1;
+                        ensure_sel_visible(a);
+                        redraw_all(a);
+                    } else if (strcmp(a->esc_buf, "[6~") == 0) { /* Page Down */
+                        int list_h = a->win_h - TOOLBAR_H - PATH_H - STATUS_H;
+                        int visible = list_h / ROW_H;
+                        a->sel += visible - 1;
+                        if (a->sel >= a->n_entries) a->sel = a->n_entries - 1;
+                        if (a->sel < 0) a->sel = 0;
+                        ensure_sel_visible(a);
+                        redraw_all(a);
+                    } else if (strcmp(a->esc_buf, "[H") == 0) { /* Home */
+                        if (a->n_entries > 0) a->sel = 0;
+                        ensure_sel_visible(a);
+                        redraw_all(a);
+                    } else if (strcmp(a->esc_buf, "[F") == 0) { /* End */
+                        if (a->n_entries > 0) a->sel = a->n_entries - 1;
+                        ensure_sel_visible(a);
+                        redraw_all(a);
+                    }
+                    return;
+                }
+                return;
+            }
+        }
+
+        if (ev->code == 27) {
+            a->esc_state = 1;
+            a->esc_len = 0;
+            a->esc_buf[0] = '\0';
+            return;
+        }
+
+        if (ev->code == '\r' || ev->code == '\n') {
+            if (a->sel >= 0) on_double_click(a, a->sel);
+        } else if (ev->code == 0x151) { /* Down */
+            if (a->sel < a->n_entries - 1) a->sel++;
+            else if (a->sel < 0 && a->n_entries > 0) a->sel = 0;
+            ensure_sel_visible(a);
+            redraw_all(a);
+        } else if (ev->code == 0x150) { /* Up */
+            if (a->sel > 0) a->sel--;
+            else if (a->sel < 0 && a->n_entries > 0) a->sel = 0;
+            ensure_sel_visible(a);
+            redraw_all(a);
+        }
         break;
     }
 }
@@ -1187,15 +1444,17 @@ int main(int argc, char **argv) {
     if (getcwd(a.cwd, sizeof(a.cwd)) < 0) strcpy(a.cwd, "/");
 
     int pid = getpid();
-    char shm_name[16], ev_name[16];
-    snprintf(shm_name, sizeof(shm_name), "shm%d", pid);
-    snprintf(ev_name,  sizeof(ev_name),  "ev%d",  pid);
+    snprintf(a.shm_name, sizeof(a.shm_name), "shm%d", pid);
+    char ev_name[16];
+    snprintf(ev_name, sizeof(ev_name), "ev%d", pid);
 
     int shm_size = (int)shm_total_size(a.win_w, a.win_h);
-    a.shm_id = shm_open(shm_name, (unsigned int)shm_size, 0);
+    a.shm_id = shm_open(a.shm_name, (unsigned int)shm_size, 0);
     unsigned int addr = mmap(0, (unsigned int)shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, a.shm_id, 0);
     a.shm = (struct shm_hdr *)addr;
     a.pixels = (unsigned int *)(addr + SHM_HDR_SIZE);
+    a.map_size = shm_size;
+
     a.shm->counter = 0; a.shm->cur_x0 = SHM_DIRTY_EMPTY;
     a.shm->cur_y0 = 0; a.shm->cur_x1 = 0; a.shm->cur_y1 = 0;
     a.shm->pub_x0 = SHM_DIRTY_EMPTY; a.shm->pub_y0 = 0; a.shm->pub_x1 = 0; a.shm->pub_y1 = 0;
@@ -1209,10 +1468,12 @@ int main(int argc, char **argv) {
     struct wm_request req; memset(&req, 0, sizeof(req));
     req.magic = WM_MAGIC; req.type  = WM_REQ_CREATE; req.kind  = WM_KIND_NORMAL;
     req.x = 120; req.y = 80; req.w = (uint32_t)a.win_w; req.h = (uint32_t)a.win_h;
-    req.min_w = (uint32_t)a.win_w; req.min_h = (uint32_t)a.win_h;
-    req.max_w = (uint32_t)a.win_w; req.max_h = (uint32_t)a.win_h;
+    req.min_w = 300;
+    req.min_h = 200;
+    req.max_w = 0;
+    req.max_h = 0;
     req.owner_pid = (uint32_t)pid;
-    strncpy(req.shm_name, shm_name, sizeof(req.shm_name) - 1);
+    strncpy(req.shm_name, a.shm_name, sizeof(req.shm_name) - 1);
     strncpy(req.ev_name,  ev_name,  sizeof(req.ev_name)  - 1);
     strcpy(req.title, "7-Zip");
     pipe_write(a.wm_fd, &req, sizeof(req));
