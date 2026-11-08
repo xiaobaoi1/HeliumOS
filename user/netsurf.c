@@ -30,6 +30,13 @@ static unsigned int g_css_fg = 0xE0E0E0;
 static unsigned int g_css_bg = 0x101018;
 static int g_url_fresh = 1;
 
+static unsigned int g_next_port = 43211;
+static unsigned int next_port(void) {
+    unsigned int p = g_next_port++;
+    if (g_next_port >= 44000) g_next_port = 43211;
+    return p;
+}
+
 static void fill_rect(int x, int y, int w, int h, unsigned int c) {
     for (int j = 0; j < h; j++) {
         int py = y + j;
@@ -155,6 +162,8 @@ static void lax_append(const br_x509_class **ctx, const unsigned char *buf, size
 static void lax_end_cert(const br_x509_class **ctx) {
     struct lax_x509 *x = (struct lax_x509*)ctx;
     x->xc->vtable->end_cert(&x->xc->vtable);
+    dprintf(2, "[X509] end_cert err=%u pkey_type=%u\n",
+            x->xc->err, x->xc->pkey.key_type);
 }
 static unsigned lax_end_chain(const br_x509_class **ctx) {
     struct lax_x509 *x = (struct lax_x509*)ctx;
@@ -188,6 +197,26 @@ static int tls_write(void *ctx, const unsigned char *buf, size_t len) {
     }
 }
 
+static void set_x509_time(br_x509_minimal_context *xc, const struct rtc_time *rt) {
+    int32_t y = rt->year, m = rt->month, d = rt->day;
+    if (y < 2020 || y > 2100 || m < 1 || m > 12 || d < 1 || d > 31) {
+        y = 2025; m = 1; d = 1;   /* RTC 无效时兜底 */
+    }
+    static const int month_days[] = {
+        0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334
+    };
+    /* 从公元 0 年 1 月 1 日到 y-m-d 的天数。
+     * 0000 年是闰年，+366 基准。 */
+    int32_t days = (y - 1) * 365 + (y - 1) / 4 - (y - 1) / 100
+                 + (y - 1) / 400 + 366;
+    days += month_days[m - 1];
+    if (m > 2 && ((y % 4 == 0 && y % 100 != 0) || y % 400 == 0))
+        days += 1;
+    days += d - 1;
+    uint32_t seconds = rt->hour * 3600 + rt->minute * 60 + rt->second;
+    br_x509_minimal_set_time(xc, (uint32_t)days, seconds);
+}
+
 static int fetch_https(const char *url, char *out, int out_size) {
     char host[64], path[256]; int port, secure = 0;
     if (parse_url(url, host, &port, path, &secure) < 0) return -1;
@@ -197,7 +226,7 @@ static int fetch_https(const char *url, char *out, int out_size) {
     if (s < 0) return -1;
     struct sockaddr_in local, dst;
     memset(&local, 0, sizeof(local));
-    local.sin_family = AF_INET; local.sin_port = htons(43212);
+    local.sin_family = AF_INET; local.sin_port = htons(next_port());
     bind(s, (struct sockaddr*)&local, sizeof(local));
     memset(&dst, 0, sizeof(dst));
     dst.sin_family = AF_INET; dst.sin_port = htons(port); dst.sin_addr = ip;
@@ -209,29 +238,50 @@ static int fetch_https(const char *url, char *out, int out_size) {
     struct lax_x509 x;
     unsigned char *iobuf = (unsigned char*)malloc(BR_SSL_BUFSIZE_BIDI);
     if (!iobuf) { sockclose(s); return -1; }
-    br_ssl_client_init_full(&sc, &xc, NULL, 0);
+        br_ssl_client_init_full(&sc, &xc, NULL, 0);
+
+    struct rtc_time rt;
+    memset(&rt, 0, sizeof(rt));
+    rtc_get_time(&rt);
+    set_x509_time(&xc, &rt);
+
     x.vtable = &lax_x509_vtable; x.xc = &xc;
     br_ssl_engine_set_x509(&sc.eng, &x.vtable);
     br_ssl_engine_set_buffer(&sc.eng, iobuf, BR_SSL_BUFSIZE_BIDI, 1);
+
     unsigned char seed[32];
-    struct rtc_time rt; memset(&rt, 0, sizeof(rt)); rtc_get_time(&rt);
     memcpy(seed, &rt, sizeof(rt) < 32 ? sizeof(rt) : 32);
     memcpy(seed + 16, &s, sizeof(s));
     br_ssl_engine_inject_entropy(&sc.eng, seed, sizeof(seed));
-    if (!br_ssl_client_reset(&sc, host, 0)) { free(iobuf); sockclose(s); return -1; }
+    if (!br_ssl_client_reset(&sc, host, 0)) {
+        dprintf(2, "[HTTPS] client_reset failed\n");
+        free(iobuf); sockclose(s); return -1; 
+    }
     br_sslio_init(&ioc, &sc.eng, tls_read, &s, tls_write, &s);
 
     char req[512];
     int rl = snprintf(req, sizeof(req),
         "GET %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: NetSurf-Helium/1.0\r\nConnection: close\r\n\r\n",
         path, host);
-    if (br_sslio_write_all(&ioc, req, rl) < 0 || br_sslio_flush(&ioc) < 0) {
+    int w = br_sslio_write_all(&ioc, req, rl);
+    if (w < 0) {
+        dprintf(2, "[HTTPS] write_all=%d err=0x%x\n", w,
+                br_ssl_engine_last_error(&sc.eng));
+        free(iobuf); sockclose(s); return -1;
+    }
+    if (br_sslio_flush(&ioc) < 0) {
+        dprintf(2, "[HTTPS] flush err=0x%x\n",
+                br_ssl_engine_last_error(&sc.eng));
         free(iobuf); sockclose(s); return -1;
     }
     int total = 0;
     while (total < out_size - 1) {
         int n = br_sslio_read(&ioc, out + total, out_size - 1 - total);
-        if (n <= 0) break;
+        if (n <= 0) {
+            dprintf(2, "[HTTPS] read=%d err=0x%x\n", n,
+                    br_ssl_engine_last_error(&sc.eng));
+            break;
+        }
         total += n;
     }
     free(iobuf);
@@ -322,7 +372,7 @@ static int fetch_http(const char *url, char *out, int out_size) {
     if (s < 0) return -1;
     struct sockaddr_in local;
     memset(&local, 0, sizeof(local));
-    local.sin_family = AF_INET; local.sin_port = htons(43211);
+    local.sin_family = AF_INET; local.sin_port = htons(next_port());
     bind(s, (struct sockaddr*)&local, sizeof(local));
     struct sockaddr_in dst;
     memset(&dst, 0, sizeof(dst));
@@ -360,34 +410,6 @@ static int fetch_http(const char *url, char *out, int out_size) {
     return total;
 }
 
-static void load_url(void) {
-    g_url_fresh = 0;
-    strcpy(g_status, "Loading...");
-    g_page_len = 0;
-    g_page[0] = '\0';
-    publish_all();
-    char *buf = (char*)malloc(PAGE_MAX);
-    if (!buf) return;
-    int n = -1;
-    if (!strncmp(g_url, "http://", 7)) n = fetch_http(g_url, buf, PAGE_MAX);
-    else if (!strncmp(g_url, "https://", 8)) n = fetch_https(g_url, buf, PAGE_MAX);
-    else {
-        int fd = fs_open(g_url, FS_O_RDONLY);
-        if (fd >= 0) {
-            n = fs_read(fd, buf, PAGE_MAX - 1);
-            fs_close(fd);
-            if (n < 0) n = -1;
-            else buf[n] = '\0';
-        }
-    }
-    if (n >= 0) {
-        html_to_text(buf, n);
-        strcpy(g_status, "Done");
-    } else strcpy(g_status, "Cannot load URL");
-    free(buf);
-    publish_all();
-}
-
 static void render(void) {
     fill_rect(0, 0, CW, CH, g_css_bg);
     fill_rect(0, 0, CW, TOOL_H, 0x2A2A3E);
@@ -416,6 +438,44 @@ static void render(void) {
     }
     draw_text(10, CH - 18, CW - 10, g_status, 0x8888AA, 0x101018);
     publish_all();
+}
+
+static void load_url(void) {
+    g_url_fresh = 0;
+    strcpy(g_status, "Loading...");
+    g_page_len = 0;
+    g_page[0] = '\0';
+    render();                          /* 立即显示 Loading */
+
+    char *buf = (char*)malloc(PAGE_MAX);
+    if (!buf) {
+        strcpy(g_status, "Out of memory");
+        render();
+        return;
+    }
+
+    int n = -1;
+    if (!strncmp(g_url, "http://", 7)) n = fetch_http(g_url, buf, PAGE_MAX);
+    else if (!strncmp(g_url, "https://", 8)) n = fetch_https(g_url, buf, PAGE_MAX);
+    else {
+        int fd = fs_open(g_url, FS_O_RDONLY);
+        if (fd >= 0) {
+            n = fs_read(fd, buf, PAGE_MAX - 1);
+            fs_close(fd);
+            if (n < 0) n = -1;
+            else buf[n] = '\0';
+        }
+    }
+
+    if (n >= 0) {
+        html_to_text(buf, n);
+        snprintf(g_status, sizeof(g_status), "Done: %d bytes -> %d text",
+                 n, g_page_len);
+    } else {
+        strcpy(g_status, "Cannot load URL");
+    }
+    free(buf);
+    render();                          /* 显示结果 */
 }
 
 static int create_window(void) {

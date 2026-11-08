@@ -25,11 +25,28 @@ static void tcp_maybe_free(struct tcp_socket *s) {
 
 struct tcp_socket *tcp_alloc(void) {
     for (int i = 0; i < TCP_MAX_SOCKETS; i++) {
+        if (!g_tcp[i].used) goto found;
+    }
+
+    /* 池满：强制回收 CLOSED 的（user_closed 已标记） */
+    for (int i = 0; i < TCP_MAX_SOCKETS; i++) {
+        if (g_tcp[i].used && g_tcp[i].state == TCP_CLOSED && g_tcp[i].user_closed) {
+            kprintf("[TCP] force free slot %d (CLOSED)\n", i);
+            g_tcp[i].used = 0;
+        }
+    }
+    for (int i = 0; i < TCP_MAX_SOCKETS; i++) {
+        if (!g_tcp[i].used) goto found;
+    }
+    return NULL;
+
+found:
+    for (int i = 0; i < TCP_MAX_SOCKETS; i++) {
         if (!g_tcp[i].used) {
             memset(&g_tcp[i], 0, sizeof(g_tcp[i]));
             g_tcp[i].used = 1;
             g_tcp[i].state = TCP_CLOSED;
-            g_tcp[i].rto_ms = TCP_RTO_INIT;    /* ← 新增 */
+            g_tcp[i].rto_ms = TCP_RTO_INIT;
             return &g_tcp[i];
         }
     }
