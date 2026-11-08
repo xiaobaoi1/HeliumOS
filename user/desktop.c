@@ -40,7 +40,7 @@ static inline uint64_t tsc_now(void) {
 #define WALL_BOTTOM    0x102140
 
 #define ROOT_PATH        "SYS:\\"
-#define MAX_DESK_FILES   64
+#define MAX_DESK_FILES   256
 #define ICON_CELL_W      80
 #define ICON_CELL_H      80
 #define ICON_SIZE        48
@@ -97,14 +97,10 @@ static void shm_mark_rect(struct shm_hdr *h, int x0, int y0, int x1, int y1);
 static void open_context_menu(int x, int y);
 static void open_context_item_menu(int file_idx, int x, int y);
 
-/* ============================================================
- *                   桌面图标逻辑
- * ============================================================ */
-
 static struct fs_entry_info g_files[MAX_DESK_FILES];
 static int g_file_count = 0;
 static int g_selected_file = -1;
-static uint64_t g_sel_mask = 0;
+static uint8_t g_sel_mask[MAX_DESK_FILES];
 static int g_last_clicked_file = -1;
 static uint32_t g_click_tick = 0;
 static int g_desk_cols = 1;
@@ -113,49 +109,50 @@ static struct mui_dialog g_desk_dialog;
 static int desk_sel_count(void) {
     int n = 0;
     for (int i = 0; i < g_file_count; i++)
-        if (g_sel_mask & (1ull << i)) n++;
+        if (g_sel_mask[i]) n++;
     return n;
 }
 
 static int desk_is_selected(int idx) {
     if (idx < 0 || idx >= g_file_count) return 0;
-    return (g_sel_mask >> idx) & 1;
+    return g_sel_mask[idx] != 0;
 }
 
 static int desk_sel_first(void) {
     for (int i = 0; i < g_file_count; i++)
-        if (g_sel_mask & (1ull << i)) return i;
+        if (g_sel_mask[i]) return i;
     return -1;
 }
 
 static void desk_sel_clear(void) {
-    g_sel_mask = 0;
+    memset(g_sel_mask, 0, sizeof(g_sel_mask));
     g_selected_file = -1;
 }
 
 static void desk_sel_only(int idx) {
+    memset(g_sel_mask, 0, sizeof(g_sel_mask));
     if (idx < 0 || idx >= g_file_count) {
-        desk_sel_clear();
+        g_selected_file = -1;
         return;
     }
-    g_sel_mask = 1ull << idx;
+    g_sel_mask[idx] = 1;
     g_selected_file = idx;
 }
 
 static void desk_sel_toggle(int idx) {
     if (idx < 0 || idx >= g_file_count) return;
-    g_sel_mask ^= (1ull << idx);
-    if (g_sel_mask & (1ull << idx))
+    g_sel_mask[idx] ^= 1;
+    if (g_sel_mask[idx])
         g_selected_file = idx;
     else if (g_selected_file == idx)
         g_selected_file = desk_sel_first();
-    if (g_sel_mask == 0) g_selected_file = -1;
+    if (desk_sel_count() == 0) g_selected_file = -1;
 }
 
 static int desk_collect_paths(char paths[][256], int max) {
     int n = 0;
     for (int i = 0; i < g_file_count && n < max; i++) {
-        if (!(g_sel_mask & (1ull << i))) continue;
+        if (!g_sel_mask[i]) continue;
         snprintf(paths[n], 256, "SYS:\\%s", g_files[i].name);
         n++;
     }
@@ -183,18 +180,30 @@ static int is_image_file(const char *name) {
     size_t len = strlen(name);
     if (len < 4) return 0;
     const char *e = name + len - 4;
-    if ((e[0] == '.') && (e[1] == 'j' || e[1] == 'J') &&
-        (e[2] == 'p' || e[2] == 'P') && (e[3] == 'g' || e[3] == 'G')) return 1;
-    if ((e[0] == '.') && (e[1] == 'p' || e[1] == 'P') &&
-        (e[2] == 'n' || e[2] == 'N') && (e[3] == 'g' || e[3] == 'G')) return 1;
-    if (len >= 5 && e[-1] == '.' && (e[0] == 'j' || e[0] == 'J') &&
-        (e[1] == 'p' || e[1] == 'P') && (e[2] == 'e' || e[2] == 'E') &&
-        (e[3] == 'g' || e[3] == 'G')) return 1;
+    /* .jpg / .png / .gif / .bmp */
+    if (e[0] == '.' &&
+        (e[1] == 'j' || e[1] == 'J') && (e[2] == 'p' || e[2] == 'P') &&
+        (e[3] == 'g' || e[3] == 'G'))
+        return 1;
+    if (e[0] == '.' &&
+        (e[1] == 'p' || e[1] == 'P') && (e[2] == 'n' || e[2] == 'N') &&
+        (e[3] == 'g' || e[3] == 'G'))
+        return 1;
+    if (e[0] == '.' &&
+        (e[1] == 'g' || e[1] == 'G') && (e[2] == 'i' || e[2] == 'I') &&
+        (e[3] == 'f' || e[3] == 'F'))
+        return 1;
+    if (e[0] == '.' &&
+        (e[1] == 'b' || e[1] == 'B') && (e[2] == 'm' || e[2] == 'M') &&
+        (e[3] == 'p' || e[3] == 'P'))
+        return 1;
+    if (len >= 5 && e[-1] == '.' &&
+        (e[0] == 'j' || e[0] == 'J') && (e[1] == 'p' || e[1] == 'P') &&
+        (e[2] == 'e' || e[2] == 'E') && (e[3] == 'g' || e[3] == 'G'))
+        return 1;
     return 0;
 }
 
-/* 取壁纸 (x, y) 处的像素：BMP 壁纸优先，否则回退渐变。
- * 供图标局部重绘使用，避免在 BMP 壁纸上盖出渐变补丁。 */
 static inline unsigned int wall_bg_pixel(int x, int y) {
     if (g_wall_bmp_state == 1 && g_wall_bmp_cache)
         return g_wall_bmp_cache[(size_t)y * g_W + x];
@@ -285,16 +294,12 @@ static void draw_all_files(void) {
     for (int i = 0; i < g_file_count; i++) draw_file_icon(i);
 }
 
-static void redraw_selection_changed(uint64_t old_mask) {
-    uint64_t changed = (old_mask ^ g_sel_mask) &
-                       ((g_file_count >= 64) ? ~0ull : ((1ull << g_file_count) - 1));
-    if (!changed) return;
-
+static void redraw_selection_changed(const uint8_t *old_sel) {
     int x0 = g_W, y0 = g_H, x1 = 0, y1 = 0;
     int any = 0;
 
     for (int idx = 0; idx < g_file_count; idx++) {
-        if (!((changed >> idx) & 1)) continue;
+        if (old_sel[idx] == g_sel_mask[idx]) continue;
 
         draw_file_icon(idx);
 
@@ -318,10 +323,6 @@ static void redraw_selection_changed(uint64_t old_mask) {
     shm_mark_rect(g_wall_hdr, x0, y0, x1, y1);
     shm_publish(g_wall_hdr);
 }
-
-/* ============================================================
- *                   文件夹管理窗口 (FM)
- * ============================================================ */
 
 #define MAX_FM_WINDOWS 4
 #define FM_TOP_BAR_H 24
@@ -2183,7 +2184,7 @@ static void wall_delete_selected(void) {
     if (desk_sel_count() == 0) return;
 
     for (int i = 0; i < g_file_count; i++) {
-        if (!(g_sel_mask & (1ull << i))) continue;
+        if (!g_sel_mask[i]) continue;
         char path[256];
         snprintf(path, sizeof(path), "SYS:\\%s", g_files[i].name);
         fm_remove_recursive(path);
@@ -2324,7 +2325,8 @@ static void handle_wall_event(struct wm_event *ev) {
         if (g_menu_visible) return;
 
         int idx = wall_hit_icon(ev->x, ev->y);
-        uint64_t old = g_sel_mask;
+        uint8_t old[MAX_DESK_FILES];
+        memcpy(old, g_sel_mask, sizeof(old));
 
         if (idx >= 0) {
             if (!desk_is_selected(idx)) desk_sel_only(idx);
@@ -2347,7 +2349,8 @@ static void handle_wall_event(struct wm_event *ev) {
     int shift = (ev->extra & WM_MOD_SHIFT) != 0;
     int ctrl  = (ev->extra & WM_MOD_CTRL) != 0;
     int toggle = shift || ctrl;
-    uint64_t old = g_sel_mask;
+    uint8_t old[MAX_DESK_FILES];
+    memcpy(old, g_sel_mask, sizeof(old));
 
     if (hit >= 0) {
         if (toggle) {
@@ -2387,7 +2390,8 @@ static void handle_wall_event(struct wm_event *ev) {
                 exec_elf(path);
             }
 
-            uint64_t cur = g_sel_mask;
+            uint8_t cur[MAX_DESK_FILES];
+            memcpy(cur, g_sel_mask, sizeof(cur));
             desk_sel_clear();
             redraw_selection_changed(cur);
             g_last_clicked_file = -1;
