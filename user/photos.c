@@ -13,6 +13,12 @@ static char g_shm_name[20], g_ev_name[28];
 static int g_ev = -1, g_inbox = -1;
 static int g_cw = 640, g_ch = 480, g_map_size;
 
+static struct image_anim g_anim;
+static int g_anim_ok = 0;
+static int g_frame = 0;
+static int g_next_ms = 0;
+static int g_elapsed = 0;
+
 static void publish_all(void) {
     if (!g_hdr) return;
     g_hdr->pub_x0 = 0; g_hdr->pub_y0 = 0;
@@ -56,20 +62,26 @@ static int create_window(const char *title) {
     return 0;
 }
 
-static void render(struct image *img) {
+static void render_frame(int idx) {
     for (int i = 0; i < g_cw * g_ch; i++) g_pixels[i] = 0x12131A;
-    if (img && img->pixels && img->w > 0 && img->h > 0) {
-        int dw = g_cw, dh = img->h * g_cw / img->w;
-        if (dh > g_ch) { dh = g_ch; dw = img->w * g_ch / img->h; }
-        if (dw < 1) dw = 1;
-        if (dh < 1) dh = 1;
-        int dx = (g_cw - dw) / 2, dy = (g_ch - dh) / 2;
-        for (int y = 0; y < dh; y++) {
-            int sy = y * img->h / dh;
-            for (int x = 0; x < dw; x++) {
-                int sx = x * img->w / dw;
-                g_pixels[(dy + y) * g_cw + dx + x] =
-                    img->pixels[(size_t)sy * img->w + sx] & 0xFFFFFFu;
+
+    if (g_anim_ok && idx >= 0 && idx < g_anim.count) {
+        uint32_t *src = g_anim.frames[idx].pixels;
+        int iw = g_anim.w, ih = g_anim.h;
+        if (src && iw > 0 && ih > 0) {
+            int dw = g_cw, dh = ih * g_cw / iw;
+            if (dh > g_ch) { dh = g_ch; dw = iw * g_ch / ih; }
+            if (dw < 1) dw = 1;
+            if (dh < 1) dh = 1;
+            int dx = (g_cw - dw) / 2, dy = (g_ch - dh) / 2;
+            for (int y = 0; y < dh; y++) {
+                int sy = y * ih / dh;
+                for (int x = 0; x < dw; x++) {
+                    int sx = x * iw / dw;
+                    unsigned int c = src[(size_t)sy * iw + sx];
+                    if ((c >> 24) == 0) continue;     /* 透明：保留背景 */
+                    g_pixels[(dy + y) * g_cw + dx + x] = c & 0xFFFFFFu;
+                }
             }
         }
     }
@@ -78,6 +90,7 @@ static void render(struct image *img) {
 
 int main(int argc, char **argv) {
     if (argc < 2) return 1;
+
     for (int i = 0; i < 2000; i++) {
         g_inbox = pipe_open(WM_INBOX_NAME, 1);
         if (g_inbox >= 0) break;
@@ -85,13 +98,12 @@ int main(int argc, char **argv) {
     }
     if (g_inbox < 0) return 1;
 
-    struct image img;
-    memset(&img, 0, sizeof(img));
-    int ok = image_load(&img, argv[1]);
+    memset(&g_anim, 0, sizeof(g_anim));
+    g_anim_ok = image_load_anim(&g_anim, argv[1]);
 
-    if (ok && img.w > 0 && img.h > 0) {
+    if (g_anim_ok && g_anim.w > 0 && g_anim.h > 0) {
         int maxw = 900, maxh = 620;
-        int cw = img.w, ch = img.h;
+        int cw = g_anim.w, ch = g_anim.h;
         if (cw > maxw) { ch = ch * maxw / cw; cw = maxw; }
         if (ch > maxh) { cw = cw * maxh / ch; ch = maxh; }
         if (cw < 320) cw = 320;
@@ -107,7 +119,11 @@ int main(int argc, char **argv) {
     for (const char *p = argv[1]; *p; p++) if (*p == '\\') base = p + 1;
     char title[64];
     snprintf(title, sizeof(title), "Photos - %s", base);
-    if (create_window(title) < 0) return 1;
+    if (create_window(title) < 0) {
+        if (g_anim_ok) image_anim_free(&g_anim);
+        return 1;
+    }
+
     if (argc >= 3) {
         int a = atoi(argv[2]);
         if (a < 0) a = 0;
@@ -119,7 +135,16 @@ int main(int argc, char **argv) {
         strncpy(ar.shm_name, g_shm_name, sizeof(ar.shm_name) - 1);
         pipe_write(g_inbox, &ar, sizeof(ar));
     }
-    render(ok ? &img : NULL);
+
+    g_frame = 0;
+    render_frame(0);
+    if (g_anim_ok && g_anim.count > 1) {
+        int d = g_anim.frames[0].delay_ms;
+        if (d <= 0) d = 100;
+        g_next_ms = d;
+    } else {
+        g_next_ms = 0;
+    }
 
     int done = 0;
     while (!done) {
@@ -132,7 +157,20 @@ int main(int argc, char **argv) {
                 break;
             }
         }
-        if (!done) sleep_ms(1);
+        if (done) break;
+
+        if (g_anim_ok && g_anim.count > 1) {
+            g_elapsed += 5;
+            if (g_elapsed >= g_next_ms) {
+                g_elapsed = 0;
+                g_frame = (g_frame + 1) % g_anim.count;
+                int d = g_anim.frames[g_frame].delay_ms;
+                if (d <= 0) d = 100;
+                g_next_ms = d;
+                render_frame(g_frame);
+            }
+        }
+        sleep_ms(5);
     }
 
     struct wm_destroy_request dr;
@@ -140,8 +178,9 @@ int main(int argc, char **argv) {
     dr.magic = WM_MAGIC; dr.type = WM_REQ_DESTROY; dr.owner_pid = getpid();
     strncpy(dr.shm_name, g_shm_name, sizeof(dr.shm_name) - 1);
     if (g_inbox >= 0) pipe_write(g_inbox, &dr, sizeof(dr));
+
     if (g_hdr) munmap((unsigned int)g_hdr, g_map_size);
     if (g_ev >= 0) ipc_close(g_ev);
-    if (ok) image_free(&img);
+    if (g_anim_ok) image_anim_free(&g_anim);
     return 0;
 }
