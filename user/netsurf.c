@@ -11,12 +11,15 @@
 #include "unicode_font.h"
 #include "shm_layout.h"
 #include "bearssl.h"
+#include "inflate.h"
 
 #define CW 800
 #define CH 600
 #define TOOL_H 30
 #define EAGAIN_LOCAL (-10)
-#define PAGE_MAX 32768
+#define RAW_MAX    (256 * 1024)    /* 原始 HTTP 响应 */
+#define DECOMP_MAX (1024 * 1024)   /* gzip 解压后 */
+#define PAGE_MAX   (1024 * 1024)   /* 剥标签后文本 */
 
 static unsigned int *g_pixels;
 static struct shm_hdr *g_hdr;
@@ -29,11 +32,22 @@ static char g_status[64] = "NetSurf ready - type a URL and press Enter";
 static unsigned int g_css_fg = 0xE0E0E0;
 static unsigned int g_css_bg = 0x101018;
 static int g_url_fresh = 1;
+/* 接收原始响应用（http/https 共用，单线程安全） */
+static uint8_t g_raw[RAW_MAX];
+static uint8_t g_chunked_buf[RAW_MAX];
+static uint8_t g_decomp_buf[DECOMP_MAX];
 
-static unsigned int g_next_port = 43211;
+static unsigned int g_next_port = 0;
 static unsigned int next_port(void) {
+    if (g_next_port == 0) {
+        struct rtc_time rt;
+        memset(&rt, 0, sizeof(rt));
+        rtc_get_time(&rt);
+        g_next_port = 43211 +
+            ((rt.second * 13 + rt.minute * 7 + rt.hour * 31 + getpid()) % 8000);
+    }
     unsigned int p = g_next_port++;
-    if (g_next_port >= 44000) g_next_port = 43211;
+    if (g_next_port >= 55000) g_next_port = 43211;
     return p;
 }
 
@@ -58,10 +72,13 @@ static void draw_text(int x, int y, int limit, const char *s, unsigned int fg, u
         if (!gw) gw = 8;
         if (x + gw > limit) break;
         fill_rect(x, y, gw, 16, bg);
-        if (g) for (int r = 0; r < 16; r++) for (int j = 0; j < gw; j++) {
-            int bit = gw == 16 ? (g[r*2 + (j>>3)] & (0x80 >> (j&7)))
-                               : (g[r] & (0x80 >> j));
-            if (bit) g_pixels[(y+r)*CW + x+j] = fg;
+        if (g) for (int r = 0; r < 16; r++) {
+            if (y + r < 0 || y + r >= CH) continue;
+            for (int j = 0; j < gw; j++) {
+                int bit = gw == 16 ? (g[r*2 + (j>>3)] & (0x80 >> (j&7)))
+                                   : (g[r] & (0x80 >> j));
+                if (bit) g_pixels[(y+r)*CW + x+j] = fg;
+            }
         }
         x += gw; p += n;
     }
@@ -141,6 +158,95 @@ static uint32_t resolve_host(const char *host) {
     return *(uint32_t*)h->h_addr_list[0];
 }
 
+/* ---------- HTTP 响应解析辅助 ---------- */
+
+static int startswith_ci(const char *s, const char *prefix) {
+    while (*prefix) {
+        char c1 = *s++, c2 = *prefix++;
+        if (c1 >= 'A' && c1 <= 'Z') c1 += 32;
+        if (c2 >= 'A' && c2 <= 'Z') c2 += 32;
+        if (c1 != c2) return 0;
+    }
+    return 1;
+}
+
+static const char *find_header_end(const char *s, int len) {
+    for (int i = 0; i + 3 < len; i++) {
+        if (s[i] == '\r' && s[i+1] == '\n' && s[i+2] == '\r' && s[i+3] == '\n')
+            return s + i + 4;
+    }
+    return NULL;
+}
+
+static int header_get(const char *start, const char *end,
+                      const char *name, char *out, int out_size) {
+    int nlen = strlen(name);
+    const char *p = start;
+    while (p < end) {
+        if (p + nlen + 1 <= end) {
+            if (startswith_ci(p, name) && p[nlen] == ':') {
+                const char *v = p + nlen + 1;
+                while (v < end && (*v == ' ' || *v == '\t')) v++;
+                const char *ve = v;
+                while (ve < end && *ve != '\r' && *ve != '\n') ve++;
+                int vlen = ve - v;
+                if (vlen >= out_size) vlen = out_size - 1;
+                memcpy(out, v, vlen);
+                out[vlen] = '\0';
+                return 1;
+            }
+        }
+        while (p < end && *p != '\n') p++;
+        if (p < end) p++;
+    }
+    return 0;
+}
+
+static int parse_status(const char *raw, int raw_len) {
+    if (raw_len < 12 || strncmp(raw, "HTTP/", 5) != 0) return 0;
+    const char *p = raw + 5;
+    const char *end = raw + raw_len;
+    while (p < end && *p != ' ') p++;
+    if (p >= end) return 0;
+    p++;
+    int code = 0;
+    for (int i = 0; i < 3 && p + i < end; i++) {
+        if (p[i] < '0' || p[i] > '9') break;
+        code = code * 10 + (p[i] - '0');
+    }
+    return code;
+}
+
+static int chunked_decode(const uint8_t *in, int in_len,
+                          uint8_t *out, int out_max) {
+    int pos = 0, out_pos = 0;
+    while (pos < in_len) {
+        int sz = 0, digits = 0;
+        while (pos < in_len) {
+            char c = in[pos];
+            int d;
+            if (c >= '0' && c <= '9') d = c - '0';
+            else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
+            else if (c >= 'A' && c <= 'F') d = c - 'A' + 10;
+            else break;
+            sz = sz * 16 + d;
+            pos++;
+            digits++;
+        }
+        if (digits == 0) return -1;
+        if (pos < in_len && in[pos] == '\r') pos++;
+        if (pos < in_len && in[pos] == '\n') pos++;
+        if (sz == 0) break;
+        if (out_pos + sz > out_max) return -1;
+        if (pos + sz > in_len) return -1;
+        memcpy(out + out_pos, in + pos, sz);
+        out_pos += sz;
+        pos += sz;
+        if (pos < in_len && in[pos] == '\r') pos++;
+        if (pos < in_len && in[pos] == '\n') pos++;
+    }
+    return out_pos;
+}
 
 struct lax_x509 {
     const br_x509_class *vtable;
@@ -217,7 +323,116 @@ static void set_x509_time(br_x509_minimal_context *xc, const struct rtc_time *rt
     br_x509_minimal_set_time(xc, (uint32_t)days, seconds);
 }
 
-static int fetch_https(const char *url, char *out, int out_size) {
+/* 前向声明 */
+static int fetch_http_d(const char *url, char *out, int out_size, int depth);
+static int fetch_https_d(const char *url, char *out, int out_size, int depth);
+
+/* 解析 HTTP 响应：redirect / chunked / gzip / content-length。
+ * 返回 body 长度，或 -1。 */
+static int process_response(const char *raw, int raw_len,
+                            const char *base_url,
+                            char *out, int out_size, int depth) {
+    if (raw_len <= 0) return -1;
+
+    const char *header_end = find_header_end(raw, raw_len);
+    if (!header_end) {
+        if (raw_len >= out_size) raw_len = out_size - 1;
+        memcpy(out, raw, raw_len);
+        out[raw_len] = '\0';
+        return raw_len;
+    }
+
+    int code = parse_status(raw, header_end - raw);
+    dprintf(2, "[HTTP] status=%d raw_len=%d\n", code, raw_len);
+
+    /* 3xx redirect */
+    if (code == 301 || code == 302 || code == 303 || code == 307 || code == 308) {
+        if (depth >= 5) return -1;
+        char location[256];
+        if (!header_get(raw, header_end, "location", location, sizeof(location))) {
+            dprintf(2, "[HTTP] redirect without location\n");
+            return -1;
+        }
+        dprintf(2, "[HTTP] redirect %d -> %s (depth=%d)\n", code, location, depth);
+
+        char new_url[512];
+        if (startswith_ci(location, "http://") || startswith_ci(location, "https://")) {
+            strncpy(new_url, location, sizeof(new_url) - 1);
+            new_url[sizeof(new_url) - 1] = '\0';
+        } else if (location[0] == '/' && location[1] == '/') {
+            char host[64], path[256];
+            int port, secure;
+            if (parse_url(base_url, host, &port, path, &secure) < 0) return -1;
+            snprintf(new_url, sizeof(new_url), "%s:%s",
+                     secure ? "https:" : "http:", location);
+        } else if (location[0] == '/') {
+            char host[64], path[256];
+            int port, secure;
+            if (parse_url(base_url, host, &port, path, &secure) < 0) return -1;
+            if ((secure && port == 443) || (!secure && port == 80))
+                snprintf(new_url, sizeof(new_url), "%s://%s%s",
+                         secure ? "https" : "http", host, location);
+            else
+                snprintf(new_url, sizeof(new_url), "%s://%s:%d%s",
+                         secure ? "https" : "http", host, port, location);
+        } else {
+            return -1;
+        }
+
+        if (startswith_ci(new_url, "https://"))
+            return fetch_https_d(new_url, out, out_size, depth + 1);
+        return fetch_http_d(new_url, out, out_size, depth + 1);
+    }
+
+    /* body 起点 */
+    const uint8_t *body = (const uint8_t*)header_end;
+    int body_len = raw_len - (header_end - raw);
+
+    /* Content-Length 精确截断 */
+    char cl_buf[32];
+    if (header_get(raw, header_end, "content-length", cl_buf, sizeof(cl_buf))) {
+        int cl = atoi(cl_buf);
+        dprintf(2, "[HTTP] cl=%d body_len=%d\n", cl, body_len);
+        if (cl > 0 && cl < body_len) body_len = cl;
+    }
+
+    /* Transfer-Encoding: chunked */
+    char te_buf[64];
+    if (header_get(raw, header_end, "transfer-encoding", te_buf, sizeof(te_buf))) {
+        if (startswith_ci(te_buf, "chunked")) {
+            int n = chunked_decode(body, body_len, g_chunked_buf, sizeof(g_chunked_buf));
+            dprintf(2, "[HTTP] chunked in=%d out=%d\n", body_len, n);
+            if (n < 0) return -1;
+            body = g_chunked_buf;
+            body_len = n;
+        }
+    }
+
+    /* Content-Encoding: gzip / deflate */
+    char ce_buf[64];
+    if (header_get(raw, header_end, "content-encoding", ce_buf, sizeof(ce_buf))) {
+        if (startswith_ci(ce_buf, "gzip")) {
+            int n = gzip_decompress(body, body_len, g_decomp_buf, sizeof(g_decomp_buf));
+            dprintf(2, "[HTTP] gzip in=%d out=%d\n", body_len, n);
+            if (n <= 0) return -1;
+            body = g_decomp_buf;
+            body_len = n;
+        } else if (startswith_ci(ce_buf, "deflate")) {
+            int n = zlib_decompress(body, body_len, g_decomp_buf, sizeof(g_decomp_buf));
+            dprintf(2, "[HTTP] deflate in=%d out=%d\n", body_len, n);
+            if (n <= 0) return -1;
+            body = g_decomp_buf;
+            body_len = n;
+        }
+    }
+
+    if (body_len >= out_size) body_len = out_size - 1;
+    memcpy(out, body, body_len);
+    out[body_len] = '\0';
+    return body_len;
+}
+
+static int fetch_https_d(const char *url, char *out, int out_size, int depth) {
     char host[64], path[256]; int port, secure = 0;
     if (parse_url(url, host, &port, path, &secure) < 0) return -1;
     uint32_t ip = resolve_host(host);
@@ -259,10 +474,21 @@ static int fetch_https(const char *url, char *out, int out_size) {
     }
     br_sslio_init(&ioc, &sc.eng, tls_read, &s, tls_write, &s);
 
+    char host_hdr[80];
+    if (port == 443)
+        snprintf(host_hdr, sizeof(host_hdr), "%s", host);
+    else
+        snprintf(host_hdr, sizeof(host_hdr), "%s:%d", host, port);
+
     char req[512];
     int rl = snprintf(req, sizeof(req),
-        "GET %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: NetSurf-Helium/1.0\r\nConnection: close\r\n\r\n",
-        path, host);
+        "GET %s HTTP/1.1\r\n"
+        "Host: %s\r\n"
+        "User-Agent: NetSurf-Helium/1.0\r\n"
+        "Accept-Encoding: gzip, deflate\r\n"
+        "Connection: close\r\n"
+        "\r\n",
+        path, host_hdr);
     int w = br_sslio_write_all(&ioc, req, rl);
     if (w < 0) {
         dprintf(2, "[HTTPS] write_all=%d err=0x%x\n", w,
@@ -275,8 +501,8 @@ static int fetch_https(const char *url, char *out, int out_size) {
         free(iobuf); sockclose(s); return -1;
     }
     int total = 0;
-    while (total < out_size - 1) {
-        int n = br_sslio_read(&ioc, out + total, out_size - 1 - total);
+    while (total < (int)sizeof(g_raw)) {
+        int n = br_sslio_read(&ioc, g_raw + total, sizeof(g_raw) - total);
         if (n <= 0) {
             dprintf(2, "[HTTPS] read=%d err=0x%x\n", n,
                     br_ssl_engine_last_error(&sc.eng));
@@ -286,13 +512,12 @@ static int fetch_https(const char *url, char *out, int out_size) {
     }
     free(iobuf);
     sockclose(s);
-    out[total] = '\0';
-    char *body = strstr(out, "\r\n\r\n");
-    if (body) {
-        int skip = (int)(body + 4 - out), len = total - skip;
-        memmove(out, body + 4, len); out[len] = '\0'; return len;
-    }
-    return total;
+
+    return process_response((const char*)g_raw, total, url, out, out_size, depth);
+}
+
+static int fetch_https(const char *url, char *out, int out_size) {
+    return fetch_https_d(url, out, out_size, 0);
 }
 
 static unsigned int css_color(const char *v) {
@@ -363,25 +588,37 @@ static void scan_css(const char *html, int n) {
     }
 }
 
-static int fetch_http(const char *url, char *out, int out_size) {
+static int fetch_http_d(const char *url, char *out, int out_size, int depth) {
     char host[64], path[256]; int port, secure = 0;
     if (parse_url(url, host, &port, path, &secure) < 0) return -1;
     uint32_t ip = resolve_host(host);
     if (!ip) return -1;
     int s = socket(AF_INET, SOCK_STREAM, 0);
     if (s < 0) return -1;
-    struct sockaddr_in local;
+    struct sockaddr_in local, dst;
     memset(&local, 0, sizeof(local));
     local.sin_family = AF_INET; local.sin_port = htons(next_port());
     bind(s, (struct sockaddr*)&local, sizeof(local));
-    struct sockaddr_in dst;
     memset(&dst, 0, sizeof(dst));
     dst.sin_family = AF_INET; dst.sin_port = htons(port); dst.sin_addr = ip;
     if (connect(s, (struct sockaddr*)&dst, sizeof(dst)) < 0) { sockclose(s); return -1; }
+
+    char host_hdr[80];
+    if (port == 80)
+        snprintf(host_hdr, sizeof(host_hdr), "%s", host);
+    else
+        snprintf(host_hdr, sizeof(host_hdr), "%s:%d", host, port);
+
     char req[512];
     int rl = snprintf(req, sizeof(req),
-        "GET %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: NetSurf-Helium/1.0\r\nConnection: close\r\n\r\n",
-        path, host);
+        "GET %s HTTP/1.1\r\n"
+        "Host: %s\r\n"
+        "User-Agent: NetSurf-Helium/1.0\r\n"
+        "Accept-Encoding: gzip, deflate\r\n"
+        "Connection: close\r\n"
+        "\r\n",
+        path, host_hdr);
+
     int sent = 0;
     while (sent < rl) {
         int n = sendto(s, req + sent, rl - sent, (struct sockaddr*)&dst, sizeof(dst));
@@ -389,25 +626,22 @@ static int fetch_http(const char *url, char *out, int out_size) {
         if (n <= 0) { sockclose(s); return -1; }
         sent += n;
     }
+
     int total = 0, idle = 0;
-    while (idle < 300 && total < out_size - 1) {
-        int n = recvfrom(s, out + total, out_size - 1 - total, NULL, NULL);
+    while (idle < 300 && total < (int)sizeof(g_raw)) {
+        int n = recvfrom(s, g_raw + total, sizeof(g_raw) - total, NULL, NULL);
         if (n > 0) { total += n; idle = 0; }
         else if (n == 0) break;
         else if (n == EAGAIN_LOCAL) { sleep_ms(10); idle++; }
         else break;
     }
     sockclose(s);
-    out[total] = '\0';
-    char *body = strstr(out, "\r\n\r\n");
-    if (body) {
-        int skip = (int)(body + 4 - out);
-        int len = total - skip;
-        memmove(out, body + 4, len);
-        out[len] = '\0';
-        return len;
-    }
-    return total;
+
+    return process_response((const char*)g_raw, total, url, out, out_size, depth);
+}
+
+static int fetch_http(const char *url, char *out, int out_size) {
+    return fetch_http_d(url, out, out_size, 0);
 }
 
 static void render(void) {
@@ -432,7 +666,11 @@ static void render(void) {
         const unsigned char *q = (const unsigned char*)p;
         uint32_t cp; int n = ufont_utf8_decode(q, &cp);
         int gw = wm_font_width((int)cp); if (!gw) gw = 8;
-        if (x + gw > CW - 10) { x = 10; y += 18; }
+        if (x + gw > CW - 10) {
+            x = 10;
+            y += 18;
+            if (y + 16 >= CH) break;
+        }
         draw_text(x, y, x + gw + 1, p, g_css_fg, g_css_bg);
         x += gw; p += n;
     }

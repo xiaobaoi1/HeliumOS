@@ -130,7 +130,9 @@ static int tcp_send_segment(struct tcp_socket *s, uint32_t src_ip,
     h->ack      = htonl(ack);
     h->data_off = (uint8_t)((hdr_len / 4) << 4);
     h->flags    = flags;
-    h->window   = htons(4096);
+    uint32_t free_win = TCP_RX_BUF_SIZE - s->rx_count;
+    if (free_win > 65535) free_win = 65535;
+    h->window = htons((uint16_t)free_win);
     h->checksum = 0;
     h->urgent   = 0;
 
@@ -267,14 +269,23 @@ void tcp_input(uint32_t src_ip, uint32_t dst_ip,
         if (payload_len > 0) {
             if (seq == s->rcv_nxt) {
                 uint32_t space = TCP_RX_BUF_SIZE - s->rx_count;
-                uint32_t n = payload_len < space ? payload_len : space;
-                for (uint32_t i = 0; i < n; i++) {
+
+                if (payload_len > space) {
+                    /* 缓冲区不够：丢弃整个包，不前进 rcv_nxt，
+                     * 让对端超时重传。回 ACK 通告当前窗口（可能为 0）。 */
+                    tcp_send_segment(s, dst_ip, TCP_ACK,
+                                     s->snd_nxt, s->rcv_nxt, NULL, 0);
+                    return;
+                }
+
+                for (uint32_t i = 0; i < payload_len; i++) {
                     s->rx_buf[s->rx_tail] = payload[i];
                     s->rx_tail = (s->rx_tail + 1) % TCP_RX_BUF_SIZE;
                 }
-                s->rx_count += n;
+                s->rx_count += payload_len;
                 s->rcv_nxt += payload_len;
             }
+            /* seq != rcv_nxt 的乱序包丢弃，等重传 */
         }
         if (flags & TCP_FIN) {
             /* 对端发起关闭 */

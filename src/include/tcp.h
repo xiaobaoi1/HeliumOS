@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 #define TCP_MAX_SOCKETS   16
-#define TCP_RX_BUF_SIZE   4096
+#define TCP_RX_BUF_SIZE   8192
 #define TCP_MSS           1460
 #define TCP_TXQ_SIZE    8
 #define TCP_RTO_INIT    1000    /* ms */
