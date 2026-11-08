@@ -150,20 +150,6 @@ void create_desktop_task(struct fat32_volume *vol) {
     }
 }
 
-static void fpu_init(void) {
-    uint32_t cr0, cr4;
-    __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
-    cr0 &= ~(1u << 2);   /* EM = 0：允许 x87 */
-    cr0 &= ~(1u << 3);   /* TS = 0：允许 FPU 指令 */
-    __asm__ volatile("mov %0, %%cr0" :: "r"(cr0));
-
-    __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
-    cr4 |= (1u << 9);    /* OSFXSR：支持 FXSAVE/FXRSTOR */
-    cr4 |= (1u << 10);   /* OSXMMEXCPT：SSE 异常走 #XF */
-    __asm__ volatile("mov %0, %%cr4" :: "r"(cr4));
-
-    __asm__ volatile("fninit");
-}
 
 
 void kmain(uint32_t magic, uint32_t addr) {
@@ -186,7 +172,6 @@ void kmain(uint32_t magic, uint32_t addr) {
     shm_init();
     file_map_init();
     gdt_init();
-    fpu_init();
     tss_init();
     vmm_init();
     kmap_init();

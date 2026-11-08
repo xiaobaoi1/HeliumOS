@@ -142,7 +142,7 @@ USER_APPS = shell idle test testkill sleeper argtest test_write \
 			test_createwin test_ansi\
 			dhcpclient desktop test_raw kilo test_malloc_loop \
 			grep find hexdump test_mui_draw test_mui_button test_mui_form \
-			test_dl test_libc test_malloc_big http about photos calc netsurf 7z
+			test_dl test_libc test_malloc_big http about photos calc netsurf 7z 7zgui
 
 # 需要 POSIX 兼容层的应用
 PHOTO_PY ?= /mnt/d/Local/Python314/python.exe
@@ -169,7 +169,7 @@ USER_ELFS = $(addprefix $(BUILD_DIR)/,$(addsuffix .ELF,$(USER_APPS)))
 
 LIBC_SRCS = string printf malloc signal env assert ctype qsort \
             abort stdlib inet netdb atexit dl \
-			stdio errno sem inflate
+			stdio errno sem
 
 LIBC_OBJS = $(addprefix $(BUILD_DIR)/libc_,$(addsuffix .o,$(LIBC_SRCS))) \
             $(BUILD_DIR)/libc_sigreturn.o \
@@ -271,7 +271,6 @@ $(DISK_IMG): $(KERNEL_ELF) $(USER_ELFS) $(USER_LIB_SOS) tcc-prepare $(BUILD_DIR)
 	sudo cp user/folder.bmp /mnt/build/folder.bmp; \
 	sudo cp user/exec.bmp /mnt/build/exec.bmp; \
 	sudo cp user/background.bmp /mnt/build/background.bmp; \
-	sudo cp user/png1.png /mnt/build/png1.png; \
 	sudo sh -c 'echo "int main() { return 42; }" > /mnt/build/test.c'; \
 	echo "set timeout=5" | sudo tee /mnt/build/boot/grub/grub.cfg > /dev/null; \
 	echo "menuentry \"HeliumOS\" {" | sudo tee -a /mnt/build/boot/grub/grub.cfg > /dev/null; \
@@ -329,9 +328,9 @@ gdb: $(ISO)
 	gdb-multiarch -ex "target remote localhost:1234" -ex "symbol-file build/kernel.elf" build/kernel.elf
 
 pack:
-	find . -type f \( -name "*.c" -o -name "*.h" -o -name "*.asm" -o -name "*.ld" -o -name "Makefile" \) -print0 | xargs -0 -I {} sh -c 'echo "==================== {} ===================="; cat "{}"; echo ""' > project.txt
-
-
+	find . -type d \( -path ./user/netsurf-master -o -path ./user/BearSSL-master \) -prune \
+  -o -type f \( -name "*.c" -o -name "*.h" -o -name "*.asm" -o -name "*.ld" -o -name "Makefile" \) -print0 \
+  | xargs -0 -I {} sh -c 'echo "==================== {} ===================="; cat "{}"; echo ""' > project.txt
 
 # ==================== 用户程序 ====================
 
@@ -408,6 +407,7 @@ EXTRA_OBJS_term      := $(BUILD_DIR)/unicode_font.o $(BUILD_DIR)/ime_dict.o \
                         $(BUILD_DIR)/methylui/mui_surface.o \
                         $(BUILD_DIR)/methylui/mui_widget.o \
                         $(BUILD_DIR)/methylui/mui_scroll.o
+EXTRA_OBJS_7zgui   := $(SEVENZ_OBJS) $(BUILD_DIR)/wm_font.o $(BUILD_DIR)/unicode_font.o
 
 # 统一链接规则（二次展开拿 EXTRA_OBJS_<stem>）
 $(BUILD_DIR)/math_lib.o: user/lib/libmath.c user/libc/include/math.h
