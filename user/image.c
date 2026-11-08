@@ -1,4 +1,5 @@
 #include "image.h"
+#include "inflate.h"
 #ifdef IMAGE_HOST_TEST
 #include <stdio.h>
 #include <stdlib.h>
@@ -44,28 +45,6 @@ static uint32_t be32(const uint8_t *p) {
            ((uint32_t)p[2] << 8) | p[3];
 }
 
-static int br_init(struct bits *b, const uint8_t *p, int len) {
-    b->p = p; b->end = p + len; b->buf = 0; b->cnt = 0;
-    return 0;
-}
-
-static int br_bits(struct bits *b, int n) {
-    while (b->cnt < n) {
-        if (b->p >= b->end) return -1;
-        b->buf |= (uint32_t)(*b->p++) << b->cnt;
-        b->cnt += 8;
-    }
-    int v = (int)(b->buf & ((1u << n) - 1u));
-    b->buf >>= n;
-    b->cnt -= n;
-    return v;
-}
-
-static void br_align(struct bits *b) {
-    b->buf = 0;
-    b->cnt = 0;
-}
-
 static void huff_build(struct huff *h, const uint8_t *lens, int n) {
     memset(h, 0, sizeof(*h));
     for (int i = 0; i < n; i++) h->count[lens[i]]++;
@@ -83,148 +62,6 @@ static void huff_build(struct huff *h, const uint8_t *lens, int n) {
     for (int len = 1; len <= 16; len++)
         for (int i = 0; i < n; i++)
             if (lens[i] == len) h->sym[k++] = (uint16_t)i;
-}
-
-static int huff_decode(struct bits *b, const struct huff *h) {
-    int code = 0;
-    for (int len = 1; len <= 15; len++) {
-        int bit = br_bits(b, 1);
-        if (bit < 0) return -1;
-        code = (code << 1) | bit;
-        if (h->count[len] && code >= h->mincode[len] && code <= h->maxcode[len])
-            return h->sym[h->valptr[len] + code - h->mincode[len]];
-    }
-    return -1;
-}
-
-static const int len_base[29] = {
-    3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,
-    35,43,51,59,67,83,99,115,131,163,195,227,258
-};
-static const int len_extra[29] = {
-    0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,
-    3,3,3,3,4,4,4,4,5,5,5,5,0
-};
-static const int dist_base[30] = {
-    1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,
-    257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577
-};
-static const int dist_extra[30] = {
-    0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,
-    7,7,8,8,9,9,10,10,11,11,12,12,13,13
-};
-
-static int inflate_blocks(struct bits *b, uint8_t *out, int out_max, int *out_len) {
-    int pos = 0, final = 0;
-    while (!final) {
-        final = br_bits(b, 1);
-        int type = br_bits(b, 2);
-        IMG_DBG("inflate block final=%d type=%d pos=%d\n", final, type, pos);
-        if (final < 0 || type < 0) return -1;
-        if (type == 0) {
-            br_align(b);
-            int len = br_bits(b, 16), nlen = br_bits(b, 16);
-            if (len < 0 || nlen < 0 || (len ^ 0xFFFF) != nlen) return -1;
-            if (pos + len > out_max) return -1;
-            for (int i = 0; i < len; i++) {
-                int v = br_bits(b, 8);
-                if (v < 0) return -1;
-                out[pos++] = (uint8_t)v;
-            }
-            continue;
-        }
-        if (type == 3) return -1;
-        struct huff lit, dist;
-        if (type == 1) {
-            uint8_t ll[288], dl[32];
-            for (int i = 0; i < 144; i++) ll[i] = 8;
-            for (int i = 144; i < 256; i++) ll[i] = 9;
-            for (int i = 256; i < 280; i++) ll[i] = 7;
-            for (int i = 280; i < 288; i++) ll[i] = 8;
-            for (int i = 0; i < 32; i++) dl[i] = 5;
-            huff_build(&lit, ll, 288);
-            huff_build(&dist, dl, 32);
-            IMG_DBG("fixed len7 c=%d min=%d max=%d vp=%d sym0=%d sym12=%d\n",
-                    lit.count[7], lit.mincode[7], lit.maxcode[7], lit.valptr[7],
-                    lit.sym[0], lit.sym[12]);
-        } else {
-            int hlit = br_bits(b, 5), hdist = br_bits(b, 5), hclen = br_bits(b, 4);
-            if (hlit < 0 || hdist < 0 || hclen < 0) return -1;
-            hlit += 257; hdist += 1; hclen += 4;
-            IMG_DBG("dyn hlit=%d hdist=%d hclen=%d\n", hlit, hdist, hclen);
-            static const int order[19] = {
-                16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15
-            };
-            uint8_t cl[19];
-            memset(cl, 0, sizeof(cl));
-            for (int i = 0; i < hclen; i++) {
-                int v = br_bits(b, 3);
-                if (v < 0) return -1;
-                cl[order[i]] = (uint8_t)v;
-            }
-            struct huff clh;
-            huff_build(&clh, cl, 19);
-            uint8_t lens[320];
-            int total = hlit + hdist, i = 0;
-            while (i < total) {
-                int s = huff_decode(b, &clh);
-                if (s < 0) { IMG_DBG("cl decode fail i=%d\n", i); return -1; }
-                if (s <= 15) lens[i++] = (uint8_t)s;
-                else if (s == 16) {
-                    if (i == 0) return -1;
-                    int rep = br_bits(b, 2);
-                    if (rep < 0) return -1;
-                    rep += 3;
-                    uint8_t prev = lens[i - 1];
-                    while (rep-- && i < total) lens[i++] = prev;
-                } else if (s == 17) {
-                    int rep = br_bits(b, 3);
-                    if (rep < 0) return -1;
-                    rep += 3;
-                    while (rep-- && i < total) lens[i++] = 0;
-                } else if (s == 18) {
-                    int rep = br_bits(b, 7);
-                    if (rep < 0) return -1;
-                    rep += 11;
-                    while (rep-- && i < total) lens[i++] = 0;
-                } else return -1;
-            }
-            huff_build(&lit, lens, hlit);
-            huff_build(&dist, lens + hlit, hdist);
-            IMG_DBG("trees built lens0=%d lens256=%d\n", lit.count[0], lit.count[7]);
-        }
-        for (;;) {
-            int sym = huff_decode(b, &lit);
-            if (pos < 30) IMG_DBG("lit sym=%d pos=%d cnt=%d buf=%x\n", sym, pos, b->cnt, b->buf);
-            if (sym < 0) { IMG_DBG("lit decode fail pos=%d\n", pos); return -1; }
-            if (sym < 256) {
-                if (pos >= out_max) return -1;
-                out[pos++] = (uint8_t)sym;
-            } else if (sym == 256) break;
-            else {
-                sym -= 257;
-                if (sym < 0 || sym >= 29) return -1;
-                int le = br_bits(b, len_extra[sym]);
-                int de = 0, dsym = huff_decode(b, &dist);
-                if (le < 0 || dsym < 0 || dsym >= 30) return -1;
-                de = br_bits(b, dist_extra[dsym]);
-                if (de < 0) return -1;
-                int length = len_base[sym] + le;
-                int distance = dist_base[dsym] + de;
-                if (pos < 30) IMG_DBG("match len=%d dist=%d dsym=%d le=%d de=%d pos=%d\n", length,distance,dsym,le,de,pos);
-                if (distance <= 0 || distance > pos || pos + length > out_max) {
-                    IMG_DBG("copy fail pos=%d dist=%d len=%d\n", pos, distance, length);
-                    return -1;
-                }
-                for (int k = 0; k < length; k++) {
-                    out[pos] = out[pos - distance];
-                    pos++;
-                }
-            }
-        }
-    }
-    *out_len = pos;
-    return 0;
 }
 
 static int png_unfilter(uint8_t *raw, int w, int h, int ch) {
@@ -312,10 +149,8 @@ static int png_decode(const uint8_t *data, int len, struct image *img) {
     int raw_size = (row_bytes + 1) * h;
     uint8_t *raw = (uint8_t*)malloc((size_t)raw_size);
     if (!raw || at < 6) { free(idat); free(raw); return 0; }
-    struct bits b;
-    br_init(&b, idat + 2, at - 6);
     int out_len = 0;
-    int inf = inflate_blocks(&b, raw, raw_size, &out_len);
+    int inf = inflate_raw(idat + 2, at - 6, raw, raw_size, &out_len);
     IMG_DBG("PNG inflate=%d got=%d want=%d\n", inf, out_len, raw_size);
     int ok = inf == 0 && out_len == raw_size;
     free(idat);

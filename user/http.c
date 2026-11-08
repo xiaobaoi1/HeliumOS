@@ -107,6 +107,7 @@ static int http_get(const char *host, int port, const char *path) {
     while (sent < req_len) {
         int n = sendto(s, req + sent, req_len - sent,
                        (struct sockaddr*)&dst, sizeof(dst));
+        if (n == EAGAIN_LOCAL) { sleep_ms(10); continue; }   /* ← 新增 */
         if (n <= 0) {
             dprintf(2, "http: send failed (%d)\n", n);
             sockclose(s);
