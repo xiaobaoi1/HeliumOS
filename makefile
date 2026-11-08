@@ -146,7 +146,7 @@ USER_APPS = shell idle test testkill sleeper argtest test_write \
 
 # 需要 POSIX 兼容层的应用
 PHOTO_PY ?= /mnt/d/Local/Python314/python.exe
-PHOTO_SRCS := $(wildcard user/*.jpg user/*.jpeg user/*.png)
+PHOTO_SRCS := $(wildcard user/*.gif user/*.png user/*.jpg user/*.jpeg)
 
 BEARSSL_SRCS := $(shell find user/BearSSL-master/src -name '*.c' 2>/dev/null)
 BEARSSL_OBJS := $(patsubst user/BearSSL-master/src/%.c,$(BUILD_DIR)/bearssl/%.o,$(BEARSSL_SRCS))
@@ -271,7 +271,9 @@ $(DISK_IMG): $(KERNEL_ELF) $(USER_ELFS) $(USER_LIB_SOS) tcc-prepare $(BUILD_DIR)
 	sudo cp user/folder.bmp /mnt/build/folder.bmp; \
 	sudo cp user/exec.bmp /mnt/build/exec.bmp; \
 	sudo cp user/background.bmp /mnt/build/background.bmp; \
-	sudo sh -c 'echo "int main() { return 42; }" > /mnt/build/test.c'; \
+        sudo cp user/example.jpg /mnt/build/example.jpg; \
+        sudo cp user/example.gif /mnt/build/example.gif; \
+        sudo sh -c 'echo "int main() { return 42; }" > /mnt/build/test.c'; \
 	echo "set timeout=5" | sudo tee /mnt/build/boot/grub/grub.cfg > /dev/null; \
 	echo "menuentry \"HeliumOS\" {" | sudo tee -a /mnt/build/boot/grub/grub.cfg > /dev/null; \
 	echo "  multiboot2 /boot/kernel.elf" | sudo tee -a /mnt/build/boot/grub/grub.cfg > /dev/null; \

@@ -119,7 +119,6 @@ static int inflate_blocks(struct bits *b, uint8_t *out, int out_max, int *out_le
     while (!final) {
         final = br_bits(b, 1);
         int type = br_bits(b, 2);
-        IMG_DBG("inflate block final=%d type=%d pos=%d\n", final, type, pos);
         if (final < 0 || type < 0) return -1;
         if (type == 0) {
             br_align(b);
@@ -144,14 +143,10 @@ static int inflate_blocks(struct bits *b, uint8_t *out, int out_max, int *out_le
             for (int i = 0; i < 32; i++) dl[i] = 5;
             huff_build(&lit, ll, 288);
             huff_build(&dist, dl, 32);
-            IMG_DBG("fixed len7 c=%d min=%d max=%d vp=%d sym0=%d sym12=%d\n",
-                    lit.count[7], lit.mincode[7], lit.maxcode[7], lit.valptr[7],
-                    lit.sym[0], lit.sym[12]);
         } else {
             int hlit = br_bits(b, 5), hdist = br_bits(b, 5), hclen = br_bits(b, 4);
             if (hlit < 0 || hdist < 0 || hclen < 0) return -1;
             hlit += 257; hdist += 1; hclen += 4;
-            IMG_DBG("dyn hlit=%d hdist=%d hclen=%d\n", hlit, hdist, hclen);
             static const int order[19] = {
                 16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15
             };
@@ -168,7 +163,7 @@ static int inflate_blocks(struct bits *b, uint8_t *out, int out_max, int *out_le
             int total = hlit + hdist, i = 0;
             while (i < total) {
                 int s = huff_decode(b, &clh);
-                if (s < 0) { IMG_DBG("cl decode fail i=%d\n", i); return -1; }
+                if (s < 0) return -1;
                 if (s <= 15) lens[i++] = (uint8_t)s;
                 else if (s == 16) {
                     if (i == 0) return -1;
@@ -191,12 +186,10 @@ static int inflate_blocks(struct bits *b, uint8_t *out, int out_max, int *out_le
             }
             huff_build(&lit, lens, hlit);
             huff_build(&dist, lens + hlit, hdist);
-            IMG_DBG("trees built lens0=%d lens256=%d\n", lit.count[0], lit.count[7]);
         }
         for (;;) {
             int sym = huff_decode(b, &lit);
-            if (pos < 30) IMG_DBG("lit sym=%d pos=%d cnt=%d buf=%x\n", sym, pos, b->cnt, b->buf);
-            if (sym < 0) { IMG_DBG("lit decode fail pos=%d\n", pos); return -1; }
+            if (sym < 0) return -1;
             if (sym < 256) {
                 if (pos >= out_max) return -1;
                 out[pos++] = (uint8_t)sym;
@@ -205,17 +198,14 @@ static int inflate_blocks(struct bits *b, uint8_t *out, int out_max, int *out_le
                 sym -= 257;
                 if (sym < 0 || sym >= 29) return -1;
                 int le = br_bits(b, len_extra[sym]);
-                int de = 0, dsym = huff_decode(b, &dist);
+                int dsym = huff_decode(b, &dist);
                 if (le < 0 || dsym < 0 || dsym >= 30) return -1;
-                de = br_bits(b, dist_extra[dsym]);
+                int de = br_bits(b, dist_extra[dsym]);
                 if (de < 0) return -1;
                 int length = len_base[sym] + le;
                 int distance = dist_base[dsym] + de;
-                if (pos < 30) IMG_DBG("match len=%d dist=%d dsym=%d le=%d de=%d pos=%d\n", length,distance,dsym,le,de,pos);
-                if (distance <= 0 || distance > pos || pos + length > out_max) {
-                    IMG_DBG("copy fail pos=%d dist=%d len=%d\n", pos, distance, length);
+                if (distance <= 0 || distance > pos || pos + length > out_max)
                     return -1;
-                }
                 for (int k = 0; k < length; k++) {
                     out[pos] = out[pos - distance];
                     pos++;
@@ -263,7 +253,7 @@ static int png_decode(const uint8_t *data, int len, struct image *img) {
     int idat_total = 0;
     uint8_t palette[256 * 3], pal_alpha[256];
     memset(pal_alpha, 255, sizeof(pal_alpha));
-    for (int i = 0; i < 256; i++) palette[i * 3 + 0] = palette[i * 3 + 1] = palette[i * 3 + 2] = 0;
+    memset(palette, 0, sizeof(palette));
     while (pos + 12 <= len) {
         uint32_t n = be32(data + pos);
         const uint8_t *type = data + pos + 4;
@@ -292,8 +282,8 @@ static int png_decode(const uint8_t *data, int len, struct image *img) {
         return 0;
     int ch = ctype == 2 ? 3 : ctype == 6 ? 4 : ctype == 0 ? 1 :
              ctype == 4 ? 2 : ctype == 3 ? 1 : 0;
-    IMG_DBG("PNG %dx%d depth=%d type=%d ch=%d idat=%d\n", w,h,depth,ctype,ch,idat_total);
     if (!ch || !idat_total) return 0;
+
     uint8_t *idat = (uint8_t*)malloc((size_t)idat_total);
     if (!idat) return 0;
     pos = 8;
@@ -316,7 +306,6 @@ static int png_decode(const uint8_t *data, int len, struct image *img) {
     br_init(&b, idat + 2, at - 6);
     int out_len = 0;
     int inf = inflate_blocks(&b, raw, raw_size, &out_len);
-    IMG_DBG("PNG inflate=%d got=%d want=%d\n", inf, out_len, raw_size);
     int ok = inf == 0 && out_len == raw_size;
     free(idat);
     if (!ok || png_unfilter(raw, w, h, ch) < 0) { free(raw); return 0; }
@@ -353,7 +342,6 @@ struct jpeg {
     struct jcomp comp[4];
     uint8_t qt[4][64];
     struct huff dc[4], ac[4];
-    int dc_pred[4];
     int restart_interval;
     struct bits br;
 };
@@ -517,10 +505,7 @@ static int jpeg_scan(struct jpeg *j, const uint8_t *data, int len) {
                         int brow = my * cp->v + by;
                         uint8_t *dst = cp->plane + (size_t)brow * 8 * cp->stride + bcol * 8;
                         if (bcol >= cp->bw || brow >= cp->bh) continue;
-                        if (jpeg_block(j, &j->br, cp, dst) < 0) {
-                            IMG_DBG("jpeg block fail mcu=%d,%d comp=%d block=%d,%d\n", mx,my,ci,bx,by);
-                            return 0;
-                        }
+                        if (jpeg_block(j, &j->br, cp, dst) < 0) return 0;
                     }
                 }
             }
@@ -616,7 +601,6 @@ static int jpeg_decode(const uint8_t *data, int len, struct image *img) {
                 if (j.comp[i].v > j.maxv) j.maxv = j.comp[i].v;
                 q += 3;
             }
-            IMG_DBG("JPEG SOF %dx%d n=%d max=%dx%d\n", j.width,j.height,j.ncomp,j.maxh,j.maxv);
             if (j.width <= 0 || j.height <= 0 || j.width > 4096 || j.height > 4096)
                 break;
             for (int i = 0; i < j.ncomp; i++) {
@@ -631,7 +615,7 @@ static int jpeg_decode(const uint8_t *data, int len, struct image *img) {
                 memset(cp->plane, 0, (size_t)cp->stride * cp->bh * 8);
             }
         } else if (m == 0xC2) {
-            break; /* progressive unsupported */
+            break;
         } else if (m == 0xDD) {
             if (p + 2 <= end) j.restart_interval = (p[0] << 8) | p[1];
         }
@@ -639,15 +623,12 @@ static int jpeg_decode(const uint8_t *data, int len, struct image *img) {
     }
 
     if (scan_pos >= 0 && j.width > 0 && j.ncomp > 0) {
+        int all_ok = 1;
         for (int i = 0; i < j.ncomp; i++)
-            if (!j.comp[i].plane) goto done;
-        IMG_DBG("JPEG scan start len=%d\n", scan_len);
-        ok = jpeg_scan(&j, data + scan_pos, scan_len);
-        IMG_DBG("JPEG scan ok=%d\n", ok);
+            if (!j.comp[i].plane) { all_ok = 0; break; }
+        if (all_ok) ok = jpeg_scan(&j, data + scan_pos, scan_len);
     }
     if (ok) {
-        if (j.ncomp >= 3) IMG_DBG("jpeg samples %d %d %d\n",
-            j.comp[0].plane[0], j.comp[1].plane[0], j.comp[2].plane[0]);
         uint32_t *px = (uint32_t*)malloc((size_t)j.width * j.height * 4);
         if (px) {
             for (int y = 0; y < j.height; y++) {
@@ -688,26 +669,542 @@ static int jpeg_decode(const uint8_t *data, int len, struct image *img) {
             img->w = j.width; img->h = j.height; img->pixels = px;
         }
     }
-done:
     for (int i = 0; i < 4; i++) if (j.comp[i].plane) free(j.comp[i].plane);
     return ok && img->pixels != NULL;
 }
 
-int image_load(struct image *img, const char *path) {
-    if (!img || !path) return 0;
-    image_free(img);
+/* ---------- BMP decoder ---------- */
+
+static int bmp_decode(const uint8_t *data, int len, struct image *img) {
+    if (len < 26 || data[0] != 'B' || data[1] != 'M') return 0;
+
+    uint32_t offset = (uint32_t)data[10] | ((uint32_t)data[11] << 8) |
+                      ((uint32_t)data[12] << 16) | ((uint32_t)data[13] << 24);
+    uint32_t dib_size = (uint32_t)data[14] | ((uint32_t)data[15] << 8) |
+                        ((uint32_t)data[16] << 16) | ((uint32_t)data[17] << 24);
+
+    int32_t width, height;
+    int bpp = 0;
+    uint32_t comp = 0, used = 0;
+    int pal_entry_size = 4;
+    int pal_start = 14 + (int)dib_size;
+
+    if (dib_size == 12) {                          /* BITMAPCOREHEADER */
+        width  = (int16_t)((uint16_t)data[18] | ((uint16_t)data[19] << 8));
+        height = (int16_t)((uint16_t)data[20] | ((uint16_t)data[21] << 8));
+        bpp    = (int)data[24] | ((int)data[25] << 8);
+        pal_entry_size = 3;
+        pal_start = 14 + 12;
+    } else if (dib_size >= 40) {
+        if (len < 54) return 0;
+        width  = (int32_t)((uint32_t)data[18] | ((uint32_t)data[19] << 8) |
+                           ((uint32_t)data[20] << 16) | ((uint32_t)data[21] << 24));
+        height = (int32_t)((uint32_t)data[22] | ((uint32_t)data[23] << 8) |
+                           ((uint32_t)data[24] << 16) | ((uint32_t)data[25] << 24));
+        bpp    = (int)data[28] | ((int)data[29] << 8);
+        comp   = (uint32_t)data[30] | ((uint32_t)data[31] << 8) |
+                 ((uint32_t)data[32] << 16) | ((uint32_t)data[33] << 24);
+        used   = (uint32_t)data[46] | ((uint32_t)data[47] << 8) |
+                 ((uint32_t)data[48] << 16) | ((uint32_t)data[49] << 24);
+        pal_entry_size = 4;
+        pal_start = 14 + (int)dib_size;
+    } else return 0;
+
+    if (width <= 0 || width > 4096) return 0;
+    int topdown = height < 0;
+    int abs_h = topdown ? -height : height;
+    if (abs_h <= 0 || abs_h > 4096) return 0;
+    if (bpp != 1 && bpp != 4 && bpp != 8 && bpp != 16 && bpp != 24 && bpp != 32)
+        return 0;
+    if (comp != 0 && comp != 3) return 0;
+    if (comp == 3 && bpp != 16 && bpp != 32) return 0;
+
+    /* 颜色掩码 */
+    uint32_t rmask = 0, gmask = 0, bmask = 0, amask = 0;
+    int rshift = 0, gshift = 0, bshift = 0, ashift = 0;
+    int rbits = 0, gbits = 0, bbits = 0, abits = 0;
+
+    if (comp == 3) {
+        if (dib_size >= 52 && len >= 70) {        /* V4/V5 header 内嵌 */
+            rmask = (uint32_t)data[54] | ((uint32_t)data[55] << 8) |
+                    ((uint32_t)data[56] << 16) | ((uint32_t)data[57] << 24);
+            gmask = (uint32_t)data[58] | ((uint32_t)data[59] << 8) |
+                    ((uint32_t)data[60] << 16) | ((uint32_t)data[61] << 24);
+            bmask = (uint32_t)data[62] | ((uint32_t)data[63] << 8) |
+                    ((uint32_t)data[64] << 16) | ((uint32_t)data[65] << 24);
+            if (bpp == 32 && dib_size >= 56 && len >= 70)
+                amask = (uint32_t)data[66] | ((uint32_t)data[67] << 8) |
+                        ((uint32_t)data[68] << 16) | ((uint32_t)data[69] << 24);
+        } else if (pal_start + 12 <= len) {       /* header 之后的掩码 */
+            int m = pal_start;
+            rmask = (uint32_t)data[m+0] | ((uint32_t)data[m+1] << 8) |
+                    ((uint32_t)data[m+2] << 16) | ((uint32_t)data[m+3] << 24);
+            gmask = (uint32_t)data[m+4] | ((uint32_t)data[m+5] << 8) |
+                    ((uint32_t)data[m+6] << 16) | ((uint32_t)data[m+7] << 24);
+            bmask = (uint32_t)data[m+8] | ((uint32_t)data[m+9] << 8) |
+                    ((uint32_t)data[m+10] << 16) | ((uint32_t)data[m+11] << 24);
+            if (bpp == 32 && m + 16 <= len)
+                amask = (uint32_t)data[m+12] | ((uint32_t)data[m+13] << 8) |
+                        ((uint32_t)data[m+14] << 16) | ((uint32_t)data[m+15] << 24);
+            pal_start += 12;
+            if (bpp == 32) pal_start += 4;
+        }
+    } else {
+        if (bpp == 16) { rmask = 0x7C00; gmask = 0x03E0; bmask = 0x001F; }
+        else if (bpp == 32) {
+            rmask = 0x00FF0000; gmask = 0x0000FF00;
+            bmask = 0x000000FF; amask = 0xFF000000;
+        }
+    }
+    if (rmask) { uint32_t m = rmask; rshift = 0; while (!(m & 1)) { m >>= 1; rshift++; } rbits = 0; while (m & 1) { m >>= 1; rbits++; } }
+    if (gmask) { uint32_t m = gmask; gshift = 0; while (!(m & 1)) { m >>= 1; gshift++; } gbits = 0; while (m & 1) { m >>= 1; gbits++; } }
+    if (bmask) { uint32_t m = bmask; bshift = 0; while (!(m & 1)) { m >>= 1; bshift++; } bbits = 0; while (m & 1) { m >>= 1; bbits++; } }
+    if (amask) { uint32_t m = amask; ashift = 0; while (!(m & 1)) { m >>= 1; ashift++; } abits = 0; while (m & 1) { m >>= 1; abits++; } }
+
+    /* 调色板 */
+    uint8_t palette[256 * 4];
+    memset(palette, 0, sizeof(palette));
+    if (bpp <= 8) {
+        int pal_count = used ? (int)used : (1 << bpp);
+        if (pal_count > 256) pal_count = 256;
+        if (pal_count < 1) pal_count = 1;
+        for (int i = 0; i < pal_count; i++) {
+            int p = pal_start + i * pal_entry_size;
+            if (p + pal_entry_size > len) break;
+            palette[i*4+0] = data[p+0];
+            palette[i*4+1] = data[p+1];
+            palette[i*4+2] = data[p+2];
+            palette[i*4+3] = (pal_entry_size == 4) ? data[p+3] : 0xFF;
+        }
+    }
+
+    int row_bytes = ((width * bpp + 31) / 32) * 4;
+    if ((uint64_t)offset + (uint64_t)row_bytes * abs_h > (uint64_t)len)
+        return 0;
+
+    uint32_t *px = (uint32_t*)malloc((size_t)width * abs_h * 4);
+    if (!px) return 0;
+
+    int any_alpha = 0;
+    for (int y = 0; y < abs_h; y++) {
+        int dy = topdown ? y : (abs_h - 1 - y);
+        const uint8_t *row = data + offset + (size_t)y * row_bytes;
+        for (int x = 0; x < width; x++) {
+            uint8_t r = 0, g = 0, b = 0, a = 255;
+            if (bpp <= 8) {
+                uint32_t idx;
+                if (bpp == 8)      idx = row[x];
+                else if (bpp == 4) idx = (row[x >> 1] >> ((x & 1) ? 0 : 4)) & 0x0F;
+                else               idx = (row[x >> 3] >> (7 - (x & 7))) & 0x01;
+                if (idx >= 256) idx = 255;
+                b = palette[idx*4+0];
+                g = palette[idx*4+1];
+                r = palette[idx*4+2];
+                a = palette[idx*4+3];
+                if (a) any_alpha = 1;
+            } else if (bpp == 24) {
+                b = row[x*3+0]; g = row[x*3+1]; r = row[x*3+2];
+            } else if (bpp == 16) {
+                uint32_t v = (uint32_t)row[x*2] | ((uint32_t)row[x*2+1] << 8);
+                uint32_t rr = (v & rmask) >> rshift;
+                uint32_t gg = (v & gmask) >> gshift;
+                uint32_t bb = (v & bmask) >> bshift;
+                r = (rbits >= 8) ? (uint8_t)(rr >> (rbits - 8)) : (uint8_t)(rr << (8 - rbits ? 8 - rbits : 0));
+                g = (gbits >= 8) ? (uint8_t)(gg >> (gbits - 8)) : (uint8_t)(gg << (8 - gbits ? 8 - gbits : 0));
+                b = (bbits >= 8) ? (uint8_t)(bb >> (bbits - 8)) : (uint8_t)(bb << (8 - bbits ? 8 - bbits : 0));
+                if (rbits < 8) r = (uint8_t)(rr << (8 - rbits));
+                if (gbits < 8) g = (uint8_t)(gg << (8 - gbits));
+                if (bbits < 8) b = (uint8_t)(bb << (8 - bbits));
+            } else {                              /* 32bpp */
+                uint32_t v = (uint32_t)row[x*4+0] | ((uint32_t)row[x*4+1] << 8) |
+                             ((uint32_t)row[x*4+2] << 16) | ((uint32_t)row[x*4+3] << 24);
+                uint32_t rr = rmask ? ((v & rmask) >> rshift) : (v & 0xFF);
+                uint32_t gg = gmask ? ((v & gmask) >> gshift) : ((v >> 8) & 0xFF);
+                uint32_t bb = bmask ? ((v & bmask) >> bshift) : ((v >> 16) & 0xFF);
+                uint32_t aa = amask ? ((v & amask) >> ashift) : 0xFF;
+                r = (rbits >= 8) ? (uint8_t)(rr >> (rbits - 8)) : (uint8_t)(rr << (8 - rbits));
+                g = (gbits >= 8) ? (uint8_t)(gg >> (gbits - 8)) : (uint8_t)(gg << (8 - gbits));
+                b = (bbits >= 8) ? (uint8_t)(bb >> (bbits - 8)) : (uint8_t)(bb << (8 - bbits));
+                a = abits ? ((abits >= 8) ? (uint8_t)(aa >> (abits - 8))
+                                          : (uint8_t)(aa << (8 - abits))) : 0xFF;
+                if (a) any_alpha = 1;
+            }
+            px[(size_t)dy * width + x] = ((uint32_t)a << 24) |
+                ((uint32_t)r << 16) | ((uint32_t)g << 8) | b;
+        }
+    }
+    if (bpp == 32 && !any_alpha)
+        for (size_t i = 0; i < (size_t)width * abs_h; i++)
+            px[i] |= 0xFF000000u;
+
+    img->w = width; img->h = abs_h; img->pixels = px;
+    return 1;
+}
+
+/* ---------- GIF decoder (multi-frame) ---------- */
+
+struct gif_bits {
+    const uint8_t *p, *end;
+    uint32_t buf;
+    int cnt;
+};
+
+static int gif_getbits(struct gif_bits *b, int n) {
+    while (b->cnt < n) {
+        if (b->p >= b->end) return -1;
+        b->buf |= (uint32_t)(*b->p++) << b->cnt;
+        b->cnt += 8;
+    }
+    int v = (int)(b->buf & ((1u << n) - 1u));
+    b->buf >>= n;
+    b->cnt -= n;
+    return v;
+}
+
+static int gif_collect_subblocks(const uint8_t *data, int len, int *pos,
+                                  uint8_t **out_buf, int *out_len) {
+    int cap = 4096, n = 0;
+    uint8_t *buf = (uint8_t*)malloc(cap);
+    if (!buf) return 0;
+    while (*pos < len) {
+        int size = data[(*pos)++];
+        if (size == 0) break;
+        if (*pos + size > len) { free(buf); return 0; }
+        while (n + size > cap) {
+            int ncap = cap * 2;
+            uint8_t *nb = (uint8_t*)realloc(buf, ncap);
+            if (!nb) { free(buf); return 0; }
+            buf = nb; cap = ncap;
+        }
+        memcpy(buf + n, data + *pos, size);
+        n += size;
+        *pos += size;
+    }
+    *out_buf = buf;
+    *out_len = n;
+    return 1;
+}
+
+static int gif_lzw_decode(const uint8_t *data, int datalen,
+                          uint8_t *out, int out_max,
+                          int min_code_size, int *out_len) {
+    int clear = 1 << min_code_size;
+    int end   = clear + 1;
+    int next  = end + 1;
+    int code_size = min_code_size + 1;
+    int max_val   = 1 << code_size;
+
+    int     prefix[4096];
+    uint8_t suffix[4096];
+    uint8_t firstb[4096];
+    for (int i = 0; i < clear; i++) {
+        prefix[i] = -1;
+        suffix[i] = (uint8_t)i;
+        firstb[i] = (uint8_t)i;
+    }
+
+    struct gif_bits b;
+    b.p = data; b.end = data + datalen; b.buf = 0; b.cnt = 0;
+
+    uint8_t stack[4096];
+    int outpos = 0, prev = -1;
+
+    while (outpos < out_max) {
+        int code = gif_getbits(&b, code_size);
+        if (code < 0) break;
+
+        if (code == clear) {
+            next = end + 1;
+            code_size = min_code_size + 1;
+            max_val   = 1 << code_size;
+            prev = -1;
+            continue;
+        }
+        if (code == end) break;
+        if (prev < 0) {
+            if (code >= clear) return -1;
+            out[outpos++] = suffix[code];
+            prev = code;
+            continue;
+        }
+
+        int sp = 0, firstchar;
+        if (code < next) {
+            int c = code;
+            while (c >= 0 && sp < 4096) { stack[sp++] = suffix[c]; c = prefix[c]; }
+            firstchar = firstb[code];
+        } else if (code == next) {
+            if (sp < 4096) stack[sp++] = firstb[prev];
+            int c = prev;
+            while (c >= 0 && sp < 4096) { stack[sp++] = suffix[c]; c = prefix[c]; }
+            firstchar = firstb[prev];
+        } else {
+            return -1;
+        }
+
+        while (sp > 0 && outpos < out_max)
+            out[outpos++] = stack[--sp];
+
+        if (next < 4096) {
+            prefix[next] = prev;
+            suffix[next] = (uint8_t)firstchar;
+            firstb[next] = firstb[prev];
+            next++;
+            if (next == max_val && code_size < 12) {
+                code_size++;
+                max_val = 1 << code_size;
+            }
+        }
+        prev = code;
+    }
+    *out_len = outpos;
+    return 0;
+}
+
+static int gif_decode_frames(const uint8_t *data, int len,
+                             struct image_anim *anim, int max_frames) {
+    if (len < 13) return 0;
+    if (memcmp(data, "GIF87a", 6) != 0 && memcmp(data, "GIF89a", 6) != 0)
+        return 0;
+
+    int width  = data[6] | (data[7] << 8);
+    int height = data[8] | (data[9] << 8);
+    int packed = data[10];
+    int gct_flag = (packed >> 7) & 1;
+    int gct_size = 2 << (packed & 7);
+    if (width <= 0 || height <= 0 || width > 4096 || height > 4096)
+        return 0;
+
+    int pos = 13;
+    uint8_t gct[256 * 3];
+    memset(gct, 0, sizeof(gct));
+    if (gct_flag) {
+        if (pos + gct_size * 3 > len) return 0;
+        for (int i = 0; i < gct_size && i < 256; i++) {
+            gct[i*3+0] = data[pos+i*3+0];
+            gct[i*3+1] = data[pos+i*3+1];
+            gct[i*3+2] = data[pos+i*3+2];
+        }
+        pos += gct_size * 3;
+    }
+
+    uint32_t *canvas = (uint32_t*)malloc((size_t)width * height * 4);
+    if (!canvas) return 0;
+    memset(canvas, 0, (size_t)width * height * 4);
+
+    int cap = 8, count = 0;
+    struct image_frame *frames = (struct image_frame*)malloc(sizeof(struct image_frame) * cap);
+    if (!frames) { free(canvas); return 0; }
+
+    int trans_idx = -1, delay_ms = 100;
+    int cur_disposal = 0, prev_disposal = 0;
+    int prev_x = 0, prev_y = 0, prev_w = 0, prev_h = 0;
+    uint32_t *saved = NULL;
+
+    while (pos < len) {
+        int blk = data[pos++];
+        if (blk == 0x3B) break;
+
+        if (blk == 0x21) {
+            if (pos >= len) break;
+            int label = data[pos++];
+            if (label == 0xF9) {                    /* Graphic Control Ext */
+                if (pos >= len) break;
+                int sz = data[pos++];
+                if (sz >= 4 && pos + sz <= len) {
+                    int p = data[pos];
+                    cur_disposal = (p >> 2) & 7;
+                    delay_ms = ((int)data[pos+1] | ((int)data[pos+2] << 8)) * 10;
+                    if (delay_ms <= 0) delay_ms = 100;
+                    trans_idx = (p & 1) ? data[pos+3] : -1;
+                }
+                pos += sz;
+                if (pos < len && data[pos] == 0) pos++;
+            } else {
+                while (pos < len) {
+                    int sz = data[pos++];
+                    if (sz == 0) break;
+                    pos += sz;
+                }
+            }
+        } else if (blk == 0x2C) {                    /* Image Descriptor */
+            if (pos + 9 > len) break;
+            int ix = data[pos] | (data[pos+1] << 8);
+            int iy = data[pos+2] | (data[pos+3] << 8);
+            int iw = data[pos+4] | (data[pos+5] << 8);
+            int ih = data[pos+6] | (data[pos+7] << 8);
+            int ip = data[pos+8]; pos += 9;
+            if (iw <= 0 || ih <= 0) break;
+
+            /* 应用上一帧的 disposal */
+            if (count > 0) {
+                if (prev_disposal == 2) {
+                    for (int yy = prev_y; yy < prev_y + prev_h; yy++) {
+                        if (yy < 0 || yy >= height) continue;
+                        for (int xx = prev_x; xx < prev_x + prev_w; xx++) {
+                            if (xx < 0 || xx >= width) continue;
+                            canvas[(size_t)yy * width + xx] = 0;
+                        }
+                    }
+                } else if (prev_disposal == 3 && saved) {
+                    memcpy(canvas, saved, (size_t)width * height * 4);
+                }
+            }
+
+            /* 当前帧若 disposal=3，在绘制前保存 canvas */
+            if (cur_disposal == 3) {
+                if (!saved) saved = (uint32_t*)malloc((size_t)width * height * 4);
+                if (saved) memcpy(saved, canvas, (size_t)width * height * 4);
+            }
+
+            int lct_flag  = (ip >> 7) & 1;
+            int interlace = (ip >> 6) & 1;
+            int lct_size  = 2 << (ip & 7);
+
+            uint8_t lct[256 * 3];
+            memset(lct, 0, sizeof(lct));
+            if (lct_flag) {
+                if (pos + lct_size * 3 > len) break;
+                for (int i = 0; i < lct_size && i < 256; i++) {
+                    lct[i*3+0] = data[pos+i*3+0];
+                    lct[i*3+1] = data[pos+i*3+1];
+                    lct[i*3+2] = data[pos+i*3+2];
+                }
+                pos += lct_size * 3;
+            }
+
+            const uint8_t *pal = lct_flag ? lct : gct;
+            int pal_size = lct_flag ? lct_size : gct_size;
+
+            if (pos >= len) break;
+            int mcs = data[pos++];
+            if (mcs < 1 || mcs > 11) break;
+
+            uint8_t *lzw = NULL;
+            int lzw_len = 0;
+            if (!gif_collect_subblocks(data, len, &pos, &lzw, &lzw_len)) break;
+
+            uint8_t *indexed = (uint8_t*)malloc((size_t)iw * ih);
+            if (!indexed) { free(lzw); break; }
+            int dec_len = 0;
+            gif_lzw_decode(lzw, lzw_len, indexed, iw * ih, mcs, &dec_len);
+            free(lzw);
+
+            int *order = NULL;
+            if (interlace) {
+                order = (int*)malloc(sizeof(int) * ih);
+                if (order) {
+                    int k = 0;
+                    for (int y = 0; y < ih; y += 8) order[k++] = y;
+                    for (int y = 4; y < ih; y += 8) order[k++] = y;
+                    for (int y = 2; y < ih; y += 4) order[k++] = y;
+                    for (int y = 1; y < ih; y += 2) order[k++] = y;
+                }
+            }
+            for (int y = 0; y < ih; y++) {
+                int dy = iy + (order ? order[y] : y);
+                if (dy < 0 || dy >= height) continue;
+                for (int x = 0; x < iw; x++) {
+                    int dx = ix + x;
+                    if (dx < 0 || dx >= width) continue;
+                    int so = y * iw + x;
+                    if (so >= dec_len) continue;
+                    int ci = indexed[so];
+                    if (ci == trans_idx) continue;
+                    uint8_t r = 0, g = 0, b = 0;
+                    if (ci < pal_size) {
+                        r = pal[ci*3+0]; g = pal[ci*3+1]; b = pal[ci*3+2];
+                    }
+                    canvas[(size_t)dy * width + dx] =
+                        0xFF000000u | ((uint32_t)r << 16) |
+                        ((uint32_t)g << 8) | b;
+                }
+            }
+            free(indexed);
+            if (order) free(order);
+
+            /* 保存本帧快照 */
+            if (count >= cap) {
+                int nc = cap * 2;
+                struct image_frame *nf = (struct image_frame*)realloc(
+                    frames, sizeof(struct image_frame) * nc);
+                if (!nf) break;
+                frames = nf; cap = nc;
+            }
+            uint32_t *fp = (uint32_t*)malloc((size_t)width * height * 4);
+            if (!fp) break;
+            memcpy(fp, canvas, (size_t)width * height * 4);
+            frames[count].delay_ms = delay_ms;
+            frames[count].pixels = fp;
+            count++;
+
+            prev_x = ix; prev_y = iy; prev_w = iw; prev_h = ih;
+            prev_disposal = cur_disposal;
+
+            /* 为下一帧重置 */
+            trans_idx = -1;
+            delay_ms = 100;
+            cur_disposal = 0;
+
+            if (max_frames > 0 && count >= max_frames) break;
+        } else {
+            break;
+        }
+    }
+
+    free(canvas);
+    if (saved) free(saved);
+
+    if (count == 0) { free(frames); return 0; }
+    anim->w = width;
+    anim->h = height;
+    anim->count = count;
+    anim->frames = frames;
+    return 1;
+}
+
+static int gif_decode(const uint8_t *data, int len, struct image *img) {
+    struct image_anim anim;
+    memset(&anim, 0, sizeof(anim));
+    if (!gif_decode_frames(data, len, &anim, 1)) return 0;
+    img->w = anim.w;
+    img->h = anim.h;
+    img->pixels = anim.frames[0].pixels;
+    for (int i = 1; i < anim.count; i++)
+        if (anim.frames[i].pixels) free(anim.frames[i].pixels);
+    free(anim.frames);
+    return 1;
+}
+
+/* ---------- 公共解码入口 ---------- */
+
+static int image_decode(const uint8_t *data, int len, struct image *img) {
+    if (len > 8 && data[0] == 0x89 && data[1] == 'P' &&
+        data[2] == 'N' && data[3] == 'G')
+        return png_decode(data, len, img);
+    if (len > 2 && data[0] == 0xFF && data[1] == 0xD8)
+        return jpeg_decode(data, len, img);
+    if (len > 2 && data[0] == 'B' && data[1] == 'M')
+        return bmp_decode(data, len, img);
+    if (len > 6 && data[0] == 'G' && data[1] == 'I' &&
+        data[2] == 'F' && data[3] == '8')
+        return gif_decode(data, len, img);
+    return 0;
+}
+
+static uint8_t *read_whole_file(const char *path, int *out_len) {
     int cap = 1 << 20, len = 0;
     uint8_t *data = (uint8_t*)malloc(cap);
-    if (!data) return 0;
+    if (!data) return NULL;
 #ifdef IMAGE_HOST_TEST
     FILE *fp = fopen(path, "rb");
-    if (!fp) { free(data); return 0; }
+    if (!fp) { free(data); return NULL; }
     for (;;) {
         if (len == cap) {
-            int ncap = cap * 2;
-            uint8_t *nd = (uint8_t*)realloc(data, ncap);
+            int nc = cap * 2;
+            uint8_t *nd = (uint8_t*)realloc(data, nc);
             if (!nd) break;
-            data = nd; cap = ncap;
+            data = nd; cap = nc;
         }
         size_t n = fread(data + len, 1, cap - len, fp);
         if (!n) break;
@@ -716,13 +1213,13 @@ int image_load(struct image *img, const char *path) {
     fclose(fp);
 #else
     int fd = fs_open(path, FS_O_RDONLY);
-    if (fd < 0) { free(data); return 0; }
+    if (fd < 0) { free(data); return NULL; }
     for (;;) {
         if (len == cap) {
-            int ncap = cap * 2;
-            uint8_t *nd = (uint8_t*)realloc(data, ncap);
+            int nc = cap * 2;
+            uint8_t *nd = (uint8_t*)realloc(data, nc);
             if (!nd) break;
-            data = nd; cap = ncap;
+            data = nd; cap = nc;
         }
         int n = fs_read(fd, data + len, cap - len);
         if (n <= 0) break;
@@ -730,14 +1227,67 @@ int image_load(struct image *img, const char *path) {
     }
     fs_close(fd);
 #endif
+    *out_len = len;
+    return data;
+}
+
+int image_load(struct image *img, const char *path) {
+    if (!img || !path) return 0;
+    image_free(img);
+
+    int len = 0;
+    uint8_t *data = read_whole_file(path, &len);
+    if (!data) return 0;
+
     IMG_DBG("image: %s bytes=%d magic=%02x%02x\n", path, len, data[0], data[1]);
-    int ok = 0;
-    if (len > 8 && data[0] == 0x89 && data[1] == 'P' &&
-        data[2] == 'N' && data[3] == 'G')
-        ok = png_decode(data, len, img);
-    else if (len > 2 && data[0] == 0xFF && data[1] == 0xD8)
-        ok = jpeg_decode(data, len, img);
+    int ok = (len > 8) ? image_decode(data, len, img) : 0;
     free(data);
     if (!ok) image_free(img);
     return ok;
+}
+
+int image_load_anim(struct image_anim *anim, const char *path) {
+    if (!anim || !path) return 0;
+    memset(anim, 0, sizeof(*anim));
+
+    int len = 0;
+    uint8_t *data = read_whole_file(path, &len);
+    if (!data) return 0;
+    if (len <= 0) { free(data); return 0; }
+
+    IMG_DBG("image_anim: %s bytes=%d magic=%02x%02x\n", path, len, data[0], data[1]);
+
+    if (len > 6 && data[0] == 'G' && data[1] == 'I' &&
+        data[2] == 'F' && data[3] == '8') {
+        int ok = gif_decode_frames(data, len, anim, 0);
+        free(data);
+        return ok;
+    }
+
+    /* PNG / JPEG / BMP：包装成单帧 */
+    struct image img;
+    memset(&img, 0, sizeof(img));
+    int ok = image_decode(data, len, &img);
+    free(data);
+    if (!ok) return 0;
+
+    struct image_frame *fr = (struct image_frame*)malloc(sizeof(struct image_frame));
+    if (!fr) { image_free(&img); return 0; }
+    fr[0].delay_ms = 0;
+    fr[0].pixels = img.pixels;   /* 所有权转移 */
+    anim->w = img.w;
+    anim->h = img.h;
+    anim->count = 1;
+    anim->frames = fr;
+    return 1;
+}
+
+void image_anim_free(struct image_anim *anim) {
+    if (!anim) return;
+    if (anim->frames) {
+        for (int i = 0; i < anim->count; i++)
+            if (anim->frames[i].pixels) free(anim->frames[i].pixels);
+        free(anim->frames);
+    }
+    memset(anim, 0, sizeof(*anim));
 }
