@@ -169,7 +169,7 @@ USER_ELFS = $(addprefix $(BUILD_DIR)/,$(addsuffix .ELF,$(USER_APPS)))
 
 LIBC_SRCS = string printf malloc signal env assert ctype qsort \
             abort stdlib inet netdb atexit dl \
-			stdio errno sem
+			stdio errno sem inflate
 
 LIBC_OBJS = $(addprefix $(BUILD_DIR)/libc_,$(addsuffix .o,$(LIBC_SRCS))) \
             $(BUILD_DIR)/libc_sigreturn.o \
@@ -271,6 +271,7 @@ $(DISK_IMG): $(KERNEL_ELF) $(USER_ELFS) $(USER_LIB_SOS) tcc-prepare $(BUILD_DIR)
 	sudo cp user/folder.bmp /mnt/build/folder.bmp; \
 	sudo cp user/exec.bmp /mnt/build/exec.bmp; \
 	sudo cp user/background.bmp /mnt/build/background.bmp; \
+	sudo cp user/png1.png /mnt/build/png1.png; \
 	sudo sh -c 'echo "int main() { return 42; }" > /mnt/build/test.c'; \
 	echo "set timeout=5" | sudo tee /mnt/build/boot/grub/grub.cfg > /dev/null; \
 	echo "menuentry \"HeliumOS\" {" | sudo tee -a /mnt/build/boot/grub/grub.cfg > /dev/null; \
