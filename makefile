@@ -114,7 +114,14 @@ all: $(DISK_IMG)
 # ==================== 用户程序变量 ====================
 
 USER_CFLAGS = -m32 -ffreestanding -fno-pic -fno-stack-protector \
-              -Iuser/ -Iuser/libc/include -Iuser/posix/include -Iuser/BearSSL-master/inc -MMD -MP
+              -Iuser/ -Iuser/libc/include \
+              -Iuser/BearSSL-master/inc \
+              -Iuser/netsurf-master/libwapcaplet/include \
+              -Iuser/netsurf-master/libparserutils/include \
+              -Iuser/netsurf-master/libhubbub/include \
+              -Iuser/netsurf-master/libcss/include \
+              -Iuser/netsurf-master/libdom/include \
+              -MMD -MP
 
 METHYLUI_DIR  = user/methylui
 METHYLUI_OBJS = $(BUILD_DIR)/unicode_font.o \
@@ -142,7 +149,8 @@ USER_APPS = shell idle test testkill sleeper argtest test_write \
 			test_createwin test_ansi\
 			dhcpclient desktop test_raw kilo test_malloc_loop \
 			grep find hexdump test_mui_draw test_mui_button test_mui_form \
-			test_dl test_libc test_malloc_big http about photos calc netsurf 7z
+			test_dl test_libc test_malloc_big http about photos calc 7z \
+			test_netsurf_link
 
 # 需要 POSIX 兼容层的应用
 PHOTO_PY ?= /mnt/d/Local/Python314/python.exe
@@ -154,13 +162,6 @@ BEARSSL_CFLAGS := -Iuser/BearSSL-master/inc -Iuser/BearSSL-master/src \
                   -DBR_USE_URANDOM=0 -DBR_USE_WIN32_RAND=0 \
                   -DBR_USE_UNIX_TIME=0 -DBR_USE_WIN32_TIME=0
 
-POSIX_APPS = kilo
-POSIX_DIR  = user/posix
-POSIX_CFLAGS = -I$(POSIX_DIR)/include
-POSIX_OBJS = $(BUILD_DIR)/posix_fd.o \
-             $(BUILD_DIR)/posix_io.o \
-             $(BUILD_DIR)/posix_sys.o
-
 USER_LIBS = libmath libmylib
 USER_LIB_SOS = $(addprefix $(BUILD_DIR)/,$(addsuffix .so,$(USER_LIBS)))
 
@@ -169,7 +170,9 @@ USER_ELFS = $(addprefix $(BUILD_DIR)/,$(addsuffix .ELF,$(USER_APPS)))
 
 LIBC_SRCS = string printf malloc signal env assert ctype qsort \
             abort stdlib inet netdb atexit dl \
-			stdio errno sem inflate
+            stdio errno sem inflate iconv pread math dirent stat zlib \
+            unistd time locale utsname select regex execinfo scandir fd mman getcwd \
+			termios ioctl
 
 LIBC_OBJS = $(addprefix $(BUILD_DIR)/libc_,$(addsuffix .o,$(LIBC_SRCS))) \
             $(BUILD_DIR)/libc_sigreturn.o \
@@ -268,10 +271,14 @@ $(DISK_IMG): $(KERNEL_ELF) $(USER_ELFS) $(USER_LIB_SOS) tcc-prepare $(BUILD_DIR)
 	sudo mkdir -p /mnt/build/INCLUDE /mnt/build/LIB; \
 	sudo cp -r $(BUILD_DIR)/tcc_sysroot/include/* /mnt/build/INCLUDE/; \
 	sudo cp -r $(BUILD_DIR)/tcc_sysroot/lib/* /mnt/build/LIB/; \
+	sudo mkdir -p /mnt/build/netsurf/res; \
+    sudo cp -r user/netsurf-master/netsurf/resources/* /mnt/build/netsurf/res/; \
 	sudo cp user/folder.bmp /mnt/build/folder.bmp; \
 	sudo cp user/exec.bmp /mnt/build/exec.bmp; \
 	sudo cp user/background.bmp /mnt/build/background.bmp; \
 	sudo cp user/png1.png /mnt/build/png1.png; \
+	sudo cp -r $(BUILD_DIR)/nsmonkey.elf /mnt/build/nsmonkey; \
+	echo "<html><body><h1>HeliumOS NetSurf</h1><p>Hello world!</p></body></html>" | sudo tee -a /mnt/build/test.html > /dev/null;\
 	sudo sh -c 'echo "int main() { return 42; }" > /mnt/build/test.c'; \
 	echo "set timeout=5" | sudo tee /mnt/build/boot/grub/grub.cfg > /dev/null; \
 	echo "menuentry \"HeliumOS\" {" | sudo tee -a /mnt/build/boot/grub/grub.cfg > /dev/null; \
@@ -329,9 +336,9 @@ gdb: $(ISO)
 	gdb-multiarch -ex "target remote localhost:1234" -ex "symbol-file build/kernel.elf" build/kernel.elf
 
 pack:
-	find . -type f \( -name "*.c" -o -name "*.h" -o -name "*.asm" -o -name "*.ld" -o -name "Makefile" \) -print0 | xargs -0 -I {} sh -c 'echo "==================== {} ===================="; cat "{}"; echo ""' > project.txt
-
-
+	find src user/libc user/methylui user/lib \
+	     -type f \( -name "*.c" -o -name "*.h" -o -name "*.asm" -o -name "*.ld" -o -name "Makefile" \) \
+	     -print0 | xargs -0 -I {} sh -c 'echo "==================== {} ===================="; cat "{}"; echo ""' > project.txt
 
 # ==================== 用户程序 ====================
 
@@ -365,15 +372,6 @@ $(BUILD_DIR)/%.o: user/%.c
 	@mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/posix_%.o: $(POSIX_DIR)/posix_%.c
-	@mkdir -p $(BUILD_DIR)
-	$(CC) $(POSIX_CFLAGS) $(USER_CFLAGS) -c $< -o $@
-
-# POSIX 应用专用编译规则（自动添加头文件路径）
-$(addprefix $(BUILD_DIR)/,$(addsuffix .o,$(POSIX_APPS))): $(BUILD_DIR)/%.o: user/%.c
-	@mkdir -p $(BUILD_DIR)
-	$(CC) $(POSIX_CFLAGS) $(USER_CFLAGS) -c $< -o $@
-
 # 基础库
 # 每个库依赖的其他库（用 -l 指定）
 EXTRA_LDLIBS_math :=
@@ -401,13 +399,27 @@ EXTRA_OBJS_desktop := $(BUILD_DIR)/wm_font.o $(METHYLUI_OBJS) $(BUILD_DIR)/ime_d
 EXTRA_OBJS_test_mui_draw := $(METHYLUI_OBJS)
 EXTRA_OBJS_test_mui_button := $(METHYLUI_OBJS)
 EXTRA_OBJS_test_mui_form := $(METHYLUI_OBJS)
-EXTRA_OBJS_kilo := $(POSIX_OBJS)
+EXTRA_OBJS_kilo := 
 EXTRA_OBJS_methylate := $(METHYLUI_OBJS)
 EXTRA_OBJS_term      := $(BUILD_DIR)/unicode_font.o $(BUILD_DIR)/ime_dict.o \
                         $(BUILD_DIR)/methylui/mui_font.o \
                         $(BUILD_DIR)/methylui/mui_surface.o \
                         $(BUILD_DIR)/methylui/mui_widget.o \
                         $(BUILD_DIR)/methylui/mui_scroll.o
+
+
+NS_LIBS := user/netsurf-master/libwapcaplet/build-x86_64-linux-gnu-x86_64-linux-gnu-release-lib-static/libwapcaplet.a \
+           user/netsurf-master/libparserutils/build-x86_64-linux-gnu-x86_64-linux-gnu-release-lib-static/libparserutils.a \
+           user/netsurf-master/libutf8proc/build-x86_64-linux-gnu-x86_64-linux-gnu-release-lib-static/libutf8proc.a \
+           user/netsurf-master/libnspsl/build-x86_64-linux-gnu-x86_64-linux-gnu-release-lib-static/libnspsl.a \
+           user/netsurf-master/libnsutils/build-x86_64-linux-gnu-x86_64-linux-gnu-release-lib-static/libnsutils.a \
+           user/netsurf-master/libnsgif/build-x86_64-linux-gnu-x86_64-linux-gnu-release-lib-static/libnsgif.a \
+           user/netsurf-master/libnsbmp/build-x86_64-linux-gnu-x86_64-linux-gnu-release-lib-static/libnsbmp.a \
+           user/netsurf-master/libhubbub/build-x86_64-linux-gnu-x86_64-linux-gnu-release-lib-static/libhubbub.a \
+           user/netsurf-master/libcss/build-x86_64-linux-gnu-x86_64-linux-gnu-release-lib-static/libcss.a \
+           user/netsurf-master/libdom/build-x86_64-linux-gnu-x86_64-linux-gnu-release-lib-static/libdom.a
+
+EXTRA_OBJS_test_netsurf_link := $(NS_LIBS)
 
 # 统一链接规则（二次展开拿 EXTRA_OBJS_<stem>）
 $(BUILD_DIR)/math_lib.o: user/lib/libmath.c user/libc/include/math.h
@@ -433,15 +445,14 @@ $(BUILD_DIR)/%.ELF: $(BUILD_DIR)/%.o $(BUILD_DIR)/crt0.o $(LIBC_OBJS) $$(EXTRA_O
 
 
 # 打包静态库，供 TCC 使用
-libc.a: $(LIBC_OBJS) $(POSIX_OBJS)
-	ar rcs $(BUILD_DIR)/libc.a $(LIBC_OBJS) $(POSIX_OBJS)
+libc.a: $(LIBC_OBJS)
+	ar rcs $(BUILD_DIR)/libc.a $(LIBC_OBJS)
 
 tcc-prepare: libc.a
 	@mkdir -p $(BUILD_DIR)/tcc_sysroot/include
 	@mkdir -p $(BUILD_DIR)/tcc_sysroot/lib
 	# 拷贝头文件
 	cp -r user/libc/include/* $(BUILD_DIR)/tcc_sysroot/include/
-	cp -r user/posix/include/* $(BUILD_DIR)/tcc_sysroot/include/
 	# 拷贝 crt0.o 和 libc.a
 	cp $(BUILD_DIR)/crt0.o $(BUILD_DIR)/tcc_sysroot/lib/
 	cp $(BUILD_DIR)/libc.a $(BUILD_DIR)/tcc_sysroot/lib/

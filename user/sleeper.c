@@ -8,9 +8,9 @@
 
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
-    printf("[sleeper] pid=%d, entering long sleep\n", getpid());
+    printf("[sleeper] pid=%d, entering long sleep\n", proc_getpid());
     for (;;) {
-        sleep_ms(100000);
+        sys_sleep_ms(100000);
     }
     return 0;
 }

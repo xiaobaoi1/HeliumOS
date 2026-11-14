@@ -12,6 +12,10 @@
 
 #define MB_LEN_MAX 1
 
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
+
 #define SHRT_MIN   (-32767 - 1)
 #define SHRT_MAX   32767
 #define USHRT_MAX  65535U

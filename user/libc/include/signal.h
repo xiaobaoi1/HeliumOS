@@ -28,6 +28,11 @@
 #define SIG_DFL     0
 #define SIG_IGN     1
 
+typedef void (*sighandler_t)(int);
+#define SIG_ERR ((sighandler_t)-1)
+
+sighandler_t signal(int signum, uint32_t handler);
+
 #define SIG_BLOCK    0
 #define SIG_UNBLOCK  1
 #define SIG_SETMASK  2

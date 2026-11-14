@@ -47,10 +47,10 @@ int mui_context_init(struct mui_context *ctx,
     strncpy(ctx->ev_name, ev_name, sizeof(ctx->ev_name) - 1);
 
     int shm_size = shm_total_size(w, h);
-    int shm_id = shm_open(shm_name, shm_size, 0);
+    int shm_id = sys_shm_open(shm_name, shm_size, 0);
     if (shm_id < 0) return -1;
 
-    unsigned int addr = mmap(0, shm_size,
+    unsigned int addr = sys_mmap(0, shm_size,
                              PROT_READ | PROT_WRITE,
                              MAP_SHARED, shm_id, 0);
     if ((int)addr <= 0) return -1;
@@ -73,7 +73,7 @@ int mui_context_init(struct mui_context *ctx,
     int fds[2];
     if (pipe_named(ev_name, fds) < 0) return -1;
     ctx->ev_rd = fds[0];
-    ipc_close(fds[1]);
+    pipe_close(fds[1]);
 
     ctx->inbox_w = pipe_open(WM_INBOX_NAME, 1);
     if (ctx->inbox_w < 0) return -1;
@@ -87,7 +87,7 @@ int mui_context_init(struct mui_context *ctx,
     req.w = w; req.h = h;
     req.min_w = min_w; req.min_h = min_h;
     req.max_w = max_w; req.max_h = max_h;
-    req.owner_pid = getpid();
+    req.owner_pid = proc_getpid();
     strncpy(req.shm_name, shm_name, sizeof(req.shm_name) - 1);
     strncpy(req.ev_name, ev_name, sizeof(req.ev_name) - 1);
     strncpy(req.title, title ? title : "", sizeof(req.title) - 1);
@@ -104,15 +104,15 @@ void mui_context_destroy(struct mui_context *ctx) {
         struct wm_destroy_request dr;
         dr.magic = WM_MAGIC;
         dr.type  = WM_REQ_DESTROY;
-        dr.owner_pid = getpid();
+        dr.owner_pid = proc_getpid();
         strncpy(dr.shm_name, ctx->shm_name, sizeof(dr.shm_name) - 1);
         pipe_write(ctx->inbox_w, &dr, sizeof(dr));
     }
 
-    if (ctx->ev_rd >= 0) ipc_close(ctx->ev_rd);
-    if (ctx->inbox_w >= 0) ipc_close(ctx->inbox_w);
+    if (ctx->ev_rd >= 0) pipe_close(ctx->ev_rd);
+    if (ctx->inbox_w >= 0) pipe_close(ctx->inbox_w);
     if (ctx->hdr)
-        munmap((unsigned int)ctx->hdr, shm_total_size(ctx->cw, ctx->ch));
+        sys_munmap((unsigned int)ctx->hdr, shm_total_size(ctx->cw, ctx->ch));
 
     ctx->ev_rd = -1;
     ctx->inbox_w = -1;
@@ -281,6 +281,6 @@ void mui_context_run(struct mui_context *ctx) {
         }
 
         mui_context_paint(ctx);
-        sleep_ms(1);
+        sys_sleep_ms(1);
     }
 }

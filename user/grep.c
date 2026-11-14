@@ -18,7 +18,7 @@ static int grep_fd(int fd, int is_file, const char *pat,
     int n;
 
     while ((n = is_file ? fs_read(fd, buf, sizeof(buf))
-                        : read(0, buf, sizeof(buf))) > 0) {
+                        : sys_read(0, buf, sizeof(buf))) > 0) {
         for (int i = 0; i < n; i++) {
             char c = buf[i];
             if (c == '\n') {

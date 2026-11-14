@@ -11,6 +11,7 @@
 #include <errno.h>
 #include <stddef.h>
 #include <uaccess.h>
+#include <panic.h>
 
 /* ---------- 用户态 sigaction 镜像 ---------- */
 struct user_sigaction {
@@ -157,7 +158,8 @@ void sys_sigreturn(struct registers *regs) {
     struct task *cur = get_current_task();
     if (!cur) return;
 
-    uint32_t frame_esp = regs->user_esp;
+    if (regs->user_esp < 4) panic("Invaild frame");
+    uint32_t frame_esp = regs->user_esp - 4;
     struct sigframe f;
 
     if (check_user_range(frame_esp, sizeof(f)) < 0 ||

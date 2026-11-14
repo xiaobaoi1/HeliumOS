@@ -1,0 +1,78 @@
+build-x86_64-linux-gnu-x86_64-linux-gnu-release-lib-static/src_parse_propstrings.o: \
+ src/parse/propstrings.c \
+ /home/user/桌面/HeliumOS/user/libc/include/errno.h \
+ /home/user/桌面/HeliumOS/user/netsurf-master/libcss/src/parse/propstrings.h \
+ /home/user/桌面/HeliumOS/user/netsurf-master/libcss/src/utils/utils.h \
+ /home/user/桌面/HeliumOS/user/netsurf-master/libwapcaplet/include/libwapcaplet/libwapcaplet.h \
+ /home/user/桌面/HeliumOS/user/libc/include/stdbool.h \
+ /home/user/桌面/HeliumOS/user/libc/include/stdint.h \
+ /home/user/桌面/HeliumOS/user/libc/include/assert.h \
+ /home/user/桌面/HeliumOS/user/netsurf-master/libcss/include/libcss/types.h \
+ /home/user/桌面/HeliumOS/user/libc/include/stdlib.h \
+ /home/user/桌面/HeliumOS/user/netsurf-master/libcss/include/libcss/fpmath.h \
+ /home/user/桌面/HeliumOS/user/libc/include/limits.h \
+ /home/user/桌面/HeliumOS/user/netsurf-master/libcss/include/libcss/errors.h \
+ /home/user/桌面/HeliumOS/user/netsurf-master/libcss/src/stylesheet.h \
+ /home/user/桌面/HeliumOS/user/libc/include/inttypes.h \
+ /home/user/桌面/HeliumOS/user/libc/include/stdio.h \
+ /home/user/桌面/HeliumOS/user/libc/include/stdarg.h \
+ /home/user/桌面/HeliumOS/user/netsurf-master/libcss/include/libcss/functypes.h \
+ /home/user/桌面/HeliumOS/user/netsurf-master/libcss/include/libcss/stylesheet.h \
+ /home/user/桌面/HeliumOS/user/netsurf-master/libcss/include/libcss/properties.h \
+ /home/user/桌面/HeliumOS/user/netsurf-master/libcss/src/bytecode/bytecode.h \
+ /home/user/桌面/HeliumOS/user/netsurf-master/libcss/src/parse/parse.h \
+ /home/user/桌面/HeliumOS/user/netsurf-master/libparserutils/include/parserutils/utils/vector.h \
+ /home/user/桌面/HeliumOS/user/netsurf-master/libparserutils/include/parserutils/errors.h \
+ /home/user/桌面/HeliumOS/user/netsurf-master/libparserutils/include/parserutils/functypes.h \
+ /home/user/桌面/HeliumOS/user/netsurf-master/libparserutils/include/parserutils/types.h \
+ /home/user/桌面/HeliumOS/user/netsurf-master/libcss/src/parse/mq.h \
+ /home/user/桌面/HeliumOS/user/netsurf-master/libcss/src/parse/language.h \
+ /home/user/桌面/HeliumOS/user/netsurf-master/libparserutils/include/parserutils/utils/stack.h \
+ /home/user/桌面/HeliumOS/user/netsurf-master/libcss/src/lex/lex.h \
+ /home/user/桌面/HeliumOS/user/netsurf-master/libparserutils/include/parserutils/input/inputstream.h \
+ /home/user/桌面/HeliumOS/user/netsurf-master/libparserutils/include/parserutils/charset/utf8.h \
+ /home/user/桌面/HeliumOS/user/netsurf-master/libparserutils/include/parserutils/utils/buffer.h \
+ /home/user/桌面/HeliumOS/user/netsurf-master/libcss/src/parse/parse.h \
+ /home/user/桌面/HeliumOS/user/netsurf-master/libcss/src/select/hash.h \
+ /home/user/桌面/HeliumOS/user/netsurf-master/libcss/include/libcss/unit.h \
+ /home/user/桌面/HeliumOS/user/netsurf-master/libcss/src/select/bloom.h \
+ /home/user/桌面/HeliumOS/user/libc/include/string.h \
+ /home/user/桌面/HeliumOS/user/netsurf-master/libcss/src/select/strings.h
+/home/user/桌面/HeliumOS/user/libc/include/errno.h:
+/home/user/桌面/HeliumOS/user/netsurf-master/libcss/src/parse/propstrings.h:
+/home/user/桌面/HeliumOS/user/netsurf-master/libcss/src/utils/utils.h:
+/home/user/桌面/HeliumOS/user/netsurf-master/libwapcaplet/include/libwapcaplet/libwapcaplet.h:
+/home/user/桌面/HeliumOS/user/libc/include/stdbool.h:
+/home/user/桌面/HeliumOS/user/libc/include/stdint.h:
+/home/user/桌面/HeliumOS/user/libc/include/assert.h:
+/home/user/桌面/HeliumOS/user/netsurf-master/libcss/include/libcss/types.h:
+/home/user/桌面/HeliumOS/user/libc/include/stdlib.h:
+/home/user/桌面/HeliumOS/user/netsurf-master/libcss/include/libcss/fpmath.h:
+/home/user/桌面/HeliumOS/user/libc/include/limits.h:
+/home/user/桌面/HeliumOS/user/netsurf-master/libcss/include/libcss/errors.h:
+/home/user/桌面/HeliumOS/user/netsurf-master/libcss/src/stylesheet.h:
+/home/user/桌面/HeliumOS/user/libc/include/inttypes.h:
+/home/user/桌面/HeliumOS/user/libc/include/stdio.h:
+/home/user/桌面/HeliumOS/user/libc/include/stdarg.h:
+/home/user/桌面/HeliumOS/user/netsurf-master/libcss/include/libcss/functypes.h:
+/home/user/桌面/HeliumOS/user/netsurf-master/libcss/include/libcss/stylesheet.h:
+/home/user/桌面/HeliumOS/user/netsurf-master/libcss/include/libcss/properties.h:
+/home/user/桌面/HeliumOS/user/netsurf-master/libcss/src/bytecode/bytecode.h:
+/home/user/桌面/HeliumOS/user/netsurf-master/libcss/src/parse/parse.h:
+/home/user/桌面/HeliumOS/user/netsurf-master/libparserutils/include/parserutils/utils/vector.h:
+/home/user/桌面/HeliumOS/user/netsurf-master/libparserutils/include/parserutils/errors.h:
+/home/user/桌面/HeliumOS/user/netsurf-master/libparserutils/include/parserutils/functypes.h:
+/home/user/桌面/HeliumOS/user/netsurf-master/libparserutils/include/parserutils/types.h:
+/home/user/桌面/HeliumOS/user/netsurf-master/libcss/src/parse/mq.h:
+/home/user/桌面/HeliumOS/user/netsurf-master/libcss/src/parse/language.h:
+/home/user/桌面/HeliumOS/user/netsurf-master/libparserutils/include/parserutils/utils/stack.h:
+/home/user/桌面/HeliumOS/user/netsurf-master/libcss/src/lex/lex.h:
+/home/user/桌面/HeliumOS/user/netsurf-master/libparserutils/include/parserutils/input/inputstream.h:
+/home/user/桌面/HeliumOS/user/netsurf-master/libparserutils/include/parserutils/charset/utf8.h:
+/home/user/桌面/HeliumOS/user/netsurf-master/libparserutils/include/parserutils/utils/buffer.h:
+/home/user/桌面/HeliumOS/user/netsurf-master/libcss/src/parse/parse.h:
+/home/user/桌面/HeliumOS/user/netsurf-master/libcss/src/select/hash.h:
+/home/user/桌面/HeliumOS/user/netsurf-master/libcss/include/libcss/unit.h:
+/home/user/桌面/HeliumOS/user/netsurf-master/libcss/src/select/bloom.h:
+/home/user/桌面/HeliumOS/user/libc/include/string.h:
+/home/user/桌面/HeliumOS/user/netsurf-master/libcss/src/select/strings.h:

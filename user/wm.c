@@ -840,10 +840,10 @@ static struct window *make_app_window(struct wm_request *req) {
     w->z = g_next_z++;
 
     int shm_size = shm_total_size(req->w, req->h);
-    int shm_id = shm_open(req->shm_name, shm_size, 0);
+    int shm_id = sys_shm_open(req->shm_name, shm_size, 0);
     if (shm_id < 0) { w->used = 0; return NULL; }
 
-    unsigned int addr = mmap(0, shm_size,
+    unsigned int addr = sys_mmap(0, shm_size,
                              PROT_READ | PROT_WRITE,
                              MAP_SHARED, shm_id, 0);
     if ((int)addr <= 0) { w->used = 0; return NULL; }
@@ -990,14 +990,14 @@ static void destroy_window(struct window *w) {
         send_event(w, WM_EV_CLOSE, 0, 0, 0, 0);
     }
 
-    if (w->event_w >= 0) ipc_close(w->event_w);
+    if (w->event_w >= 0) pipe_close(w->event_w);
 
     if (w->map_addr) {
-        munmap(w->map_addr, w->map_size);
+        sys_munmap(w->map_addr, w->map_size);
         w->map_addr = 0;
         w->map_size = 0;
     }
-    if (w->shm_name[0]) shm_unlink(w->shm_name);
+    if (w->shm_name[0]) sys_shm_unlink(w->shm_name);
 
     w->used = 0;
     w->event_w = -1;
@@ -1047,21 +1047,21 @@ static void handle_resize_request(struct wm_resize_request *req) {
     win_bbox(w, &ox0, &oy0, &ox1, &oy1);
 
     int shm_size = shm_total_size(cw, ch);
-    int shm_id = shm_open(req->new_shm, shm_size, 0);
+    int shm_id = sys_shm_open(req->new_shm, shm_size, 0);
     if (shm_id < 0) return;
 
-    unsigned int addr = mmap(0, shm_size,
+    unsigned int addr = sys_mmap(0, shm_size,
                              PROT_READ | PROT_WRITE,
                              MAP_SHARED, shm_id, 0);
     if ((int)addr <= 0) return;
 
     if (w->map_addr) {
-        munmap(w->map_addr, w->map_size);
+        sys_munmap(w->map_addr, w->map_size);
         w->map_addr = 0;
         w->map_size = 0;
     }
 
-    shm_unlink(req->old_shm);
+    sys_shm_unlink(req->old_shm);
 
     w->cw = cw;
     w->ch = ch;
@@ -1499,13 +1499,13 @@ int main(int argc, char **argv) {
     g_pitch_px = info.pitch / 4;
 
     unsigned int back_size = info.pitch * info.height;
-    unsigned int back_addr = mmap(0, back_size,
+    unsigned int back_addr = sys_mmap(0, back_size,
                                   PROT_READ | PROT_WRITE,
                                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if ((int)back_addr <= 0) { printf("wm: back mmap failed\n"); return 1; }
     g_back = (unsigned int*)back_addr;
 
-    unsigned int scratch_addr = mmap(0, back_size,
+    unsigned int scratch_addr = sys_mmap(0, back_size,
                                      PROT_READ | PROT_WRITE,
                                      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if ((int)scratch_addr > 0) g_scratch = (unsigned int*)scratch_addr;
@@ -1521,7 +1521,7 @@ int main(int argc, char **argv) {
         return 1;
     }
     g_inbox_rd = inbox_fds[0];
-    ipc_close(inbox_fds[1]);
+    pipe_close(inbox_fds[1]);
 
     wm_font_load();
 
@@ -1797,7 +1797,7 @@ int main(int argc, char **argv) {
         }
 
         g_wm_tick++;
-        sleep_ms(2);
+        sys_sleep_ms(2);
     }
 
     return 0;

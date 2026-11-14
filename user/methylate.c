@@ -176,7 +176,7 @@ int main(void) {
                          "methylate_shm", "methylate_ev",
                          480, 360, 240, 180, 0, 0) < 0) {
         const char *msg = "mui_context_init failed\n";
-        write(2, msg, strlen(msg));
+        sys_write(2, msg, strlen(msg));
         return 1;
     }
 

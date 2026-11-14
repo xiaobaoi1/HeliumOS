@@ -37,7 +37,7 @@ int main(int argc, char **argv) {
                 screen[(oy + j + 100) * pitch_px + (ox + k + 100)] = 0x00FF00;
             }
         }
-        sleep_ms(10);
+        sys_sleep_ms(10);
     }
 
     printf("done\n");

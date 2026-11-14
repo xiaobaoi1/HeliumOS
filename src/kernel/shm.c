@@ -47,11 +47,13 @@ static struct shm *shm_create(const char *name, uint32_t num_pages) {
             memset(s, 0, sizeof(*s));
             strncpy(s->name, name, SHM_NAME_MAX - 1);
             s->num_pages = num_pages;
-            s->pages = (uint32_t*)pmm_alloc_page();
+
+            uint32_t bytes = num_pages * sizeof(uint32_t);
+            uint32_t arr_pages = (bytes + 0xFFF) / 0x1000;
+            s->pages = (uint32_t*)pmm_alloc_pages(arr_pages);
             if (!s->pages) return NULL;
-            memset(s->pages, 0, 4096);
-            if (!s->pages) return NULL;
-            memset(s->pages, 0, num_pages * sizeof(uint32_t));
+            memset(s->pages, 0, bytes);
+
             s->used = 1;
             s->refcount = 0;
             return s;
@@ -66,10 +68,13 @@ struct shm *shm_create_kernel(const char *name, uint32_t num_pages) {
 
 static void shm_destroy(struct shm *s) {
     if (!s) return;
-    for (uint32_t i = 0; i < s->num_pages; i++) {
+    for (uint32_t i = 0; i < s->num_pages; i++)
         if (s->pages[i]) pmm_free_page(s->pages[i]);
+    if (s->pages) {
+        uint32_t bytes = s->num_pages * sizeof(uint32_t);
+        uint32_t arr_pages = (bytes + 0xFFF) / 0x1000;
+        pmm_free_pages((uint32_t)s->pages, arr_pages);
     }
-    pmm_free_page((uint32_t)s->pages);
     s->pages = NULL;
     s->used = 0;
 }

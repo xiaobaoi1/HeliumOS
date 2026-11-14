@@ -120,7 +120,7 @@ struct hostent *gethostbyname(const char *name) {
     for (int t = 0; t < 20; t++) {
         int r = sendto(s, query, qlen, (struct sockaddr*)&dst, sizeof(dst));
         if (r > 0) { sent = 1; break; }
-        sleep_ms(50);
+        sys_sleep_ms(50);
     }
     if (!sent) {
         dprintf(2, "[DNS] sendto failed\n");
@@ -138,7 +138,7 @@ struct hostent *gethostbyname(const char *name) {
         int r = recvfrom(s, resp, sizeof(resp),
                          (struct sockaddr*)&src, &srclen);
         if (r > 0) { rlen = r; break; }
-        sleep_ms(50);
+        sys_sleep_ms(50);
     }
     sockclose(s);
     if (rlen < 12) return NULL;

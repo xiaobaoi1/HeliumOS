@@ -14,10 +14,10 @@ int main(void) {
     const char *ev_name  = "mui-test-ev";
 
     int shm_size = shm_total_size(W, H);
-    int shm_id = shm_open(shm_name, shm_size, 0);
+    int shm_id = sys_shm_open(shm_name, shm_size, 0);
     if (shm_id < 0) { printf("shm_open: %d\n", shm_id); return 1; }
 
-    unsigned int addr = mmap(0, shm_size,
+    unsigned int addr = sys_mmap(0, shm_size,
                              PROT_READ | PROT_WRITE,
                              MAP_SHARED, shm_id, 0);
     if ((int)addr <= 0) { printf("mmap: %d\n", (int)addr); return 1; }
@@ -36,7 +36,7 @@ int main(void) {
     int fds[2];
     if (pipe_named(ev_name, fds) < 0) return 1;
     int ev_rd = fds[0];
-    ipc_close(fds[1]);
+    pipe_close(fds[1]);
 
     /* 创建 WM 窗口 */
     int inbox = pipe_open(WM_INBOX_NAME, 1);
@@ -55,7 +55,7 @@ int main(void) {
     req.min_h = 150;
     req.max_w = 1600;
     req.max_h = 1200;
-    req.owner_pid = getpid();
+    req.owner_pid = proc_getpid();
     strncpy(req.shm_name, shm_name, sizeof(req.shm_name) - 1);
     strncpy(req.ev_name, ev_name, sizeof(req.ev_name) - 1);
     strcpy(req.title, "MethylUI Draw Test");
@@ -114,13 +114,13 @@ int main(void) {
                 struct wm_destroy_request dr;
                 dr.magic = WM_MAGIC;
                 dr.type  = WM_REQ_DESTROY;
-                dr.owner_pid = getpid();
+                dr.owner_pid = proc_getpid();
                 strncpy(dr.shm_name, shm_name, sizeof(dr.shm_name) - 1);
                 pipe_write(inbox, &dr, sizeof(dr));
                 return 0;
             }
         }
-        sleep_ms(10);
+        sys_sleep_ms(10);
     }
 
     return 0;

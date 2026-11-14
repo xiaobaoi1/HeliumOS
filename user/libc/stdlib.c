@@ -1,6 +1,7 @@
 #include "stdlib.h"
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 /* ---------- 字符串转数字 ---------- */
 
@@ -157,4 +158,13 @@ uint64_t __udivdi3(uint64_t n, uint64_t d) {
 
 uint64_t __umoddi3(uint64_t n, uint64_t d) {
     return n - __udivdi3(n, d) * d;
+}
+
+char *realpath(const char *path, char *resolved_path) {
+    if (!path || !resolved_path) return NULL;
+    /* HeliumOS: 路径已是绝对路径，直接拷贝，不做规范化 */
+    size_t n = strlen(path);
+    if (n >= 4096) return NULL;
+    memcpy(resolved_path, path, n + 1);
+    return resolved_path;
 }

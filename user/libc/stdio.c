@@ -75,7 +75,7 @@ unsigned int fread(void *ptr, unsigned int size, unsigned int nmemb, FILE *strea
     unsigned int total = size * nmemb;
     
     if (stream->type == 1) {
-        int r = read(0, ptr, total);
+        int r = sys_read(0, ptr, total);
         if (r <= 0) { stream->eof = 1; return 0; }
         stream->offset += r;
         return r / size;
@@ -118,7 +118,7 @@ unsigned int fwrite(const void *ptr, unsigned int size, unsigned int nmemb, FILE
     
     if (stream->type == 2 || stream->type == 3) {
         int fnum = (stream->type == 2) ? 1 : 2;
-        int w = write(fnum, ptr, total);
+        int w = sys_write(fnum, ptr, total);
         if (w > 0) stream->offset += w;
         return w > 0 ? w / size : 0;
     }
@@ -251,4 +251,40 @@ FILE *__stdio_create_from_handle(int handle, unsigned int offset) {
     f->pos = 0;
     f->buf_len = 0;
     return f;
+}
+
+char *fgets(char *s, int size, FILE *stream) {
+    if (!s || size <= 0 || !stream) return NULL;
+    int i = 0;
+    while (i < size - 1) {
+        int c = fgetc(stream);
+        if (c < 0) break;
+        s[i++] = (char)c;
+        if (c == '\n') break;
+    }
+    if (i == 0) return NULL;
+    s[i] = '\0';
+    return s;
+}
+
+#include "syscall.h"   /* 若未包含 */
+
+int remove(const char *path) {
+    return fs_unlink(path);
+}
+
+int rename(const char *oldpath, const char *newpath) {
+    return fs_rename(oldpath, newpath);
+}
+
+int feof(FILE *stream) {
+    return stream ? stream->eof : 0;
+}
+
+int ferror(FILE *stream) {
+    return stream ? stream->err : 0;
+}
+
+void setbuf(FILE *stream, char *buf) {
+    (void)stream; (void)buf;   /* HeliumOS: 无缓冲，空操作 */
 }

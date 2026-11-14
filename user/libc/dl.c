@@ -275,7 +275,7 @@ void *dlopen(const char *path, int mode) {
 
     /* 第一遍：mmap 整个跨度，作为骨架 */
     uint32_t total_size = (max_vaddr_end - min_vaddr + 0xFFF) & ~0xFFFu;
-    unsigned int base = mmap(0, total_size, PROT_READ | PROT_WRITE,
+    unsigned int base = sys_mmap(0, total_size, PROT_READ | PROT_WRITE,
                              MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if ((int)base <= 0) {
         fs_close(fd); lib->used = 0;
@@ -313,10 +313,10 @@ void *dlopen(const char *path, int mode) {
             uint32_t map_addr = seg_vaddr & ~0xFFFu;
             
             /* 取消原有的匿名映射 */
-            munmap(map_addr, map_len);
+            sys_munmap(map_addr, map_len);
 
             /* 重新作为文件映射，传入 map_off */
-            unsigned int res = mmap(map_addr, map_len, PROT_READ | PROT_EXEC,
+            unsigned int res = sys_mmap(map_addr, map_len, PROT_READ | PROT_EXEC,
                                     MAP_PRIVATE | MAP_FILE, fd, map_off);
             /* 如果失败 */
             if ((int)res <= 0) {

@@ -1,0 +1,378 @@
+M.CONFIG: JPEG (libjpeg)	disabled      (NETSURF_USE_JPEG := NO)
+M.CONFIG: PDF export (haru)	disabled      (NETSURF_USE_HARU_PDF := NO)
+M.CONFIG: glibc internal iconv	disabled      (NETSURF_USE_LIBICONV_PLUG := NO)
+M.CONFIG: Javascript (Duktape)	disabled      (NETSURF_USE_DUKTAPE := NO)
+PKG.CNFG: CSS (libcss)	enabled
+PKG.CNFG: DOM (libdom)	enabled
+PKG.CNFG: nsutils (libnsutils)	enabled
+M.CONFIG: Curl (libcurl)	disabled      (NETSURF_USE_CURL := NO)
+M.CONFIG: OpenSSL (openssl)	disabled      (NETSURF_USE_OPENSSL := NO)
+M.CONFIG: utf8 (libutf8proc)	enabled       (NETSURF_USE_UTF8PROC := YES)
+M.CONFIG: JPEGXL (libjxl)	disabled      (NETSURF_USE_JPEGXL := NO)
+M.CONFIG: WEBP (libwebp)	disabled      (NETSURF_USE_WEBP := NO)
+M.CONFIG: PNG (libpng)	disabled      (NETSURF_USE_PNG := NO)
+M.CONFIG: BMP (libnsbmp)	enabled       (NETSURF_USE_BMP := YES)
+M.CONFIG: GIF (libnsgif)	enabled       (NETSURF_USE_GIF := YES)
+M.CONFIG: SVG (libsvgtiny)	disabled      (NETSURF_USE_NSSVG := NO)
+M.CONFIG: Sprite (librosprite)	disabled      (NETSURF_USE_ROSPRITE := NO)
+M.CONFIG: PSL (libnspsl)	enabled       (NETSURF_USE_NSPSL := YES)
+M.CONFIG: LOG (libnslog)	disabled      (NETSURF_USE_NSLOG := NO)
+PKG.CNFG: Check (check)	disabled
+Package libcurl was not found in the pkg-config search path.
+Perhaps you should add the directory containing `libcurl.pc'
+to the PKG_CONFIG_PATH environment variable
+Package 'libcurl', required by 'virtual:world', not found
+Package libcurl was not found in the pkg-config search path.
+Perhaps you should add the directory containing `libcurl.pc'
+to the PKG_CONFIG_PATH environment variable
+Package 'libcurl', required by 'virtual:world', not found
+   MKDIR: build/Linux-monkey
+   MKDIR: build/Linux-monkey/deps
+ COMPILE: content/content.c
+ COMPILE: content/content_factory.c
+ COMPILE: content/fetch.c
+ COMPILE: content/fetchers/about/about.c
+ COMPILE: content/fetchers/about/blank.c
+ COMPILE: content/fetchers/about/certificate.c
+ COMPILE: content/fetchers/about/chart.c
+In file included from content/fetchers/about/chart.c:36:
+./utils/config.h:42:7: warning: redundant redeclaration of ‘strndup’ [-Wredundant-decls]
+   42 | char *strndup(const char *s, size_t n);
+      |       ^~~~~~~
+In file included from content/fetchers/about/chart.c:32:
+/home/user/桌面/HeliumOS/user/libc/include/string.h:22:8: note: previous declaration of ‘strndup’ with type ‘char *(const char *, size_t)’ {aka ‘char *(const char *, unsigned int)’}
+   22 | char  *strndup(const char *s, size_t n);
+      |        ^~~~~~~
+ COMPILE: content/fetchers/about/choices.c
+ COMPILE: content/fetchers/about/config.c
+ COMPILE: content/fetchers/about/imagecache.c
+ COMPILE: content/fetchers/about/nscolours.c
+ COMPILE: content/fetchers/about/query.c
+ COMPILE: content/fetchers/about/query_auth.c
+In file included from ./content/fetch.h:28,
+                 from content/fetchers/about/query_auth.c:34:
+./utils/config.h:42:7: warning: redundant redeclaration of ‘strndup’ [-Wredundant-decls]
+   42 | char *strndup(const char *s, size_t n);
+      |       ^~~~~~~
+In file included from content/fetchers/about/query_auth.c:27:
+/home/user/桌面/HeliumOS/user/libc/include/string.h:22:8: note: previous declaration of ‘strndup’ with type ‘char *(const char *, size_t)’ {aka ‘char *(const char *, unsigned int)’}
+   22 | char  *strndup(const char *s, size_t n);
+      |        ^~~~~~~
+ COMPILE: content/fetchers/about/query_fetcherror.c
+In file included from ./content/fetch.h:28,
+                 from content/fetchers/about/query_fetcherror.c:33:
+./utils/config.h:42:7: warning: redundant redeclaration of ‘strndup’ [-Wredundant-decls]
+   42 | char *strndup(const char *s, size_t n);
+      |       ^~~~~~~
+In file included from content/fetchers/about/query_fetcherror.c:27:
+/home/user/桌面/HeliumOS/user/libc/include/string.h:22:8: note: previous declaration of ‘strndup’ with type ‘char *(const char *, size_t)’ {aka ‘char *(const char *, unsigned int)’}
+   22 | char  *strndup(const char *s, size_t n);
+      |        ^~~~~~~
+ COMPILE: content/fetchers/about/query_privacy.c
+In file included from ./content/fetch.h:28,
+                 from content/fetchers/about/query_privacy.c:33:
+./utils/config.h:42:7: warning: redundant redeclaration of ‘strndup’ [-Wredundant-decls]
+   42 | char *strndup(const char *s, size_t n);
+      |       ^~~~~~~
+In file included from content/fetchers/about/query_privacy.c:27:
+/home/user/桌面/HeliumOS/user/libc/include/string.h:22:8: note: previous declaration of ‘strndup’ with type ‘char *(const char *, size_t)’ {aka ‘char *(const char *, unsigned int)’}
+   22 | char  *strndup(const char *s, size_t n);
+      |        ^~~~~~~
+ COMPILE: content/fetchers/about/query_timeout.c
+In file included from ./content/fetch.h:28,
+                 from content/fetchers/about/query_timeout.c:33:
+./utils/config.h:42:7: warning: redundant redeclaration of ‘strndup’ [-Wredundant-decls]
+   42 | char *strndup(const char *s, size_t n);
+      |       ^~~~~~~
+In file included from content/fetchers/about/query_timeout.c:27:
+/home/user/桌面/HeliumOS/user/libc/include/string.h:22:8: note: previous declaration of ‘strndup’ with type ‘char *(const char *, size_t)’ {aka ‘char *(const char *, unsigned int)’}
+   22 | char  *strndup(const char *s, size_t n);
+      |        ^~~~~~~
+TESTMENT: build/Linux-monkey/testament.h
+ COMPILE: content/fetchers/about/testament.c
+ COMPILE: content/fetchers/data.c
+ COMPILE: content/fetchers/resource.c
+ COMPILE: content/handlers/css/css.c
+ COMPILE: content/handlers/css/dump.c
+ COMPILE: content/handlers/css/hints.c
+ COMPILE: content/handlers/css/internal.c
+ COMPILE: content/handlers/css/select.c
+ COMPILE: content/handlers/html/box_construct.c
+ COMPILE: content/handlers/html/box_inspect.c
+ COMPILE: content/handlers/html/box_manipulate.c
+ COMPILE: content/handlers/html/box_normalise.c
+ COMPILE: content/handlers/html/box_special.c
+ COMPILE: content/handlers/html/box_textarea.c
+ COMPILE: content/handlers/html/css.c
+In file included from content/handlers/html/css.c:29:
+/home/user/桌面/HeliumOS/user/libc/include/string.h:22:8: warning: redundant redeclaration of ‘strndup’ [-Wredundant-decls]
+   22 | char  *strndup(const char *s, size_t n);
+      |        ^~~~~~~
+In file included from content/handlers/html/css.c:24:
+./utils/config.h:42:7: note: previous declaration of ‘strndup’ with type ‘char *(const char *, size_t)’ {aka ‘char *(const char *, unsigned int)’}
+   42 | char *strndup(const char *s, size_t n);
+      |       ^~~~~~~
+ COMPILE: content/handlers/html/css_fetcher.c
+ COMPILE: content/handlers/html/dom_event.c
+In file included from content/handlers/html/dom_event.c:27:
+./utils/config.h:42:7: warning: redundant redeclaration of ‘strndup’ [-Wredundant-decls]
+   42 | char *strndup(const char *s, size_t n);
+      |       ^~~~~~~
+In file included from content/handlers/html/dom_event.c:25:
+/home/user/桌面/HeliumOS/user/libc/include/string.h:22:8: note: previous declaration of ‘strndup’ with type ‘char *(const char *, size_t)’ {aka ‘char *(const char *, unsigned int)’}
+   22 | char  *strndup(const char *s, size_t n);
+      |        ^~~~~~~
+ COMPILE: content/handlers/html/font.c
+ COMPILE: content/handlers/html/form.c
+ COMPILE: content/handlers/html/forms.c
+In file included from content/handlers/html/forms.c:26:
+./utils/config.h:42:7: warning: redundant redeclaration of ‘strndup’ [-Wredundant-decls]
+   42 | char *strndup(const char *s, size_t n);
+      |       ^~~~~~~
+In file included from content/handlers/html/forms.c:24:
+/home/user/桌面/HeliumOS/user/libc/include/string.h:22:8: note: previous declaration of ‘strndup’ with type ‘char *(const char *, size_t)’ {aka ‘char *(const char *, unsigned int)’}
+   22 | char  *strndup(const char *s, size_t n);
+      |        ^~~~~~~
+ COMPILE: content/handlers/html/html.c
+ COMPILE: content/handlers/html/imagemap.c
+ COMPILE: content/handlers/html/interaction.c
+ COMPILE: content/handlers/html/layout.c
+ COMPILE: content/handlers/html/layout_flex.c
+ COMPILE: content/handlers/html/object.c
+ COMPILE: content/handlers/html/redraw.c
+In file included from content/handlers/html/redraw.c:35:
+/home/user/桌面/HeliumOS/user/libc/include/string.h:22:8: warning: redundant redeclaration of ‘strndup’ [-Wredundant-decls]
+   22 | char  *strndup(const char *s, size_t n);
+      |        ^~~~~~~
+In file included from content/handlers/html/redraw.c:31:
+./utils/config.h:42:7: note: previous declaration of ‘strndup’ with type ‘char *(const char *, size_t)’ {aka ‘char *(const char *, unsigned int)’}
+   42 | char *strndup(const char *s, size_t n);
+      |       ^~~~~~~
+ COMPILE: content/handlers/html/redraw_border.c
+ COMPILE: content/handlers/html/script.c
+ COMPILE: content/handlers/html/table.c
+ COMPILE: content/handlers/html/textselection.c
+ COMPILE: content/handlers/image/bmp.c
+ COMPILE: content/handlers/image/gif.c
+ COMPILE: content/handlers/image/ico.c
+ COMPILE: content/handlers/image/image.c
+ COMPILE: content/handlers/image/image_cache.c
+ COMPILE: content/handlers/javascript/fetcher.c
+ COMPILE: content/handlers/javascript/none/none.c
+ COMPILE: content/handlers/text/textplain.c
+ COMPILE: content/hlcache.c
+ COMPILE: content/llcache.c
+ COMPILE: content/mimesniff.c
+ COMPILE: content/no_backing_store.c
+ COMPILE: content/textsearch.c
+ COMPILE: content/urldb.c
+ COMPILE: desktop/bitmap.c
+ COMPILE: desktop/browser.c
+ COMPILE: desktop/browser_history.c
+ COMPILE: desktop/browser_window.c
+In file included from desktop/browser_window.c:30:
+/home/user/桌面/HeliumOS/user/libc/include/string.h:22:8: warning: redundant redeclaration of ‘strndup’ [-Wredundant-decls]
+   22 | char  *strndup(const char *s, size_t n);
+      |        ^~~~~~~
+In file included from desktop/browser_window.c:27:
+./utils/config.h:42:7: note: previous declaration of ‘strndup’ with type ‘char *(const char *, size_t)’ {aka ‘char *(const char *, unsigned int)’}
+   42 | char *strndup(const char *s, size_t n);
+      |       ^~~~~~~
+ COMPILE: desktop/cookie_manager.c
+ COMPILE: desktop/cw_helper.c
+ COMPILE: desktop/download.c
+ COMPILE: desktop/font_haru.c
+ COMPILE: desktop/frames.c
+ COMPILE: desktop/global_history.c
+ COMPILE: desktop/gui_factory.c
+In file included from desktop/gui_factory.c:24:
+./utils/config.h:42:7: warning: redundant redeclaration of ‘strndup’ [-Wredundant-decls]
+   42 | char *strndup(const char *s, size_t n);
+      |       ^~~~~~~
+In file included from desktop/gui_factory.c:22:
+/home/user/桌面/HeliumOS/user/libc/include/string.h:22:8: note: previous declaration of ‘strndup’ with type ‘char *(const char *, size_t)’ {aka ‘char *(const char *, unsigned int)’}
+   22 | char  *strndup(const char *s, size_t n);
+      |        ^~~~~~~
+ COMPILE: desktop/hotlist.c
+ COMPILE: desktop/knockout.c
+ COMPILE: desktop/local_history.c
+ COMPILE: desktop/mouse.c
+ COMPILE: desktop/netsurf.c
+ COMPILE: desktop/page-info.c
+ COMPILE: desktop/plot_style.c
+ COMPILE: desktop/print.c
+In file included from desktop/print.c:26:
+/home/user/桌面/HeliumOS/user/libc/include/string.h:22:8: warning: redundant redeclaration of ‘strndup’ [-Wredundant-decls]
+   22 | char  *strndup(const char *s, size_t n);
+      |        ^~~~~~~
+In file included from desktop/print.c:23:
+./utils/config.h:42:7: note: previous declaration of ‘strndup’ with type ‘char *(const char *, size_t)’ {aka ‘char *(const char *, unsigned int)’}
+   42 | char *strndup(const char *s, size_t n);
+      |       ^~~~~~~
+ COMPILE: desktop/save_complete.c
+ COMPILE: desktop/save_pdf.c
+ COMPILE: desktop/save_text.c
+ COMPILE: desktop/scrollbar.c
+ COMPILE: desktop/search.c
+ COMPILE: desktop/searchweb.c
+ COMPILE: desktop/selection.c
+ COMPILE: desktop/system_colour.c
+In file included from desktop/system_colour.c:26:
+./utils/config.h:42:7: warning: redundant redeclaration of ‘strndup’ [-Wredundant-decls]
+   42 | char *strndup(const char *s, size_t n);
+      |       ^~~~~~~
+In file included from desktop/system_colour.c:24:
+/home/user/桌面/HeliumOS/user/libc/include/string.h:22:8: note: previous declaration of ‘strndup’ with type ‘char *(const char *, size_t)’ {aka ‘char *(const char *, unsigned int)’}
+   22 | char  *strndup(const char *s, size_t n);
+      |        ^~~~~~~
+ COMPILE: desktop/textarea.c
+ COMPILE: desktop/textinput.c
+ COMPILE: desktop/treeview.c
+In file included from desktop/treeview.c:27:
+/home/user/桌面/HeliumOS/user/libc/include/string.h:22:8: warning: redundant redeclaration of ‘strndup’ [-Wredundant-decls]
+   22 | char  *strndup(const char *s, size_t n);
+      |        ^~~~~~~
+In file included from desktop/treeview.c:25:
+./utils/config.h:42:7: note: previous declaration of ‘strndup’ with type ‘char *(const char *, size_t)’ {aka ‘char *(const char *, unsigned int)’}
+   42 | char *strndup(const char *s, size_t n);
+      |       ^~~~~~~
+ COMPILE: desktop/version.c
+ COMPILE: frontends/monkey/401login.c
+ COMPILE: frontends/monkey/bitmap.c
+ COMPILE: frontends/monkey/browser.c
+ COMPILE: frontends/monkey/dispatch.c
+ COMPILE: frontends/monkey/download.c
+ COMPILE: frontends/monkey/fetch.c
+ COMPILE: frontends/monkey/filetype.c
+ COMPILE: frontends/monkey/layout.c
+ COMPILE: frontends/monkey/main.c
+frontends/monkey/main.c: In function ‘main’:
+frontends/monkey/main.c:411:25: warning: passing argument 2 of ‘signal’ makes integer from pointer without a cast [-Wint-conversion]
+  411 |         signal(SIGSEGV, signal_handler);
+      |                         ^~~~~~~~~~~~~~
+      |                         |
+      |                         void (*)(int)
+In file included from frontends/monkey/main.c:27:
+/home/user/桌面/HeliumOS/user/libc/include/signal.h:34:42: note: expected ‘uint32_t’ {aka ‘unsigned int’} but argument is of type ‘void (*)(int)’
+   34 | sighandler_t signal(int signum, uint32_t handler);
+      |                                 ~~~~~~~~~^~~~~~~
+frontends/monkey/main.c:412:24: warning: passing argument 2 of ‘signal’ makes integer from pointer without a cast [-Wint-conversion]
+  412 |         signal(SIGILL, signal_handler);
+      |                        ^~~~~~~~~~~~~~
+      |                        |
+      |                        void (*)(int)
+/home/user/桌面/HeliumOS/user/libc/include/signal.h:34:42: note: expected ‘uint32_t’ {aka ‘unsigned int’} but argument is of type ‘void (*)(int)’
+   34 | sighandler_t signal(int signum, uint32_t handler);
+      |                                 ~~~~~~~~~^~~~~~~
+frontends/monkey/main.c:413:24: warning: passing argument 2 of ‘signal’ makes integer from pointer without a cast [-Wint-conversion]
+  413 |         signal(SIGFPE, signal_handler);
+      |                        ^~~~~~~~~~~~~~
+      |                        |
+      |                        void (*)(int)
+/home/user/桌面/HeliumOS/user/libc/include/signal.h:34:42: note: expected ‘uint32_t’ {aka ‘unsigned int’} but argument is of type ‘void (*)(int)’
+   34 | sighandler_t signal(int signum, uint32_t handler);
+      |                                 ~~~~~~~~~^~~~~~~
+frontends/monkey/main.c:415:24: warning: passing argument 2 of ‘signal’ makes integer from pointer without a cast [-Wint-conversion]
+  415 |         signal(SIGBUS, signal_handler);
+      |                        ^~~~~~~~~~~~~~
+      |                        |
+      |                        void (*)(int)
+/home/user/桌面/HeliumOS/user/libc/include/signal.h:34:42: note: expected ‘uint32_t’ {aka ‘unsigned int’} but argument is of type ‘void (*)(int)’
+   34 | sighandler_t signal(int signum, uint32_t handler);
+      |                                 ~~~~~~~~~^~~~~~~
+ COMPILE: frontends/monkey/output.c
+ COMPILE: frontends/monkey/plot.c
+ COMPILE: frontends/monkey/schedule.c
+ COMPILE: utils/bloom.c
+ COMPILE: utils/corestrings.c
+ COMPILE: utils/file.c
+ COMPILE: utils/filename.c
+ COMPILE: utils/filepath.c
+ COMPILE: utils/hashmap.c
+ COMPILE: utils/hashtable.c
+ COMPILE: utils/http/cache-control.c
+ COMPILE: utils/http/challenge.c
+ COMPILE: utils/http/content-disposition.c
+ COMPILE: utils/http/content-type.c
+ COMPILE: utils/http/generics.c
+ COMPILE: utils/http/parameter.c
+ COMPILE: utils/http/primitives.c
+ COMPILE: utils/http/strict-transport-security.c
+ COMPILE: utils/http/www-authenticate.c
+ COMPILE: utils/idna.c
+ COMPILE: utils/libdom.c
+ COMPILE: utils/log.c
+ COMPILE: utils/messages.c
+ COMPILE: utils/nscolour.c
+ COMPILE: utils/nsoption.c
+ COMPILE: utils/nsurl/nsurl.c
+ COMPILE: utils/nsurl/parse.c
+ COMPILE: utils/punycode.c
+ COMPILE: utils/ssl_certs.c
+ COMPILE: utils/talloc.c
+ COMPILE: utils/time.c
+ COMPILE: utils/url.c
+In file included from utils/url.c:41:
+./utils/config.h:42:7: warning: redundant redeclaration of ‘strndup’ [-Wredundant-decls]
+   42 | char *strndup(const char *s, size_t n);
+      |       ^~~~~~~
+In file included from utils/url.c:36:
+/home/user/桌面/HeliumOS/user/libc/include/string.h:22:8: note: previous declaration of ‘strndup’ with type ‘char *(const char *, size_t)’ {aka ‘char *(const char *, unsigned int)’}
+   22 | char  *strndup(const char *s, size_t n);
+      |        ^~~~~~~
+ COMPILE: utils/useragent.c
+In file included from utils/useragent.c:24:
+./utils/config.h:42:7: warning: redundant redeclaration of ‘strndup’ [-Wredundant-decls]
+   42 | char *strndup(const char *s, size_t n);
+      |       ^~~~~~~
+In file included from utils/useragent.c:22:
+/home/user/桌面/HeliumOS/user/libc/include/string.h:22:8: note: previous declaration of ‘strndup’ with type ‘char *(const char *, size_t)’ {aka ‘char *(const char *, unsigned int)’}
+   22 | char  *strndup(const char *s, size_t n);
+      |        ^~~~~~~
+ COMPILE: utils/utf8.c
+ COMPILE: utils/utils.c
+   MKDIR: build/Linux-monkey/tools
+BUILD CC: build/Linux-monkey/tools/split-messages
+MSGSPLIT: Language: de Filter: monkey
+MSGSPLIT: Language: en Filter: monkey
+MSGSPLIT: Language: fr Filter: monkey
+MSGSPLIT: Language: it Filter: monkey
+MSGSPLIT: Language: nl Filter: monkey
+MSGSPLIT: Language: zh_CN Filter: monkey
+    LINK: nsmonkey
+/usr/bin/ld: build/Linux-monkey/content_content.o: warning: relocation in read-only section `.text'
+/usr/bin/ld: warning: creating DT_TEXTREL in a PIE
+LINKDEPS: nsmonkey
+exit: 0
+log: /home/user/桌面/HeliumOS/build/netsurf_core.log
+=== nsmonkey 未生成，日志尾部 ===
+./utils/config.h:42:7: warning: redundant redeclaration of ‘strndup’ [-Wredundant-decls]
+   42 | char *strndup(const char *s, size_t n);
+      |       ^~~~~~~
+In file included from utils/url.c:36:
+/home/user/桌面/HeliumOS/user/libc/include/string.h:22:8: note: previous declaration of ‘strndup’ with type ‘char *(const char *, size_t)’ {aka ‘char *(const char *, unsigned int)’}
+   22 | char  *strndup(const char *s, size_t n);
+      |        ^~~~~~~
+ COMPILE: utils/useragent.c
+In file included from utils/useragent.c:24:
+./utils/config.h:42:7: warning: redundant redeclaration of ‘strndup’ [-Wredundant-decls]
+   42 | char *strndup(const char *s, size_t n);
+      |       ^~~~~~~
+In file included from utils/useragent.c:22:
+/home/user/桌面/HeliumOS/user/libc/include/string.h:22:8: note: previous declaration of ‘strndup’ with type ‘char *(const char *, size_t)’ {aka ‘char *(const char *, unsigned int)’}
+   22 | char  *strndup(const char *s, size_t n);
+      |        ^~~~~~~
+ COMPILE: utils/utf8.c
+ COMPILE: utils/utils.c
+   MKDIR: build/Linux-monkey/tools
+BUILD CC: build/Linux-monkey/tools/split-messages
+MSGSPLIT: Language: de Filter: monkey
+MSGSPLIT: Language: en Filter: monkey
+MSGSPLIT: Language: fr Filter: monkey
+MSGSPLIT: Language: it Filter: monkey
+MSGSPLIT: Language: nl Filter: monkey
+MSGSPLIT: Language: zh_CN Filter: monkey
+    LINK: nsmonkey
+/usr/bin/ld: build/Linux-monkey/content_content.o: warning: relocation in read-only section `.text'
+/usr/bin/ld: warning: creating DT_TEXTREL in a PIE
+LINKDEPS: nsmonkey

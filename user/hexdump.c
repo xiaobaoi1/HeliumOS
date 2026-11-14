@@ -13,7 +13,7 @@ static int hexdump_fd(int fd, int is_file) {
     int n;
 
     while ((n = is_file ? fs_read(fd, buf, sizeof(buf))
-                        : read(0, buf, sizeof(buf))) > 0) {
+                        : sys_read(0, buf, sizeof(buf))) > 0) {
         int i = 0;
         while (i < n) {
             int chunk = n - i;

@@ -13,10 +13,10 @@ int main(int argc, char **argv) {
     int shm_size = 8 + W * H * 4;
 
     /* 1. shm + mmap */
-    int shm_id = shm_open("mywin-shm", shm_size, 0);
+    int shm_id = sys_shm_open("mywin-shm", shm_size, 0);
     if (shm_id < 0) { printf("shm_open: %d\n", shm_id); return 1; }
 
-    unsigned int addr = mmap(0, shm_size,
+    unsigned int addr = sys_mmap(0, shm_size,
                              PROT_READ | PROT_WRITE,
                              MAP_SHARED, shm_id, 0);
     if ((int)addr <= 0) { printf("mmap: %d\n", (int)addr); return 1; }
@@ -37,7 +37,7 @@ int main(int argc, char **argv) {
         printf("pipe_named failed\n"); return 1;
     }
     int ev_rd = fds[0];
-    ipc_close(fds[1]);
+    pipe_close(fds[1]);
 
     /* 3. 发创建请求 */
     int inbox = pipe_open(WM_INBOX_NAME, 1);
@@ -49,7 +49,7 @@ int main(int argc, char **argv) {
     req.type = WM_REQ_CREATE;
     req.w = W;
     req.h = H;
-    req.owner_pid = getpid();
+    req.owner_pid = proc_getpid();
     strcpy(req.shm_name, "mywin-shm");
     strcpy(req.ev_name, "mywin-ev");
     strcpy(req.title, "Test Window");
@@ -58,7 +58,7 @@ int main(int argc, char **argv) {
     printf("window created, waiting 10s...\n");
 
     /* 4. 期间可以接收键盘（如果有焦点）——测试用，只 sleep */
-    sleep_ms(10000);
+    sys_sleep_ms(10000);
 
     printf("exiting...\nWM will close the window.\n");
     return 0;

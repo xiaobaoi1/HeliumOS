@@ -157,8 +157,8 @@ static void test_mem(void) {
     section("memory / malloc");
 
     /* brk 查询 */
-    int old_brk = brk(0);
-    check(old_brk > 0, "brk(0) query");
+    int old_brk = sys_brk(0);
+    check(old_brk > 0, "sys_brk(0) query");
 
     /* malloc + write + free */
     unsigned char *p = (unsigned char*)malloc(64);
@@ -281,14 +281,14 @@ static void test_fs(void) {
 
     /* 4. getcwd */
     char cwd[64];
-    int n = getcwd(cwd, sizeof(cwd));
+    int n = fs_getcwd(cwd, sizeof(cwd));
     check(n > 0, "getcwd returns");
 
     /* 5. chdir 到 /BOOT（如果存在） */
-    int r = chdir("SYS:/BOOT");
+    int r = fs_chdir("SYS:/BOOT");
     if (r == 0) {
         char cwd2[64];
-        getcwd(cwd2, sizeof(cwd2));
+        fs_getcwd(cwd2, sizeof(cwd2));
         /* 检查 cwd2 里有没有 "BOOT" */
         int found = 0;
         for (int i = 0; cwd2[i] && cwd2[i+1] && cwd2[i+2] && cwd2[i+3]; i++) {
@@ -299,7 +299,7 @@ static void test_fs(void) {
             }
         }
         check(found, "chdir /BOOT + getcwd");
-        chdir("SYS:/");
+        fs_chdir("SYS:/");
     } else {
         printf("  (skip chdir: /BOOT not accessible, ret=%d)\n", r);
     }
@@ -349,8 +349,8 @@ static void test_errno(void) {
     check(fs_read(-1, &c, 1) < 0, "fs_read(-1) -> negative");
 
     /* chdir 到不存在 */
-    check(chdir("SYS:/NOT_EXIST_DIR") < 0,
-          "chdir(no dir) -> negative");
+    check(fs_chdir("SYS:/NOT_EXIST_DIR") < 0,
+          "fs_chdir(no dir) -> negative");
 }
 
 /* ---------- 8. 用户指针边界 ---------- */
@@ -378,38 +378,38 @@ static void test_blocking_syscall(void) {
     section("blocking syscall return value");
 
     /* spawn 一个不会退出的进程（IDLE 用 pause 空转） */
-    int h = spawn("IDLE", NULL, NULL);
+    int h = proc_spawn("IDLE", NULL, NULL);
     check(h >= 0, "spawn IDLE");
     if (h < 0) return;
 
     /* 给 IDLE 一点时间进入运行态 */
-    sleep_ms(20);
+    sys_sleep_ms(20);
 
     /* wait 超时应该返回 EAGAIN */
     int status = 0;
-    int r = wait(h, &status, 30);
+    int r = proc_wait(h, &status, 30);
     check_eq(r, EAGAIN, "wait timeout -> EAGAIN");
 
     /* 再次 wait 应该还是 EAGAIN，证明上次超时没有副作用 */
-    r = wait(h, &status, 30);
+    r = proc_wait(h, &status, 30);
     check_eq(r, EAGAIN, "wait timeout again -> EAGAIN");
 
     /* kill 后 wait 应该立即成功，且返回退出状态 */
-    r = kill(h, SIGKILL);
+    r = proc_kill(h, SIGKILL);
     check_eq(r, OK, "kill -> OK");
 
-    r = wait(h, &status, 100);
+    r = proc_wait(h, &status, 100);
     check_eq(r, OK, "wait after kill -> OK");
     check_eq(status, 137, "wait status = 137");
 
     /* close 后 handle 应该失效 */
-    r = process_close(h);
+    r = proc_close(h);
     check_eq(r, OK, "process_close -> OK");
 
-    r = process_close(h);
+    r = proc_close(h);
     check(r < 0, "process_close again -> error");
 
-    r = wait(h, &status, 10);
+    r = proc_wait(h, &status, 10);
     check(r < 0, "wait invalid handle -> error");
 }
 
@@ -418,20 +418,20 @@ static void test_blocking_syscall(void) {
 static void test_spawn_errors(void) {
     section("spawn error paths");
 
-    int h = spawn("SYS:/NOT_EXIST_99999", NULL, NULL);
+    int h = proc_spawn("SYS:/NOT_EXIST_99999", NULL, NULL);
     check(h < 0, "spawn nonexistent -> negative");
 
-    h = spawn("", NULL, NULL);
+    h = proc_spawn("", NULL, NULL);
     check(h < 0, "spawn empty path -> negative");
 
-    h = spawn((const char*)0x1000, NULL, NULL);     /* 内核地址 */
+    h = proc_spawn((const char*)0x1000, NULL, NULL);     /* 内核地址 */
     check(h < 0, "spawn kernel ptr -> negative");
 
-    h = spawn((const char*)0x70000000, NULL, NULL); /* 未映射的用户地址 */
+    h = proc_spawn((const char*)0x70000000, NULL, NULL); /* 未映射的用户地址 */
     /* 允许返回值不同，只要不是有效 handle */
     check(h < 0, "spawn unmapped user ptr -> negative");
 
-    h = spawn("SYS:/BOOT", NULL, NULL);             /* 是目录不是 ELF */
+    h = proc_spawn("SYS:/BOOT", NULL, NULL);             /* 是目录不是 ELF */
     check(h < 0, "spawn directory -> negative");
 }
 
@@ -543,11 +543,11 @@ static void test_multi_open(void) {
 static void test_brk_boundaries(void) {
     section("brk boundaries");
 
-    int base = brk(0);
-    check(base > 0, "brk(0) query");
+    int base = sys_brk(0);
+    check(base > 0, "sys_brk(0) query");
 
     /* 扩展 8KB */
-    int r = brk(base + 8192);
+    int r = sys_brk(base + 8192);
     check_eq(r, 0, "brk extend 8KB");
 
     /* 读一下扩展区 */
@@ -557,22 +557,22 @@ static void test_brk_boundaries(void) {
     check(p[0] == 1 && p[8191] == 2, "brk extended region writable");
 
     /* 收缩到 4KB */
-    r = brk(base + 4096);
+    r = sys_brk(base + 4096);
     check_eq(r, 0, "brk shrink to 4KB");
 
     /* 再扩展回来 */
-    r = brk(base + 16384);
+    r = sys_brk(base + 16384);
     check_eq(r, 0, "brk extend to 16KB");
 
     /* 回到原位 */
-    r = brk(base);
+    r = sys_brk(base);
     check_eq(r, 0, "brk back to base");
 
     /* 低于 heap_base 应该失败 */
-    r = brk(0x40000000);
+    r = sys_brk(0x40000000);
     check(r < 0, "brk below heap_base -> error");
 
-    r = brk(0x4FFFFFFF);
+    r = sys_brk(0x4FFFFFFF);
     check(r < 0, "brk just below heap_base -> error");
 }
 
@@ -656,7 +656,7 @@ static void test_chdir_relative(void) {
     char cwd[128];
 
     /* 从 SYS:/ 开始 */
-    check_eq(chdir("SYS:/"), 0, "chdir SYS:/");
+    check_eq(fs_chdir("SYS:/"), 0, "chdir SYS:/");
 
     /* 相对路径打开 */
     int fd = fs_open("SHELL", FS_O_RDONLY);
@@ -664,9 +664,9 @@ static void test_chdir_relative(void) {
     if (fd >= 0) fs_close(fd);
 
     /* 尝试进入 /BOOT */
-    int r = chdir("BOOT");
+    int r = fs_chdir("BOOT");
     if (r == 0) {
-        getcwd(cwd, sizeof(cwd));
+        fs_getcwd(cwd, sizeof(cwd));
         int found = 0;
         for (int i = 0; cwd[i]; i++) {
             if (cwd[i] == 'B' && cwd[i+1] == 'O' &&
@@ -678,19 +678,19 @@ static void test_chdir_relative(void) {
         check(found, "chdir BOOT -> cwd contains BOOT");
 
         /* 从 /BOOT 用 .. 回到根 */
-        r = chdir("..");
+        r = fs_chdir("..");
         check_eq(r, 0, "chdir ..");
     } else {
         ok("(skip chdir BOOT: not accessible)");
     }
 
     /* 不存在的相对路径 */
-    chdir("SYS:/");
-    r = chdir("NOT_EXIST_12345");
+    fs_chdir("SYS:/");
+    r = fs_chdir("NOT_EXIST_12345");
     check(r < 0, "chdir nonexistent relative -> error");
 
     /* 绝对路径覆盖 cwd */
-    check_eq(chdir("SYS:/"), 0, "chdir absolute override");
+    check_eq(fs_chdir("SYS:/"), 0, "chdir absolute override");
 }
 
 /* ---------- 17. spawn/close 循环 ---------- */
@@ -700,20 +700,20 @@ static void test_spawn_stress(void) {
 
     int failures = 0;
     for (int i = 0; i < 8; i++) {
-        int h = spawn("IDLE", NULL, NULL);
+        int h = proc_spawn("IDLE", NULL, NULL);
         if (h < 0) { failures++; continue; }
 
-        sleep_ms(5);
+        sys_sleep_ms(5);
 
-        if (kill(h, SIGKILL) != OK) { failures++; process_close(h); continue; }
+        if (proc_kill(h, SIGKILL) != OK) { failures++; proc_close(h); continue; }
 
         int status = -1;
-        if (wait(h, &status, 100) != OK || status != 137) {
+        if (proc_wait(h, &status, 100) != OK || status != 137) {
             failures++;
-            process_close(h);
+            proc_close(h);
             continue;
         }
-        process_close(h);
+        proc_close(h);
     }
 
     if (failures == 0) {
@@ -756,15 +756,15 @@ static void test_slot_null(void) {
     };
 
     /* 用 TEST 自己，但 stdout 丢弃——屏幕上不应有输出 */
-    int h = spawn("SYS:/TESTKILL", NULL, &r);
+    int h = proc_spawn("SYS:/TESTKILL", NULL, &r);
     check(h >= 0, "spawn with stdout=NULL");
 
     if (h >= 0) {
         int status = 0;
-        int r2 = wait(h, &status, 10000);
+        int r2 = proc_wait(h, &status, 10000);
         check_eq(r2, OK, "wait returns OK");
         check_eq(status, 0, "TEST exits 0 (no output visible)");
-        process_close(h);
+        proc_close(h);
     }
 }
 

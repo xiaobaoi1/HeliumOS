@@ -41,7 +41,7 @@ static int do_send(const char *host, int port) {
 
     /* 从 stdin 读一行（或 EOF 前的全部） */
     char buf[1024];
-    int n = read(0, buf, sizeof(buf));
+    int n = sys_read(0, buf, sizeof(buf));
     if (n <= 0) { printf("nc: no input\n"); sockclose(s); return 1; }
 
     /* ARP miss 时重试 */
@@ -49,7 +49,7 @@ static int do_send(const char *host, int port) {
     for (int t = 0; t < 20; t++) {
         int r = sendto(s, buf, n, (struct sockaddr*)&dst, sizeof(dst));
         if (r > 0) { sent = 1; break; }
-        sleep_ms(50);
+        sys_sleep_ms(50);
     }
     if (!sent) { printf("nc: send failed\n"); sockclose(s); return 1; }
 
@@ -63,12 +63,12 @@ static int do_send(const char *host, int port) {
         if (r > 0) {
             printf("reply from %s:%u (%d bytes)\n",
                    inet_ntoa(src.sin_addr), ntohs(src.sin_port), r);
-            write(1, resp, r);
+            sys_write(1, resp, r);
             if (resp[r-1] != '\n') putchar('\n');
             sockclose(s);
             return 0;
         }
-        sleep_ms(50);
+        sys_sleep_ms(50);
     }
     printf("nc: timeout\n");
     sockclose(s);
@@ -100,10 +100,10 @@ static int do_listen(int port) {
                          (struct sockaddr*)&src, &srclen);
         if (r > 0) {
             printf("[%s:%u] ", inet_ntoa(src.sin_addr), ntohs(src.sin_port));
-            write(1, buf, r);
+            sys_write(1, buf, r);
             if (r > 0 && buf[r-1] != '\n') putchar('\n');
         }
-        sleep_ms(20);
+        sys_sleep_ms(20);
     }
 }
 

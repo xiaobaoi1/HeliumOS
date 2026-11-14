@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 #define PTY_MAX_PAIRS   8
-#define PTY_MAX_HANDLES 4
+#define PTY_MAX_HANDLES 16
 #define PTY_BUF_SIZE    4096
 #define PTY_LINE_MAX    256
 

@@ -1,464 +1,164 @@
+#!/bin/make
 #
-# Makefile for NetSurf
+# NetSurf Source makefile for libraries and browser
 #
-# Copyright 2007 Daniel Silverstone <dsilvers@netsurf-browser.org>
-# Copyright 2008 Rob Kendrick <rjek@netsurf-browser.org>
-# Copyright 2024 Vincent Sanders <vince@netsurf-browser.org>
+# The TARGET variable changes what toolkit is built for valid values are:
+#  gtk2 (default if unset)
+#  gtk3
+#  riscos
+#  framebuffer
+#  amiga
+#  cocoa
+#  atari
 #
-# Trivially, invoke as:
-#   make
-# to build native, or:
-#   make TARGET=riscos
-# to cross-build for RO.
-#
-# Look at Makefile.config for configuration options.
-#
-# Best results obtained building on unix platforms cross compiling for others
-#
-# To clean, invoke as above, with the 'clean' target
-#
-# To build developer Doxygen generated documentation, invoke as above,
-# with the 'docs' target:
-#   make docs
-#
+# The HOST variable controls the targetted ABI and not all toolkits build with
+#  all ABI e.g TARGET=riscos must be paired with HOST=arm-unknown-riscos 
+# The default is to use the BUILD variable contents which in turn defaults to
+#  the current cc default ABI target
 
-.PHONY: all
+# Component settings
+COMPONENT := netsurf-all
+COMPONENT_VERSION := 3.11
 
-all: all-program
+# Targets
 
-# default values for base variables
+# Netsurf target
+NETSURF_TARG := netsurf
 
-# Resources executable target depends upon
-RESOURCES=
-# Messages executable target depends on
-MESSAGES:=
+# nsgenbind host tool
+NSGENBIND_TARG := nsgenbind
 
-# The filter applied to the fat (full) messages to generate split messages
-MESSAGES_FILTER=any
-# The languages in the fat messages to convert
-MESSAGES_LANGUAGES=de en fr it nl zh_CN
-# The target directory for the split messages
-MESSAGES_TARGET=resources
+# Library targets
+NSLIB_ALL_TARG := buildsystem libnslog libwapcaplet libparserutils libcss libhubbub libdom libnsbmp libnsgif librosprite libnsutils libutf8proc libnspsl
 
-# build verbosity
+NSLIB_SVGTINY_TARG := libsvgtiny
+
+NSLIB_FB_TARG := libnsfb
+
+NSLIB_RO_TARG := librufl libpencil
+
+
+# Build Environment
+export TARGET ?= gtk2
+TMP_PREFIX := $(CURDIR)/inst-$(TARGET)
+export PKG_CONFIG_PATH := $(TMP_PREFIX)/lib/pkgconfig:$(PKG_CONFIG_PATH)
+export PATH := $(PATH):$(TMP_PREFIX)/bin/
+TMP_NSSHARED := $(CURDIR)/buildsystem
+
+# The system actually doing the build
+BUILD ?= $(shell $(CC) -dumpmachine)
+# The host we are targetting
+HOST ?= $(BUILD)
+
+# build verbosity. 
+# NetSurf uses the kernel style quiet Q variable but we also need to cope with thr GNU V=1 style
 ifeq ($(V),1)
   Q:=
 else
   Q=@
 endif
-VQ=@
 
-# compute HOST, TARGET and SUBTARGET
-include frontends/Makefile.hts
 
-# tools used in builds
-include Makefile.tools
-
-# Target paths
-OBJROOT = build/$(HOST)-$(TARGET)$(SUBTARGET)
-DEPROOT := $(OBJROOT)/deps
-TOOLROOT := $(OBJROOT)/tools
-
-# keep C flags from environment
-CFLAGS_ENV := $(CFLAGS)
-CXXFLAGS_ENV := $(CXXFLAGS)
-
-# library and feature building macros
-include Makefile.macros
-
-# ----------------------------------------------------------------------------
-# General flag setup
-# ----------------------------------------------------------------------------
-
-# host compiler flags
-BUILD_CFLAGS = -g -W -Wall -Wundef -Wpointer-arith -Wcast-align \
-	-Wwrite-strings -Wmissing-declarations -Wuninitialized \
-	-Wno-unused-parameter
-
-# Set up the warning flags here so that they can be overridden in the
-#   Makefile.config
-COMMON_WARNFLAGS = -W -Wall -Wundef -Wpointer-arith -Wcast-align \
-	-Wwrite-strings -Wmissing-declarations -Wuninitialized
-
-ifneq ($(CC_MAJOR),2)
-  COMMON_WARNFLAGS += -Wno-unused-parameter
-endif
-
-# deal with lots of unwanted warnings from javascript
-ifeq ($(call cc_ver_ge,4,6),1)
-  COMMON_WARNFLAGS += -Wno-unused-but-set-variable
-endif
-
-ifeq ($(TOOLCHAIN),gcc)
-  # Implicit fallthrough warnings
-  ifeq ($(call cc_ver_ge,7,1),1)
-    COMMON_WARNFLAGS += -Wimplicit-fallthrough=5
-  endif
+# only build what we require for the target
+ifeq ($(TARGET),riscos)
+  NSLIB_TARG := $(NSLIB_ALL_TARG) $(NSLIB_SVGTINY_TARG) $(NSLIB_RO_TARG)
+  NSBUILD_TARG := $(NSGENBIND_TARG)
 else
-  # non gcc has different warning syntax
-  COMMON_WARNFLAGS += -Wimplicit-fallthrough
-endif
-
-# deal with changing warning flags for different platforms
-ifeq ($(HOST),openbsd)
-  # OpenBSD headers are not compatible with redundant declaration warning
-  COMMON_WARNFLAGS += -Wno-redundant-decls
-else
-  COMMON_WARNFLAGS += -Wredundant-decls
-endif
-
-# c++ default warning flags
-CXXWARNFLAGS :=
-
-# C default warning flags
-CWARNFLAGS := -Wstrict-prototypes -Wmissing-prototypes -Wnested-externs
-
-# Pull in the default configuration
-include Makefile.defaults
-
-# Pull in the user configuration
--include Makefile.config
-
-# libraries enabled by feature switch without pkgconfig file 
-$(eval $(call feature_switch,JPEG,JPEG (libjpeg),-DWITH_JPEG,-ljpeg,-UWITH_JPEG,))
-$(eval $(call feature_switch,HARU_PDF,PDF export (haru),-DWITH_PDF_EXPORT,-lhpdf -lpng,-UWITH_PDF_EXPORT,))
-$(eval $(call feature_switch,LIBICONV_PLUG,glibc internal iconv,-DLIBICONV_PLUG,,-ULIBICONV_PLUG,-liconv))
-$(eval $(call feature_switch,DUKTAPE,Javascript (Duktape),,,,,))
-
-# Common libraries with pkgconfig
-$(eval $(call pkg_config_find_and_add,libcss,CSS))
-$(eval $(call pkg_config_find_and_add,libdom,DOM))
-$(eval $(call pkg_config_find_and_add,libnsutils,nsutils))
-
-# Common libraries without pkg-config support
-LDFLAGS += -lz
-
-# Optional libraries with pkgconfig
-
-# define additional CFLAGS and LDFLAGS requirements for pkg-configed libs
-# We only need to define the ones where the feature name doesn't exactly
-# match the WITH_FEATURE flag
-NETSURF_FEATURE_NSSVG_CFLAGS := -DWITH_NS_SVG
-NETSURF_FEATURE_ROSPRITE_CFLAGS := -DWITH_NSSPRITE
-
-# libcurl and openssl ordering matters as if libcurl requires ssl it
-#  needs to come first in link order to ensure its symbols can be
-#  resolved by the subsequent openssl
-
-# freemint does not support pkg-config for libcurl
-ifeq ($(HOST),mint)
-    CFLAGS += $(shell curl-config --cflags)
-    LDFLAGS += $(shell curl-config --libs)
-else
-    $(eval $(call pkg_config_find_and_add_enabled,CURL,libcurl,Curl))
-endif
-$(eval $(call pkg_config_find_and_add_enabled,OPENSSL,openssl,OpenSSL))
-
-$(eval $(call pkg_config_find_and_add_enabled,UTF8PROC,libutf8proc,utf8))
-$(eval $(call pkg_config_find_and_add_enabled,JPEGXL,libjxl,JPEGXL))
-$(eval $(call pkg_config_find_and_add_enabled,WEBP,libwebp,WEBP))
-$(eval $(call pkg_config_find_and_add_enabled,PNG,libpng,PNG))
-$(eval $(call pkg_config_find_and_add_enabled,BMP,libnsbmp,BMP))
-$(eval $(call pkg_config_find_and_add_enabled,GIF,libnsgif,GIF))
-$(eval $(call pkg_config_find_and_add_enabled,NSSVG,libsvgtiny,SVG))
-$(eval $(call pkg_config_find_and_add_enabled,ROSPRITE,librosprite,Sprite))
-$(eval $(call pkg_config_find_and_add_enabled,NSPSL,libnspsl,PSL))
-$(eval $(call pkg_config_find_and_add_enabled,NSLOG,libnslog,LOG))
-
-# List of directories in which headers are searched for
-INCLUDE_DIRS :=. include $(OBJROOT)
-
-# export the user agent format
-CFLAGS += -DNETSURF_UA_FORMAT_STRING=\"$(NETSURF_UA_FORMAT_STRING)\"
-CXXFLAGS += -DNETSURF_UA_FORMAT_STRING=\"$(NETSURF_UA_FORMAT_STRING)\"
-
-# set the default homepage to use
-CFLAGS += -DNETSURF_HOMEPAGE=\"$(NETSURF_HOMEPAGE)\"
-CXXFLAGS += -DNETSURF_HOMEPAGE=\"$(NETSURF_HOMEPAGE)\"
-
-# set the logging level
-CFLAGS += -DNETSURF_LOG_LEVEL=$(NETSURF_LOG_LEVEL)
-CXXFLAGS += -DNETSURF_LOG_LEVEL=$(NETSURF_LOG_LEVEL)
-
-# If we're building the sanitize goal, override things
-ifneq ($(filter-out sanitize,$(MAKECMDGOALS)),$(MAKECMDGOALS))
-override NETSURF_USE_SANITIZER := YES
-override NETSURF_RECOVER_SANITIZERS := NO
-endif
-
-# If we're going to use the sanitizer set it up
-ifeq ($(NETSURF_USE_SANITIZER),YES)
-SAN_FLAGS := -fsanitize=address -fsanitize=undefined
-ifeq ($(NETSURF_RECOVER_SANITIZERS),NO)
-SAN_FLAGS += -fno-sanitize-recover
-endif
-else
-SAN_FLAGS :=
-endif
-CFLAGS += $(SAN_FLAGS)
-CXXFLAGS += $(SAN_FLAGS)
-LDFLAGS += $(SAN_FLAGS)
-
-# and the logging filter
-CFLAGS += -DNETSURF_BUILTIN_LOG_FILTER=\"$(NETSURF_BUILTIN_LOG_FILTER)\"
-CXXFLAGS += -DNETSURF_BUILTIN_LOG_FILTER=\"$(NETSURF_BUILTIN_LOG_FILTER)\"
-# and the verbose logging filter
-CFLAGS += -DNETSURF_BUILTIN_VERBOSE_FILTER=\"$(NETSURF_BUILTIN_VERBOSE_FILTER)\"
-CXXFLAGS += -DNETSURF_BUILTIN_VERBOSE_FILTER=\"$(NETSURF_BUILTIN_VERBOSE_FILTER)\"
-
-# Determine if the C compiler supports statement expressions
-# This is needed to permit certain optimisations in our library headers
-ifneq ($(shell $(CC) -dM -E - < /dev/null | grep __GNUC__),)
-CFLAGS += -DSTMTEXPR=1
-CXXFLAGS += -DSTMTEXPR=1
-endif
-
-# We trace during link so that we can determine if a libary changes under us in
-# order to re-link.  This *may* be gcc specific, so may need tweaks in future.
-LDFLAGS += -Wl,--trace
-
-# ----------------------------------------------------------------------------
-# General make rules
-# ----------------------------------------------------------------------------
-
-$(OBJROOT)/created:
-	$(VQ)echo "   MKDIR: $(OBJROOT)"
-	$(Q)$(MKDIR) -p $(OBJROOT)
-	$(Q)$(TOUCH) $(OBJROOT)/created
-
-$(DEPROOT)/created: $(OBJROOT)/created
-	$(VQ)echo "   MKDIR: $(DEPROOT)"
-	$(Q)$(MKDIR) -p $(DEPROOT)
-	$(Q)$(TOUCH) $(DEPROOT)/created
-
-$(TOOLROOT)/created: $(OBJROOT)/created
-	$(VQ)echo "   MKDIR: $(TOOLROOT)"
-	$(Q)$(MKDIR) -p $(TOOLROOT)
-	$(Q)$(TOUCH) $(TOOLROOT)/created
-
-CLEANS :=
-POSTEXES :=
-
-# ----------------------------------------------------------------------------
-# Target specific setup
-# ----------------------------------------------------------------------------
-
-include frontends/Makefile
-
-# ----------------------------------------------------------------------------
-# Build tools setup
-# ----------------------------------------------------------------------------
-
-include tools/Makefile
-
-# ----------------------------------------------------------------------------
-# General source file setup
-# ----------------------------------------------------------------------------
-
-# Content sources
-include content/Makefile
-
-# utility sources
-include utils/Makefile
-
-# http utility sources
-include utils/http/Makefile
-
-# nsurl utility sources
-include utils/nsurl/Makefile
-
-# Desktop sources
-include desktop/Makefile
-
-# S_COMMON are sources common to all builds
-S_COMMON := \
-	$(S_CONTENT) \
-	$(S_FETCHERS) \
-	$(S_UTILS) \
-	$(S_HTTP) \
-	$(S_NSURL) \
-	$(S_DESKTOP) \
-	$(S_JAVASCRIPT_BINDING)
-
-
-# ----------------------------------------------------------------------------
-# Message targets
-# ----------------------------------------------------------------------------
-
-
-# generate the message file rules
-$(eval $(foreach LANG,$(MESSAGES_LANGUAGES), \
-	$(call split_messages,$(LANG))))
-
-clean-messages:
-	$(VQ)echo "   CLEAN: $(CLEAN_MESSAGES)"
-	$(Q)$(RM) $(CLEAN_MESSAGES)
-CLEANS += clean-messages
-
-
-# ----------------------------------------------------------------------------
-# Source file setup
-# ----------------------------------------------------------------------------
-
-# Force exapnsion of source file list
-SOURCES := $(SOURCES)
-
-ifeq ($(SOURCES),)
-$(error Unable to build NetSurf, could not determine set of sources to build)
-endif
-
-OBJECTS := $(sort $(addprefix $(OBJROOT)/,$(subst /,_,$(patsubst %.c,%.o,$(patsubst %.cpp,%.o,$(patsubst %.m,%.o,$(patsubst %.s,%.o,$(SOURCES))))))))
-
-# Include directory flags
-IFLAGS = $(addprefix -I,$(INCLUDE_DIRS))
-
-$(EXETARGET): $(OBJECTS) $(RESOURCES) $(MESSAGES) tools/linktrace-to-depfile.pl
-	$(VQ)echo "    LINK: $(EXETARGET)"
-ifneq ($(TARGET),riscos)
-	$(Q)$(CC) -o $(EXETARGET) $(OBJECTS) $(LDFLAGS) > $(DEPROOT)/link-raw.d
-else
-	@# RISC OS targets are a bit special: we need to convert ELF -> AIF
-  ifeq ($(SUBTARGET),-aof)
-	$(Q)$(CC) -o $(EXETARGET) $(OBJECTS) $(LDFLAGS) > $(DEPROOT)/link-raw.d
+  ifeq ($(TARGET),framebuffer)
+    NSLIB_TARG := $(NSLIB_ALL_TARG) $(NSLIB_SVGTINY_TARG)  $(NSLIB_FB_TARG)
+    NSBUILD_TARG := $(NSGENBIND_TARG)
   else
-	$(Q)$(CXX) -o $(EXETARGET:,ff8=,e1f) $(OBJECTS) $(LDFLAGS) > $(DEPROOT)/link-raw.d
-	$(Q)$(ELF2AIF) $(EXETARGET:,ff8=,e1f) $(EXETARGET)
-	$(Q)$(RM) $(EXETARGET:,ff8=,e1f)
+    ifeq ($(TARGET),amiga)
+      NSLIB_TARG := $(NSLIB_ALL_TARG) $(NSLIB_SVGTINY_TARG)
+      NSBUILD_TARG := $(NSGENBIND_TARG)
+    else
+      ifeq ($(TARGET),cocoa)
+        NSLIB_TARG := $(NSLIB_ALL_TARG) $(NSLIB_SVGTINY_TARG) 
+        NSBUILD_TARG := $(NSGENBIND_TARG)
+      else
+        ifeq ($(TARGET),atari)
+          NSLIB_TARG := $(NSLIB_ALL_TARG)
+          NSBUILD_TARG := $(NSGENBIND_TARG)
+        else
+          NSLIB_TARG := $(NSLIB_ALL_TARG) $(NSLIB_SVGTINY_TARG) 
+          NSBUILD_TARG := $(NSGENBIND_TARG)
+        endif
+      endif
+    endif
   endif
 endif
-	$(VQ)echo "LINKDEPS: $(EXETARGET)"
-	$(Q)echo -n "$(EXETARGET) $(DEPROOT)/link.d: " > $(DEPROOT)/link.d
-	$(Q)$(PERL) tools/linktrace-to-depfile.pl < $(DEPROOT)/link-raw.d >> $(DEPROOT)/link.d
-ifeq ($(NETSURF_STRIP_BINARY),YES)
-	$(VQ)echo "   STRIP: $(EXETARGET)"
-	$(Q)$(STRIP) $(EXETARGET)
-endif
-ifeq ($(TARGET),beos)
-	$(VQ)echo "    XRES: $(EXETARGET)"
-	$(Q)$(BEOS_XRES) -o $(EXETARGET) $(RSRC_BEOS)
-	$(VQ)echo "  SETVER: $(EXETARGET)"
-	$(Q)$(BEOS_SETVER) $(EXETARGET) \
-                -app $(VERSION_MAJ) $(VERSION_MIN) 0 d 0 \
-                -short "NetSurf $(VERSION_FULL)" \
-                -long "NetSurf $(VERSION_FULL) © 2003 - 2021 The NetSurf Developers"
-	$(VQ)echo " MIMESET: $(EXETARGET)"
-	$(Q)$(BEOS_MIMESET) $(EXETARGET)
-endif
 
-clean-target:
-	$(VQ)echo "   CLEAN: $(EXETARGET)"
-	$(Q)$(RM) $(EXETARGET)
-CLEANS += clean-target
+.PHONY: build install clean checkout-release checkout-head dist dist-head
 
+# clean macro for each sub target
+define do_clean
+	$(MAKE) distclean --directory=$1 HOST=$(HOST) NSSHARED=$(TMP_NSSHARED) Q=$(Q)
 
-clean-builddir:
-	$(VQ)echo "   CLEAN: $(OBJROOT)"
-	$(Q)$(RM) -r $(OBJROOT)
-CLEANS += clean-builddir
+endef
 
+# clean macro for each host sub target
+define do_build_clean
+	$(MAKE) distclean --directory=$1 HOST=$(HOST) NSSHARED=$(TMP_NSSHARED) Q=$(Q)
 
-.PHONY: all-program
+endef
 
-all-program: $(EXETARGET) $(POSTEXES)
+# prefixed install macro for each sub target
+define do_prefix_install
+	$(MAKE) install --directory=$1 HOST=$(HOST) PREFIX=$(TMP_PREFIX) Q=$(Q) WARNFLAGS='-Wall -W -Wno-error' DESTDIR=
 
-.SUFFIXES:
+endef
 
-DEPFILES :=
+# prefixed install macro for each host sub target
+define do_build_prefix_install
+	$(MAKE) install --directory=$1 HOST=$(BUILD) PREFIX=$(TMP_PREFIX) Q=$(Q) DESTDIR=
 
-# Rules to construct dep lines for each object...
-$(eval $(foreach SOURCE,$(filter %.c,$(SOURCES)), \
-	$(call dependency_generate_c,$(SOURCE),$(subst /,_,$(SOURCE:.c=.d)),$(subst /,_,$(SOURCE:.c=.o)))))
+endef
 
-$(eval $(foreach SOURCE,$(filter %.cpp,$(SOURCES)), \
-	$(call dependency_generate_c,$(SOURCE),$(subst /,_,$(SOURCE:.cpp=.d)),$(subst /,_,$(SOURCE:.cpp=.o)))))
+build: $(TMP_PREFIX)/build-stamp
 
-$(eval $(foreach SOURCE,$(filter %.m,$(SOURCES)), \
-	$(call dependency_generate_c,$(SOURCE),$(subst /,_,$(SOURCE:.m=.d)),$(subst /,_,$(SOURCE:.m=.o)))))
+$(TMP_PREFIX)/build-stamp:
+	mkdir -p $(TMP_PREFIX)/include
+	mkdir -p $(TMP_PREFIX)/lib
+	mkdir -p $(TMP_PREFIX)/bin
+	$(foreach L,$(NSLIB_TARG),$(call do_prefix_install,$(L)))
+	$(foreach L,$(NSBUILD_TARG),$(call do_build_prefix_install,$(L)))
+	$(MAKE) --directory=$(NETSURF_TARG) PREFIX=$(PREFIX) TARGET=$(TARGET) $(NETSURF_CONFIG)
+	touch $@
 
-# Cannot currently generate dep files for S files because they're objasm
-# when we move to gas format, we will be able to.
+package: $(TMP_PREFIX)/build-stamp
+	$(MAKE) --directory=$(NETSURF_TARG) PREFIX=$(PREFIX) TARGET=$(TARGET) package $(NETSURF_CONFIG)
 
-#$(eval $(foreach SOURCE,$(filter %.s,$(SOURCES)), \
-#	$(call dependency_generate_s,$(SOURCE),$(subst /,_,$(SOURCE:.s=.d)),$(subst /,_,$(SOURCE:.s=.o)))))
+install: $(TMP_PREFIX)/build-stamp
+	$(MAKE) install --directory=$(NETSURF_TARG) TARGET=$(TARGET) PREFIX=$(PREFIX) DESTDIR=$(DESTDIR) $(NETSURF_CONFIG)
 
-ifeq ($(filter $(MAKECMDGOALS),clean test coverage),)
--include $(sort $(addprefix $(DEPROOT)/,$(DEPFILES)))
--include $(DEPROOT)/link.d
-endif
+clean:
+	$(RM) -r $(TMP_PREFIX)
+	$(foreach L,$(NSLIB_TARG),$(call do_clean,$(L)))
+	$(foreach L,$(NSBUILD_TARG),$(call do_build_clean,$(L)))
+	$(MAKE) clean --directory=$(NETSURF_TARG) TARGET=$(TARGET)
 
-# And rules to build the objects themselves...
+# check out last release tag on each submodule
+checkout-release: $(NSLIB_TARG) $(NETSURF_TARG) $(NSGENBIND_TARG) $(NSLIB_FB_TARG) $(NSLIB_SVGTINY_TARG) $(NSLIB_RO_TARG)
+	git fetch --recurse-submodules
+	for x in $^; do cd $$x; (git checkout origin/HEAD && git checkout $$(git describe --abbrev=0 --match="release/*" )); cd ..; done
 
-$(eval $(foreach SOURCE,$(filter %.c,$(SOURCES)), \
-	$(call compile_target_c,$(SOURCE),$(subst /,_,$(SOURCE:.c=.o)),$(subst /,_,$(SOURCE:.c=.d)))))
+# check out head on each submodule
+checkout-head: $(NSLIB_TARG) $(NETSURF_TARG) $(NSGENBIND_TARG) $(NSLIB_FB_TARG) $(NSLIB_SVGTINY_TARG) $(NSLIB_RO_TARG)
+	git submodule init
+	git submodule update
+	git fetch --recurse-submodules
+	for x in $^; do cd $$x; git checkout origin/HEAD ; cd ..; done
 
-$(eval $(foreach SOURCE,$(filter %.cpp,$(SOURCES)), \
-	$(call compile_target_cpp,$(SOURCE),$(subst /,_,$(SOURCE:.cpp=.o)),$(subst /,_,$(SOURCE:.cpp=.d)))))
+# Generate a dist tarball from the head of all submodules
+dist-head: checkout-head
+	$(eval DIST_FILE := $(COMPONENT)-${COMPONENT_VERSION}~$$$${BUILD_NUMBER:-1})
+	$(Q)git-archive-all --prefix=$(DIST_FILE)/ $(DIST_FILE).tgz
+	$(Q)mv $(DIST_FILE).tgz $(DIST_FILE).tar.gz
 
-$(eval $(foreach SOURCE,$(filter %.m,$(SOURCES)), \
-	$(call compile_target_c,$(SOURCE),$(subst /,_,$(SOURCE:.m=.o)),$(subst /,_,$(SOURCE:.m=.d)))))
-
-$(eval $(foreach SOURCE,$(filter %.s,$(SOURCES)), \
-	$(call compile_target_s,$(SOURCE),$(subst /,_,$(SOURCE:.s=.o)),$(subst /,_,$(SOURCE:.s=.d)))))
-
-# ----------------------------------------------------------------------------
-# Test setup
-# ----------------------------------------------------------------------------
-
-include test/Makefile
-
-
-# ----------------------------------------------------------------------------
-# Clean setup
-# ----------------------------------------------------------------------------
-
-.PHONY: clean
-
-clean: $(CLEANS)
-
-
-# ----------------------------------------------------------------------------
-# build distribution package
-# ----------------------------------------------------------------------------
-
-.PHONY: package-$(TARGET) package
-
-package: all-program package-$(TARGET)
-
-
-# ----------------------------------------------------------------------------
-# local install on the host system
-# ----------------------------------------------------------------------------
-
-.PHONY: install install-$(TARGET)
-
-install: all-program install-$(TARGET)
-
-
-# ----------------------------------------------------------------------------
-# Documentation build
-# ----------------------------------------------------------------------------
-
-.PHONY: docs
-
-docs: docs/Doxyfile
-	doxygen $<
-
-
-# ----------------------------------------------------------------------------
-# Transifex message processing
-# ----------------------------------------------------------------------------
-
-.PHONY: messages-split-tfx messages-fetch-tfx messages-import-tfx
-
-# split fat messages into properties files suitable for uploading to transifex
-messages-split-tfx:
-	for splitlang in $(FAT_LANGUAGES);do $(PERL) ./utils/split-messages.pl -l $${splitlang} -f transifex -p any -o Messages.any.$${splitlang}.tfx resources/FatMessages;done
-
-# download property files from transifex
-messages-fetch-tfx:
-	for splitlang in $(FAT_LANGUAGES);do $(RM) Messages.any.$${splitlang}.tfx ; $(PERL) ./utils/fetch-transifex.pl -w insecure -l $${splitlang} -o Messages.any.$${splitlang}.tfx ;done
-
-# merge property files into fat messages
-messages-import-tfx: messages-fetch-tfx
-	for tfxlang in $(FAT_LANGUAGES);do $(PERL) ./utils/import-messages.pl -l $${tfxlang} -p any -f transifex -o resources/FatMessages -i resources/FatMessages -I Messages.any.$${tfxlang}.tfx ; $(RM) Messages.any.$${tfxlang}.tfx; done
-
+dist:
+	$(eval GIT_TAG := $(shell git describe --abbrev=0 --match "release/*"))
+	$(eval GIT_VER := $(shell x="$(GIT_TAG)"; echo "$${x#release/}"))
+	$(if $(subst $(GIT_VER),,$(COMPONENT_VERSION)), $(error Component Version "$(COMPONENT_VERSION)" and GIT tag version "$(GIT_VER)" do not match))
+	$(eval DIST_FILE := $(COMPONENT)-${GIT_VER})
+	$(Q)git-archive-all --force-submodules --prefix=$(DIST_FILE)/ $(DIST_FILE).tgz
+	$(Q)mv $(DIST_FILE).tgz $(DIST_FILE).tar.gz

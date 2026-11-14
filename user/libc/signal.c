@@ -23,3 +23,13 @@ int sigaction(int sig, const struct sigaction *act, struct sigaction *oldact) {
 int sigprocmask(int how, const uint32_t *set, uint32_t *oldset) {
     return __syscall(SYS_SIGPROCMASK, how, (int)set, (int)oldset);
 }
+
+sighandler_t signal(int signum, uint32_t handler) {
+    struct sigaction sa, old;
+    sa.sa_handler  = handler;
+    sa.sa_mask     = 0;
+    sa.sa_flags    = 0;
+    sa.sa_restorer = 0;
+    if (sigaction(signum, &sa, &old) < 0) return SIG_ERR;
+    return (sighandler_t)old.sa_handler;
+}
