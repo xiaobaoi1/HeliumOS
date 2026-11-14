@@ -52,7 +52,6 @@ int g_inbox_w = -1;
 static uint32_t g_tick = 0;
 
 static unsigned int *g_wall_pixels;
-/* BMP 壁纸状态：0=未尝试 1=成功 2=失败 */
 static int g_wall_bmp_state = 0;
 static unsigned int *g_wall_bmp_cache = NULL;
 static struct shm_hdr *g_wall_hdr;
@@ -223,7 +222,6 @@ static void draw_file_icon(int idx) {
     int ix = px + (ICON_CELL_W - ICON_SIZE) / 2;
     int iy = py;
 
-    /* 背景从实际壁纸取像素（BMP 优先，回退渐变） */
     for (int j = 0; j < ICON_SIZE; j++) {
         unsigned int *row_p = g_wall_pixels + (iy + j) * g_W + ix;
         for (int i = 0; i < ICON_SIZE; i++)
@@ -269,8 +267,6 @@ static void draw_file_icon(int idx) {
     int tx = px + (ICON_CELL_W - tw) / 2;
     if (tx < px + 2) tx = px + 2;
 
-    /* 用壁纸像素清理文字区（含阴影的 1 像素偏移，高度 17），
-     * 避免文件名变长/变短时旧字符残留，也让文字真正透出壁纸。 */
     if (tw > 0) {
         for (int j = 0; j < 17; j++) {
             int yy = ly + j;
@@ -284,7 +280,6 @@ static void draw_file_icon(int idx) {
         }
     }
 
-    /* 阴影黑色 + 前景白色，背景透明 */
     gfx_draw_text(g_wall_pixels, g_W, tx + 1, ly + 1, label,
                   0x000000, GFX_BG_TRANSPARENT);
     gfx_draw_text(g_wall_pixels, g_W, tx, ly, label,
@@ -375,6 +370,17 @@ struct fm_win {
     char esc_buf[8];
     int  esc_was_ui;
 
+    /* ========== 路径栏全选 / 选区编辑状态 ========== */
+    int  path_fresh;               /* 1 = 整段全选高亮 */
+    int  sel_active;               /* 1 = 有鼠标选中的子选区 */
+    int  sel_start;                /* 选区起始 UTF-8 字节偏移 */
+    int  sel_end;                  /* 选区结束 UTF-8 字节偏移 */
+    int  mouse_sel_dragging;       /* 1 = 鼠标正在拖动选择 */
+    int  mouse_sel_anchor;         /* 按下时的锚点（字节偏移） */
+    int  mouse_sel_start_x;        /* 按下时的鼠标 x 坐标 */
+    int  mouse_sel_fresh_enter;    /* 1 = 本次按下是从非编辑状态进入（首次点击） */
+    /* ================================================== */
+
     int drag_candidate;
     int drag_moved;
     int drag_start_x, drag_start_y;
@@ -442,6 +448,53 @@ static void fm_publish(struct fm_win *w) {
     shm_publish(w->hdr);
 }
 
+
+/* 计算文本前 bytes 个字节对应的像素宽度 */
+static int fm_text_prefix_width(const char *txt, int bytes) {
+    int w = 0, n = 0;
+    while (*txt && n < bytes) {
+        uint32_t cp;
+        int clen = ufont_utf8_decode((const unsigned char *)txt, &cp);
+        int cw = wm_font_width((int)cp);
+        if (!cw) cw = MUI_FONT_W;
+        w += cw;
+        n += clen;
+        txt += clen;
+    }
+    return w;
+}
+
+/* 根据鼠标 x 坐标计算文本中的 UTF-8 字节偏移 */
+static int fm_char_index_at(int text_x0, int mx, const char *txt) {
+    int char_x = text_x0;
+    int byte_off = 0;
+    const unsigned char *p = (const unsigned char *)txt;
+    while (*p) {
+        uint32_t cp;
+        int n = ufont_utf8_decode(p, &cp);
+        int cw = wm_font_width((int)cp);
+        if (!cw) cw = MUI_FONT_W;
+        if (mx < char_x + cw / 2) break;
+        char_x += cw;
+        byte_off += n;
+        p += n;
+    }
+    return byte_off;
+}
+
+static void fm_textbox_set_cursor_byte(struct mui_textbox *tb, int target_bytes) {
+    mui_textbox_cursor_home(tb);
+    const char *txt = mui_textbox_get_text(tb);
+    int n = 0;
+    while (*txt && n < target_bytes) {
+        uint32_t cp;
+        int clen = ufont_utf8_decode((const unsigned char *)txt, &cp);
+        n += clen;
+        txt += clen;
+        mui_textbox_move_cursor(tb, 1);
+    }
+}
+
 static void fm_paint_topbar(struct fm_win *w) {
     struct mui_surface *s = &w->surf;
 
@@ -454,6 +507,7 @@ static void fm_paint_topbar(struct fm_win *w) {
     } else if (w->input_mode != FM_INPUT_NONE) {
         mui_text(s, 4, (FM_TOP_BAR_H - MUI_FONT_H) / 2,
                  w->input_prompt, 0xFFFFFF, 0x2A2A3E);
+
         int px = 4 + mui_text_width(w->input_prompt);
         int tw = w->cw - px - 4;
         if (tw >= MUI_FONT_W) {
@@ -461,7 +515,42 @@ static void fm_paint_topbar(struct fm_win *w) {
             w->input_box.base.h = FM_TOP_BAR_H;
             w->input_box.base.focused = 1;
             w->input_box.base.dirty = 1;
-            mui_widget_paint(&w->input_box.base, s, px, 0);
+
+            int has_sel = (w->path_fresh ||
+                           (w->sel_active && w->sel_start != w->sel_end));
+
+            if (has_sel) {
+                const char *txt = mui_textbox_get_text(&w->input_box);
+                int sel_a, sel_b;
+                if (w->path_fresh) {
+                    sel_a = 0;
+                    sel_b = (int)strlen(txt);
+                } else {
+                    sel_a = w->sel_start;
+                    sel_b = w->sel_end;
+                    if (sel_a > sel_b) { int t = sel_a; sel_a = sel_b; sel_b = t; }
+                }
+
+                int y0 = 3;
+                int y1 = FM_TOP_BAR_H - 3;
+
+                mui_fill(s, px, 0, tw, FM_TOP_BAR_H, 0x1A1A1E);
+                mui_text(s, px + 1, (FM_TOP_BAR_H - MUI_FONT_H) / 2,
+                         txt, 0xCCCCCC, 0x1A1A1E);
+
+                int char_x0 = px + 1 + fm_text_prefix_width(txt, sel_a);
+                int char_x1 = px + 1 + fm_text_prefix_width(txt, sel_b);
+                if (char_x1 > char_x0) {
+                    mui_fill(s, char_x0, y0, char_x1 - char_x0, y1 - y0,
+                             0x3A6EA5);
+                    mui_clip_set(s, char_x0, y0, char_x1, y1);
+                    mui_text(s, px + 1, (FM_TOP_BAR_H - MUI_FONT_H) / 2,
+                             txt, 0xFFFFFF, 0x3A6EA5);
+                    mui_clip_set(s, 0, 0, w->cw, FM_TOP_BAR_H);
+                }
+            } else {
+                mui_widget_paint(&w->input_box.base, s, px, 0);
+            }
         }
     } else {
         char bar[160];
@@ -837,6 +926,10 @@ static void fm_input_reset(struct fm_win *w) {
     w->input_mode   = FM_INPUT_NONE;
     w->input_prompt[0] = '\0';
     w->input_box.base.focused = 0;
+    w->path_fresh = 0;
+    w->sel_active = 0;
+    w->mouse_sel_dragging = 0;
+    w->mouse_sel_fresh_enter = 0;
 }
 
 static struct fs_entry_info g_fm_tmp[128];
@@ -910,6 +1003,10 @@ static void fm_input_begin(struct fm_win *w, int mode, const char *prompt) {
     w->input_box.base.dirty = 1;
     w->menu_open = 0;
     w->status[0] = '\0';
+    w->path_fresh = 0;
+    w->sel_active = 0;
+    w->mouse_sel_dragging = 0;
+    w->mouse_sel_fresh_enter = 0;
 }
 
 static void fm_set_status(struct fm_win *w, const char *msg) {
@@ -1294,9 +1391,33 @@ static void fm_move_cursor(struct fm_win *w, int delta, int extend) {
 
 static void fm_handle_esc_seq(struct fm_win *w, const char *seq, unsigned int mods) {
     if (strcmp(seq, "[A") == 0) {
-        fm_move_cursor(w, -1, (mods & WM_MOD_SHIFT) != 0);
+        /* 上方向键 */
+        if (w->input_mode != FM_INPUT_NONE) {
+            if (w->path_fresh || (w->sel_active && w->sel_start != w->sel_end)) {
+                w->path_fresh = 0;
+                w->sel_active = 0;
+                mui_textbox_cursor_home(&w->input_box);
+            } else {
+                mui_textbox_move_cursor(&w->input_box, -1);
+            }
+            fm_redraw_topbar(w);
+        } else {
+            fm_move_cursor(w, -1, (mods & WM_MOD_SHIFT) != 0);
+        }
     } else if (strcmp(seq, "[B") == 0) {
-        fm_move_cursor(w, 1, (mods & WM_MOD_SHIFT) != 0);
+        /* 下方向键 */
+        if (w->input_mode != FM_INPUT_NONE) {
+            if (w->path_fresh || (w->sel_active && w->sel_start != w->sel_end)) {
+                w->path_fresh = 0;
+                w->sel_active = 0;
+                mui_textbox_cursor_end(&w->input_box);
+            } else {
+                mui_textbox_move_cursor(&w->input_box, 1);
+            }
+            fm_redraw_topbar(w);
+        } else {
+            fm_move_cursor(w, 1, (mods & WM_MOD_SHIFT) != 0);
+        }
     } else if (strcmp(seq, "[5~") == 0) {
         mui_scroll_page(&w->scroll, -1);
         w->scroll_dirty = 0;
@@ -1308,19 +1429,44 @@ static void fm_handle_esc_seq(struct fm_win *w, const char *seq, unsigned int mo
         fm_sync_scroll_value(w);
         fm_redraw(w);
     } else if (strcmp(seq, "[3~") == 0) {
-        if (!w->esc_was_ui) fm_delete_selected(w);
-    } else if (strcmp(seq, "[C") == 0) {
         if (w->input_mode != FM_INPUT_NONE) {
-            mui_textbox_move_cursor(&w->input_box, 1);
+            if (w->path_fresh || (w->sel_active && w->sel_start != w->sel_end)) {
+                mui_textbox_set_text(&w->input_box, "");
+                w->path_fresh = 0;
+                w->sel_active = 0;
+                fm_redraw_topbar(w);
+            }
+        } else {
+            if (!w->esc_was_ui) fm_delete_selected(w);
+        }
+    } else if (strcmp(seq, "[C") == 0) {
+        /* 右方向键 */
+        if (w->input_mode != FM_INPUT_NONE) {
+            if (w->path_fresh || (w->sel_active && w->sel_start != w->sel_end)) {
+                w->path_fresh = 0;
+                w->sel_active = 0;
+                mui_textbox_cursor_end(&w->input_box);
+            } else {
+                mui_textbox_move_cursor(&w->input_box, 1);
+            }
             fm_redraw_topbar(w);
         }
     } else if (strcmp(seq, "[D") == 0) {
+        /* 左方向键 */
         if (w->input_mode != FM_INPUT_NONE) {
-            mui_textbox_move_cursor(&w->input_box, -1);
+            if (w->path_fresh || (w->sel_active && w->sel_start != w->sel_end)) {
+                w->path_fresh = 0;
+                w->sel_active = 0;
+                mui_textbox_cursor_home(&w->input_box);
+            } else {
+                mui_textbox_move_cursor(&w->input_box, -1);
+            }
             fm_redraw_topbar(w);
         }
     } else if (strcmp(seq, "[H") == 0) {
         if (w->input_mode != FM_INPUT_NONE) {
+            w->path_fresh = 0;
+            w->sel_active = 0;
             mui_textbox_cursor_home(&w->input_box);
             fm_redraw_topbar(w);
         } else {
@@ -1330,6 +1476,8 @@ static void fm_handle_esc_seq(struct fm_win *w, const char *seq, unsigned int mo
         }
     } else if (strcmp(seq, "[F") == 0) {
         if (w->input_mode != FM_INPUT_NONE) {
+            w->path_fresh = 0;
+            w->sel_active = 0;
             mui_textbox_cursor_end(&w->input_box);
             fm_redraw_topbar(w);
         } else {
@@ -1341,14 +1489,12 @@ static void fm_handle_esc_seq(struct fm_win *w, const char *seq, unsigned int mo
 }
 
 static void fm_handle_key(struct fm_win *w, int key, unsigned int mods) {
-    /* 1. 确定当前焦点文本框 */
     struct mui_textbox *target = NULL;
     if (w->dialog.active) 
         target = &w->dialog.input;
     else if (w->input_mode != FM_INPUT_NONE) 
         target = &w->input_box;
 
-    /* 2. 输入法优先拦截处理 */
     if (target) {
         if (ime_process_key(&w->ime, key, mods, target, NULL, NULL)) {
             const char *hint = ime_get_hint(&w->ime);
@@ -1361,7 +1507,7 @@ static void fm_handle_key(struct fm_win *w, int key, unsigned int mods) {
                 w->status[sizeof(w->status) - 1] = '\0';
                 fm_redraw_topbar(w);
             }
-            return; /* 拦截完毕，不再走默认按键逻辑 */
+            return;
         }
     }
 
@@ -1402,6 +1548,7 @@ static void fm_handle_key(struct fm_win *w, int key, unsigned int mods) {
             }
             if (key == '~' || (key >= 'A' && key <= 'Z')) {
                 w->esc_state = 0;
+                /* 注意：不在这里清零 path_fresh，交给 fm_handle_esc_seq 判断 */
                 fm_handle_esc_seq(w, w->esc_buf, mods);
                 return;
             }
@@ -1414,6 +1561,8 @@ static void fm_handle_key(struct fm_win *w, int key, unsigned int mods) {
         w->esc_len = 0;
         w->esc_buf[0] = '\0';
         w->esc_was_ui = (w->input_mode != FM_INPUT_NONE || w->menu_open);
+        w->path_fresh = 0;
+        w->sel_active = 0;
         if (w->input_mode != FM_INPUT_NONE) fm_input_reset(w);
         else if (w->menu_open) { w->menu_open = 0; }
         fm_redraw(w);
@@ -1430,6 +1579,19 @@ static void fm_handle_key(struct fm_win *w, int key, unsigned int mods) {
     }
 
     if (key == '\b' || key == 127) {
+        if (w->path_fresh) {
+            mui_textbox_set_text(&w->input_box, "");
+            w->path_fresh = 0;
+            w->sel_active = 0;
+            fm_redraw_topbar(w);
+            return;
+        }
+        if (w->sel_active && w->sel_start != w->sel_end) {
+            mui_textbox_set_text(&w->input_box, "");
+            w->sel_active = 0;
+            fm_redraw_topbar(w);
+            return;
+        }
         if (w->input_mode != FM_INPUT_NONE &&
             mui_textbox_get_text(&w->input_box)[0] != '\0') {
             if (w->input_box.base.on_key)
@@ -1449,6 +1611,14 @@ static void fm_handle_key(struct fm_win *w, int key, unsigned int mods) {
             mui_list_clear_selection(&w->list);
             w->list.cursor = -1;
             fm_input_begin(w, FM_INPUT_PATH, "Go to: ");
+        } else if (w->path_fresh) {
+            mui_textbox_set_text(&w->input_box, "");
+            w->path_fresh = 0;
+            w->sel_active = 0;
+        } else if (w->sel_active && w->sel_start != w->sel_end) {
+            /* 有选区时输入，清空整段（简化处理） */
+            mui_textbox_set_text(&w->input_box, "");
+            w->sel_active = 0;
         }
         if (w->input_box.base.on_key)
             w->input_box.base.on_key(&w->input_box.base, key);
@@ -1640,6 +1810,26 @@ static void handle_fm_event(struct fm_win *w, struct wm_event *ev) {
     }
 
     if (ev->type == WM_EV_MOUSE_MOVE) {
+        /* ========== 路径栏拖动选择 ========== */
+        if (w->mouse_sel_dragging && w->input_mode == FM_INPUT_PATH) {
+            int dx = ev->x - w->mouse_sel_start_x;
+            if (dx < 0) dx = -dx;
+            if (dx < 4) return;   /* 拖动阈值：避免单击误触 */
+
+            w->path_fresh = 0;    /* 进入拖动选择，取消全选 */
+
+            const char *txt = mui_textbox_get_text(&w->input_box);
+            int prompt_w = 4 + mui_text_width(w->input_prompt);
+            int px = prompt_w + 1;
+            int idx = fm_char_index_at(px, ev->x, txt);
+
+            w->sel_start = w->mouse_sel_anchor;
+            w->sel_end = idx;
+            w->sel_active = (w->sel_start != w->sel_end);
+            fm_redraw_topbar(w);
+            return;
+        }
+
         if (w->menu_open) {
             int h = fm_menu_hit(w, ev->x, ev->y);
             if (h != w->menu_hover) {
@@ -1724,6 +1914,25 @@ static void handle_fm_event(struct fm_win *w, struct wm_event *ev) {
     }
 
     if (ev->type == WM_EV_MOUSE_UP && (ev->code & WM_BTN_LEFT)) {
+        /* ========== 结束路径栏拖动 / 单击 ========== */
+        if (w->mouse_sel_dragging) {
+            w->mouse_sel_dragging = 0;
+            if (!w->sel_active) {
+                if (w->mouse_sel_fresh_enter) {
+                    /* 首次点击进入编辑：保持全选 */
+                    w->path_fresh = 1;
+                } else {
+                    /* 编辑中单击：取消全选，光标移到点击位置 */
+                    w->path_fresh = 0;
+                    fm_textbox_set_cursor_byte(&w->input_box,
+                                               w->mouse_sel_anchor);
+                }
+                fm_redraw_topbar(w);
+            }
+            w->mouse_sel_fresh_enter = 0;
+            return;
+        }
+
         if (w->scroll.dragging) {
             if (w->scroll.base.on_mouse_up)
                 w->scroll.base.on_mouse_up(&w->scroll.base,
@@ -1770,13 +1979,48 @@ static void handle_fm_event(struct fm_win *w, struct wm_event *ev) {
         return;
     }
 
+    /* ========== 顶部路径栏：单击进入编辑（全选），拖动则选择文本 ========== */
+    if (ev->y < FM_TOP_BAR_H) {
+        if (left) {
+            int was_editing = (w->input_mode == FM_INPUT_PATH);
+
+            if (!was_editing) {
+                /* 首次进入编辑：预填路径 + 全选 */
+                if (w->input_mode != FM_INPUT_NONE) {
+                    fm_input_reset(w);
+                    w->status[0] = '\0';
+                }
+                fm_input_begin(w, FM_INPUT_PATH, "");
+                mui_textbox_set_text(&w->input_box, w->path);
+                mui_textbox_cursor_end(&w->input_box);
+                w->path_fresh = 1;
+                w->sel_active = 0;
+                w->mouse_sel_anchor = 0;
+                w->mouse_sel_fresh_enter = 1;
+            } else {
+                /* 已在编辑：记录锚点，等待可能的拖动 */
+                const char *txt = mui_textbox_get_text(&w->input_box);
+                int prompt_w = 4 + mui_text_width(w->input_prompt);
+                int px = prompt_w + 1;
+                int idx = fm_char_index_at(px, ev->x, txt);
+                w->mouse_sel_anchor = idx;
+                w->sel_start = idx;
+                w->sel_end = idx;
+                w->mouse_sel_fresh_enter = 0;
+            }
+            w->mouse_sel_dragging = 1;
+            w->mouse_sel_start_x = ev->x;
+            w->drag_candidate = 0;
+            fm_redraw_topbar(w);
+        }
+        return;
+    }
+
     if (w->input_mode != FM_INPUT_NONE) {
         fm_input_reset(w);
         w->status[0] = '\0';
         fm_redraw(w);
     }
-
-    if (ev->y < FM_TOP_BAR_H) return;
 
     if (ev->x >= w->cw - FM_SCROLL_W) {
         if (left) {
@@ -2330,20 +2574,35 @@ static void draw_window_items(void) {
         unsigned int bg = g_win_list[i].minimized ? 0x1A1A2E : 0x3A4A5E;
         gfx_fill_rect(g_panel_pixels, g_W, PANEL_H, x, 0, WIN_ITEM_W - 4, PANEL_H, bg);
 
+        int ix = x + 4;
+        int iy = (PANEL_H - 16) / 2;
+        
+        if (strstr(g_win_list[i].title, "Files") != NULL) {
+            icon_draw_folder_small(g_panel_pixels, g_W, ix, iy);
+        } else {
+            icon_draw_exec_small(g_panel_pixels, g_W, ix, iy);
+        }
+
         char label[64];
         int k = 0, used = 0;
         const unsigned char *tp = (const unsigned char*)g_win_list[i].title;
+        
+        int text_x = ix + 16 + 4;
+        int max_text_w = WIN_ITEM_W - (text_x - x) - 8;
+
         while (*tp && k < (int)sizeof(label) - 4) {
             uint32_t cp;
             int clen = ufont_utf8_decode(tp, &cp);
             int cw = wm_font_width((int)cp);
             if (!cw) cw = 8;
-            if (used + cw > WIN_ITEM_W - 12) break;
+            if (used + cw > max_text_w) break;
             memcpy(label + k, tp, clen);
             k += clen; used += cw; tp += clen;
         }
         label[k] = '\0';
-        gfx_draw_text(g_panel_pixels, g_W, x + 4, (PANEL_H - 16) / 2, label, COL_PANEL_FG, bg);
+        
+        gfx_draw_text(g_panel_pixels, g_W, text_x, (PANEL_H - 16) / 2, label, COL_PANEL_FG, bg);
+        
         x += WIN_ITEM_W;
     }
 }
