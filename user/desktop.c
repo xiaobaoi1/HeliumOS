@@ -548,6 +548,10 @@ static void fm_paint_topbar(struct fm_win *w) {
                              txt, 0xFFFFFF, 0x3A6EA5);
                     mui_clip_set(s, 0, 0, w->cw, FM_TOP_BAR_H);
                 }
+
+                /* ★ 选区/全选末尾绘制 2px 白色光标，避免"光标消失"的错觉 */
+                if (char_x1 + 2 < px + tw)
+                    mui_fill(s, char_x1, y0 + 1, 2, y1 - y0 - 2, 0xFFFFFF);
             } else {
                 mui_widget_paint(&w->input_box.base, s, px, 0);
             }
@@ -689,10 +693,6 @@ static void exec_elf(const char *path) {
     };
     spawn(path, argv, &sp);
 }
-
-/* ============================================================
- *        文件窗口：路径辅助 / 文件操作 / 右键菜单 / 键盘
- * ============================================================ */
 
 static void fm_path_join(const char *dir, const char *name, char *out, int out_size) {
     int len = strlen(dir);
@@ -1610,7 +1610,7 @@ static void fm_handle_key(struct fm_win *w, int key, unsigned int mods) {
             w->menu_open = 0;
             mui_list_clear_selection(&w->list);
             w->list.cursor = -1;
-            fm_input_begin(w, FM_INPUT_PATH, "Go to: ");
+            fm_input_begin(w, FM_INPUT_PATH, "");
         } else if (w->path_fresh) {
             mui_textbox_set_text(&w->input_box, "");
             w->path_fresh = 0;
@@ -1810,14 +1810,13 @@ static void handle_fm_event(struct fm_win *w, struct wm_event *ev) {
     }
 
     if (ev->type == WM_EV_MOUSE_MOVE) {
-        /* ========== 路径栏拖动选择 ========== */
+        /* 路径栏拖动选择 */
         if (w->mouse_sel_dragging && w->input_mode == FM_INPUT_PATH) {
             int dx = ev->x - w->mouse_sel_start_x;
             if (dx < 0) dx = -dx;
-            if (dx < 4) return;   /* 拖动阈值：避免单击误触 */
+            if (dx < 4) return;
 
-            w->path_fresh = 0;    /* 进入拖动选择，取消全选 */
-
+            w->path_fresh = 0;
             const char *txt = mui_textbox_get_text(&w->input_box);
             int prompt_w = 4 + mui_text_width(w->input_prompt);
             int px = prompt_w + 1;
@@ -1914,15 +1913,12 @@ static void handle_fm_event(struct fm_win *w, struct wm_event *ev) {
     }
 
     if (ev->type == WM_EV_MOUSE_UP && (ev->code & WM_BTN_LEFT)) {
-        /* ========== 结束路径栏拖动 / 单击 ========== */
         if (w->mouse_sel_dragging) {
             w->mouse_sel_dragging = 0;
             if (!w->sel_active) {
                 if (w->mouse_sel_fresh_enter) {
-                    /* 首次点击进入编辑：保持全选 */
                     w->path_fresh = 1;
                 } else {
-                    /* 编辑中单击：取消全选，光标移到点击位置 */
                     w->path_fresh = 0;
                     fm_textbox_set_cursor_byte(&w->input_box,
                                                w->mouse_sel_anchor);
@@ -1949,7 +1945,7 @@ static void handle_fm_event(struct fm_win *w, struct wm_event *ev) {
         w->drag_candidate = 0;
         if (g_drag_active && g_drag_src_fm == (int)(w - g_fm_wins)) {
             if (ev->extra & WM_MOD_DROP_OUTSIDE) {
-                /* 释放到别的窗口：等 WM 把 WM_EV_DROP 发给目标窗口 */
+                /* 等 WM 把 WM_EV_DROP 发给目标窗口 */
             } else if (!w->drag_moved) {
                 drag_clear();
             } else if (ev->x >= 0 && ev->y >= 0 &&
@@ -1971,6 +1967,30 @@ static void handle_fm_event(struct fm_win *w, struct wm_event *ev) {
     int right = (ev->code & WM_BTN_RIGHT) != 0;
     int left  = (ev->code & WM_BTN_LEFT) != 0;
 
+    /* ============================================================
+     * ★ 关键修复①：任何位置的鼠标右键按下，只要处于"全选"状态，
+     *   一律取消全选，保留路径编辑模式，光标回归可见。
+     *   - 点在路径栏：光标定位到点击处
+     *   - 点在文件列表：光标停在末尾（或保持原位）
+     *   此后打字为"插入"，绝不清空整段地址。
+     * ============================================================ */
+    if (right && w->path_fresh && w->input_mode == FM_INPUT_PATH) {
+        w->path_fresh = 0;
+        w->sel_active = 0;
+        w->mouse_sel_dragging = 0;
+        if (ev->y < FM_TOP_BAR_H) {
+            const char *txt = mui_textbox_get_text(&w->input_box);
+            int prompt_w = 4 + mui_text_width(w->input_prompt);
+            int px = prompt_w + 1;
+            int idx = fm_char_index_at(px, ev->x, txt);
+            fm_textbox_set_cursor_byte(&w->input_box, idx);
+        } else {
+            mui_textbox_cursor_end(&w->input_box);
+        }
+        fm_redraw_topbar(w);
+        /* 不 return：继续走右键菜单等后续逻辑 */
+    }
+
     if (w->menu_open) {
         int item = fm_menu_hit(w, ev->x, ev->y);
         w->menu_open = 0;
@@ -1979,13 +1999,12 @@ static void handle_fm_event(struct fm_win *w, struct wm_event *ev) {
         return;
     }
 
-    /* ========== 顶部路径栏：单击进入编辑（全选），拖动则选择文本 ========== */
+    /* 顶部路径栏左键：进入编辑 / 记录拖动锚点 */
     if (ev->y < FM_TOP_BAR_H) {
         if (left) {
             int was_editing = (w->input_mode == FM_INPUT_PATH);
 
             if (!was_editing) {
-                /* 首次进入编辑：预填路径 + 全选 */
                 if (w->input_mode != FM_INPUT_NONE) {
                     fm_input_reset(w);
                     w->status[0] = '\0';
@@ -1998,7 +2017,6 @@ static void handle_fm_event(struct fm_win *w, struct wm_event *ev) {
                 w->mouse_sel_anchor = 0;
                 w->mouse_sel_fresh_enter = 1;
             } else {
-                /* 已在编辑：记录锚点，等待可能的拖动 */
                 const char *txt = mui_textbox_get_text(&w->input_box);
                 int prompt_w = 4 + mui_text_width(w->input_prompt);
                 int px = prompt_w + 1;
@@ -2016,10 +2034,19 @@ static void handle_fm_event(struct fm_win *w, struct wm_event *ev) {
         return;
     }
 
+    /* ============================================================
+     * ★ 关键修复②：左键点击文件列表时退出路径编辑；
+     *   右键点击文件列表时保留编辑模式（只清全选），
+     *   这样关闭右键菜单后仍可继续编辑地址，不会"从头输入"。
+     * ============================================================ */
     if (w->input_mode != FM_INPUT_NONE) {
-        fm_input_reset(w);
-        w->status[0] = '\0';
-        fm_redraw(w);
+        if (right && w->input_mode == FM_INPUT_PATH) {
+            /* 保留 input_mode，path_fresh 已在上方清除 */
+        } else {
+            fm_input_reset(w);
+            w->status[0] = '\0';
+            fm_redraw(w);
+        }
     }
 
     if (ev->x >= w->cw - FM_SCROLL_W) {
@@ -2216,10 +2243,6 @@ static void draw_wallpaper_pixels(void) {
         for (int x = 0; x < g_W; x++) row[x] = c;
     }
 }
-
-/* ============================================================
- *                   系统组件
- * ============================================================ */
 
 static void draw_wallpaper(void) {
     draw_wallpaper_pixels();
