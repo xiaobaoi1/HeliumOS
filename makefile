@@ -132,7 +132,8 @@ METHYLUI_OBJS = $(BUILD_DIR)/unicode_font.o \
 
 
 SEVENZ_NAMES := 7zAlloc 7zArcIn 7zBuf 7zBuf2 7zCrc 7zCrcOpt 7zDec 7zFile 7zStream \
-                Bcj2 Bra Bra86 BraIA64 CpuArch Delta Lzma2Dec LzmaDec Ppmd7 Ppmd7Dec
+                Bcj2 Bra Bra86 BraIA64 CpuArch Delta Lzma2Dec LzmaDec Ppmd7 Ppmd7Dec \
+                LzmaEnc LzFind
 SEVENZ_OBJS := $(addprefix $(BUILD_DIR)/7zip/,$(addsuffix .o,$(SEVENZ_NAMES)))
 
 USER_APPS = shell idle test testkill sleeper argtest test_write \
@@ -425,7 +426,8 @@ $(BUILD_DIR)/bearssl/libbearssl.a: $(BEARSSL_OBJS)
 
 $(BUILD_DIR)/7zip/%.o: user/7zip/C/%.c
 	@mkdir -p $(BUILD_DIR)/7zip
-	$(CC) $(USER_CFLAGS) -Iuser/7zip/C -DUSE_FOPEN -DZ7_PPMD_SUPPORT -DZ7_EXTRACT_ONLY -include user/7zip/helium_compat.h -c $< -o $@
+	$(CC) $(USER_CFLAGS) -Iuser/7zip/C -DUSE_FOPEN -DZ7_PPMD_SUPPORT -DZ7_EXTRACT_ONLY -DZ7_ST \
+	      -include user/7zip/helium_compat.h -c $< -o $@
 
 .SECONDEXPANSION:
 $(BUILD_DIR)/%.ELF: $(BUILD_DIR)/%.o $(BUILD_DIR)/crt0.o $(LIBC_OBJS) $$(EXTRA_OBJS_$$*) user/linker.ld

@@ -15,7 +15,8 @@
 #include "7zip/C/7zCrc.h"
 #include "7zip/C/7zFile.h"
 #include "7zip/C/7zTypes.h"
-
+#define Z7_ST
+#include "7zip/C/LzmaEnc.h"
 /* ==================== 布局常量 ==================== */
 #define WIN_W        780
 #define WIN_H        540
@@ -93,8 +94,280 @@ struct app {
 };
 
 static const ISzAlloc g_alloc = { SzAlloc, SzFree };
+static void     init_crc32(void);
+static uint32_t update_crc(uint32_t crc, const uint8_t *buf, uint32_t len);
+static int      write_all(int fd, const void *buf, uint32_t n);
+static void     set_progress(struct app *a, const char *fmt, ...);
+#define PF_NAME_MAX    256
+#define PF_PROPS_SIZE  LZMA_PROPS_SIZE   /* 5 */
 
-/* ==================== 前置声明 ==================== */
+struct packed_file {
+    char     name[PF_NAME_MAX];
+    uint8_t *packed;
+    size_t   packed_size;
+    uint64_t unpacked_size;
+    uint8_t  props[PF_PROPS_SIZE];
+    size_t   props_size;
+    uint32_t unpacked_crc;
+};
+
+static size_t WriteNumber7z(uint8_t *buf, uint64_t val)
+{
+    if (val < 0x80) { buf[0] = (uint8_t)val; return 1; }
+    int n;
+    for (n = 2; n <= 8; n++)
+        if (val < ((uint64_t)1 << (7 * n))) break;
+    if (n > 8) {
+        buf[0] = 0xFF;
+        for (int j = 0; j < 8; j++)
+            buf[1 + j] = (uint8_t)(val >> (8 * j)); /* 低位在前的 8 字节 */
+        return 9;
+    }
+    buf[0] = (uint8_t)(((0xFFu << (9 - n)) & 0xFF) | (val >> (8 * (n - 1))));
+    for (int j = 1; j < n; j++)
+        buf[j] = (uint8_t)(val >> (8 * (j - 1))); /* 从低 8 位开始依次存放 */
+    return (size_t)n;
+}
+
+static void WriteLE32_7z(uint8_t *b, uint32_t v)
+{
+    b[0] = (uint8_t)v; b[1] = (uint8_t)(v >> 8);
+    b[2] = (uint8_t)(v >> 16); b[3] = (uint8_t)(v >> 24);
+}
+static void WriteLE64_7z(uint8_t *b, uint64_t v)
+{
+    for (int i = 0; i < 8; i++) b[i] = (uint8_t)(v >> (8 * i));
+}
+
+static uint32_t crc32_buf(const void *data, uint64_t size)
+{
+    init_crc32();
+    uint32_t crc = 0xFFFFFFFF;
+    const uint8_t *p = (const uint8_t *)data;
+    uint64_t rem = size;
+    while (rem > 0) {
+        uint32_t chunk = (rem > 0xFFFFFFFFu) ? 0xFFFFFFFFu : (uint32_t)rem;
+        crc = update_crc(crc, p, chunk);
+        p += chunk;
+        rem -= chunk;
+    }
+    return crc ^ 0xFFFFFFFF;
+}
+
+/* ---- 构建 NextHeader（N 个文件，每个一个 Folder） ---- */
+static size_t BuildNextHeaderMulti(uint8_t *nh,
+                                   struct packed_file *pf, int n)
+{
+    size_t p = 0;
+
+    nh[p++] = 0x01;   /* kHeader */
+    nh[p++] = 0x04;   /* kMainStreamsInfo */
+
+    /* PackInfo */
+    nh[p++] = 0x06;
+    p += WriteNumber7z(nh + p, 0);              /* PackPos = 0 */
+    p += WriteNumber7z(nh + p, (uint64_t)n);    /* NumPackStreams */
+    nh[p++] = 0x09;                              /* kSize */
+    for (int i = 0; i < n; i++)
+        p += WriteNumber7z(nh + p, pf[i].packed_size);
+    nh[p++] = 0x00;                              /* kEnd */
+
+    /* UnpackInfo */
+    nh[p++] = 0x07;
+    nh[p++] = 0x0B;                              /* kFolder */
+    p += WriteNumber7z(nh + p, (uint64_t)n);    /* NumFolders */
+    nh[p++] = 0x00;                              /* External=0 */
+
+    for (int i = 0; i < n; i++) {
+        p += WriteNumber7z(nh + p, 1);           /* NumCoders = 1 */
+        nh[p++] = 0x23;                          /* IDSize=3 | hasAttrs */
+        /* LZMA Method ID 为 03 01 01 */
+        nh[p++] = 0x03; nh[p++] = 0x01; nh[p++] = 0x01;   
+        p += WriteNumber7z(nh + p, (uint64_t)pf[i].props_size);
+        memcpy(nh + p, pf[i].props, pf[i].props_size);
+        p += pf[i].props_size;
+    }
+
+    nh[p++] = 0x0C;                              /* kCodersUnpackSize */
+    for (int i = 0; i < n; i++)
+        p += WriteNumber7z(nh + p, pf[i].unpacked_size);
+    nh[p++] = 0x00;                              /* kEnd UnpackInfo */
+
+    /* SubStreamsInfo: 只写 CRC */
+    nh[p++] = 0x08;
+    nh[p++] = 0x0A;                              /* kCRC */
+    nh[p++] = 0x01;                              /* AllAreDefined = 1 */
+    for (int i = 0; i < n; i++) {
+        WriteLE32_7z(nh + p, pf[i].unpacked_crc);
+        p += 4;
+    }
+    nh[p++] = 0x00;                              /* kEnd SubStreamsInfo */
+    nh[p++] = 0x00;                              /* kEnd MainStreamsInfo */
+
+    /* FilesInfo */
+    nh[p++] = 0x05;
+    p += WriteNumber7z(nh + p, (uint64_t)n);    /* 【修复】必须写 NumFiles！ */
+
+    size_t nameDataSize = 1;                     /* External 标志位 */
+    for (int i = 0; i < n; i++)
+        nameDataSize += (strlen(pf[i].name) + 1) * 2;
+
+    nh[p++] = 0x11;                              /* kName */
+    p += WriteNumber7z(nh + p, (uint64_t)nameDataSize);
+    nh[p++] = 0x00;                              /* External = 0 */
+    for (int i = 0; i < n; i++) {
+        for (const char *c = pf[i].name; *c; c++) {
+            nh[p++] = (uint8_t)*c;
+            nh[p++] = 0x00;                      /* ASCII 转 UTF-16LE */
+        }
+        nh[p++] = 0x00; nh[p++] = 0x00;          /* null terminator */
+    }
+    nh[p++] = 0x00;                              /* kEnd FilesInfo */
+    nh[p++] = 0x00;                              /* kEnd Header */
+
+    return p;
+}
+
+static int create_7z_native(struct app *a,
+                            const char *szname,
+                            char **files, int nfiles)
+{
+    fs_unlink(szname);
+    int ffd = fs_open(szname, FS_O_WRONLY | FS_O_CREAT | FS_O_TRUNC);
+    if (ffd < 0) return -1;
+
+    static const uint8_t sig[8] = { '7','z', 0xBC, 0xAF, 0x27, 0x1C, 0x00, 0x04 };
+    uint8_t hdr32[32];
+    memset(hdr32, 0, sizeof(hdr32));
+    memcpy(hdr32, sig, 8);
+    if (write_all(ffd, hdr32, 32) != 0) { fs_close(ffd); fs_unlink(szname); return -1; }
+
+    init_crc32();
+
+    struct packed_file *pf = calloc((size_t)(nfiles > 0 ? nfiles : 1), sizeof(*pf));
+    if (!pf) { fs_close(ffd); fs_unlink(szname); return -1; }
+
+    int      npf = 0;
+    uint64_t packed_total = 0;
+
+    for (int i = 0; i < nfiles; i++) {
+        set_progress(a, "Packing %d/%d: %s", i + 1, nfiles, files[i]);
+
+        int fd = fs_open(files[i], FS_O_RDONLY);
+        if (fd < 0) continue;
+
+        struct fstat_buf st;
+        if (fs_fstat(fd, &st) < 0 || st.size == 0) {
+            fs_close(fd);
+            continue;
+        }
+
+        uint64_t fsize = st.size;
+        uint8_t *buf = (uint8_t *)malloc((size_t)fsize);
+        if (!buf) { fs_close(fd); continue; }
+
+        uint64_t got = 0;
+        while (got < fsize) {
+            int r = fs_read(fd, buf + (size_t)got, (uint32_t)(fsize - got));
+            if (r <= 0) break;
+            got += (uint64_t)r;
+        }
+        fs_close(fd);
+        if (got != fsize) { free(buf); continue; }
+
+        /* --- LZMA --- */
+        CLzmaEncProps props;
+        LzmaEncProps_Init(&props);
+        props.level        = 7;
+        props.reduceSize   = fsize;
+        props.writeEndMark = 1; /* 已修复：启用 end mark 以兼容所有解码器 */
+        props.numThreads   = 1;
+
+        size_t packCap = (size_t)fsize + (size_t)fsize / 8 + 65536;
+        uint8_t *packed = (uint8_t *)malloc(packCap);
+        if (!packed) { free(buf); continue; }
+
+        SizeT   packLen   = (SizeT)packCap;
+        Byte    lzProps[PF_PROPS_SIZE];
+        SizeT   propsSize = PF_PROPS_SIZE;
+
+        SRes res = LzmaEncode(packed, &packLen,
+                              buf, (SizeT)fsize,
+                              &props,
+                              lzProps, &propsSize,
+                              1, NULL, &g_alloc, &g_alloc); /* 1表示写入结束标记 */
+        if (res != SZ_OK) {
+            free(packed); free(buf); continue;
+        }
+
+        uint32_t crc = crc32_buf(buf, fsize);
+        free(buf);
+
+        struct packed_file *e = &pf[npf++];
+        strncpy(e->name, files[i], PF_NAME_MAX - 1);
+        e->name[PF_NAME_MAX - 1] = 0;
+        e->packed        = packed;
+        e->packed_size   = (size_t)packLen;
+        e->unpacked_size = fsize;
+        memcpy(e->props, lzProps, PF_PROPS_SIZE);
+        e->props_size    = (size_t)propsSize;
+        e->unpacked_crc  = crc;
+
+        if (write_all(ffd, packed, (uint32_t)packLen) != 0) {
+            npf--;                /* 撤销本条 */
+            free(e->packed);
+            e->packed = NULL;
+            break;
+        }
+        packed_total += packLen;
+        sleep_ms(1);
+    }
+
+    if (npf == 0) {
+        for (int i = 0; i < npf; i++) free(pf[i].packed);
+        free(pf);
+        fs_close(ffd);
+        fs_unlink(szname);
+        return -1;
+    }
+
+    /* 构建 NextHeader */
+    size_t nhCap = 1024 + (size_t)npf * 1024;
+    uint8_t *nh = (uint8_t *)malloc(nhCap);
+    if (!nh) {
+        for (int i = 0; i < npf; i++) free(pf[i].packed);
+        free(pf); fs_close(ffd); fs_unlink(szname); return -1;
+    }
+
+    size_t nhSize = BuildNextHeaderMulti(nh, pf, npf);
+
+    if (write_all(ffd, nh, (uint32_t)nhSize) != 0) {
+        free(nh);
+        for (int i = 0; i < npf; i++) free(pf[i].packed);
+        free(pf); fs_close(ffd); fs_unlink(szname); return -1;
+    }
+
+    /* 回填 StartHeader */
+    uint8_t startHdr[20];
+    WriteLE64_7z(startHdr + 0,  packed_total);
+    WriteLE64_7z(startHdr + 8,  (uint64_t)nhSize);
+    WriteLE32_7z(startHdr + 16, crc32_buf(nh, nhSize));
+
+    uint32_t startCrc = crc32_buf(startHdr, 20);
+    uint8_t  backfill[24];
+    WriteLE32_7z(backfill, startCrc);
+    memcpy(backfill + 4, startHdr, 20);
+
+    fs_seek(ffd, 8);
+    write_all(ffd, backfill, 24);
+    fs_close(ffd);
+
+    free(nh);
+    for (int i = 0; i < npf; i++) free(pf[i].packed);
+    free(pf);
+    return 0;
+}
+
 static void read_dir(struct app *a);
 static void redraw_all(struct app *a);
 static void do_extract(struct app *a);
@@ -102,7 +375,6 @@ static void on_double_click(struct app *a, int idx);
 static void do_open_archive(struct app *a, const char *path);
 static void handle_resize(struct app *a, int new_w, int new_h);
 
-/* ==================== 基础绘图 ==================== */
 static void fill_rect(unsigned int *buf, int bw, int bh,
                       int x, int y, int w, int h, uint32_t rgb) {
     int x0 = x, y0 = y, x1 = x + w, y1 = y + h;
@@ -849,8 +1121,8 @@ static void do_create_zip(struct app *a, int is_7z) {
     redraw_all(a);
     publish(a); sleep_ms(20);
 
-    int r = is_7z ? create_7z_cmd(a, name, files, nfiles) : create_zip_compressed(a, name, files, nfiles);
-    read_dir(a);
+int r = is_7z ? create_7z_native(a, name, files, nfiles)
+              : create_zip_compressed(a, name, files, nfiles);    read_dir(a);
     snprintf(a->status, sizeof(a->status), "%s: %s", r == 0 ? "Created" : "Failed", name);
 }
 
