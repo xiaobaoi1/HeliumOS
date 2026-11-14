@@ -11,7 +11,7 @@
 #include "methylui/mui_surface.h"
 #include "methylui/mui_widget.h"
 #include "methylui/mui_scroll.h"
-#include "ime_dict.h"
+#include "ime.h"
 #include "unicode_font.h"
 #include <stdint.h>
 
@@ -662,7 +662,14 @@ static void process_byte(unsigned char c) {
     else if ((c & 0xF8) == 0xF0) { g_utf8_need = 4; g_utf8_buf[0] = c; g_utf8_len = 1; }
     else                         { render_cp('?'); }
 }
+#define IME_BAR_W 480
 
+static struct ime_ctx g_term_ime;
+static uint32_t g_ime_save[IME_BAR_W * FONT_H];
+static int g_ime_saved_w;
+static int g_ime_visible;
+static void ime_restore(void);
+static void ime_draw(void);
 static int  g_inbox_w = -1;
 static char g_my_shm_name[16];
 static char g_my_ev_name[24];
@@ -672,7 +679,8 @@ static int term_resize(int new_w, int new_h) {
     if (!g_shm || g_inbox_w < 0) return -1;
     if (new_w < 80 || new_h < 48) return -1;
     if (new_w > 2048 || new_h > 1536) return -1;
-
+    g_ime_visible = 0;
+    g_ime_saved_w = 0;
     g_resize_gen++;
     char new_shm[16];
     snprintf(new_shm, sizeof(new_shm), "term-%d-r%d",
@@ -803,42 +811,6 @@ static int term_resize(int new_w, int new_h) {
     return 0;
 }
 
-/* ---------- Simple pinyin IME (uses shared ime_dict.h) ---------- */
-#define IME_BAR_W 480
-#define IME_BUF_MAX 32
-
-static int g_ime_on, g_ime_visible;
-static char g_ime_buf[IME_BUF_MAX];
-static int g_ime_len;
-static uint32_t g_ime_save[IME_BAR_W * FONT_H];
-static int g_ime_saved_w;
-
-static const struct ime_word *ime_lookup(void) {
-    return ime_lookup_pinyin(g_ime_buf);
-}
-
-static int ime_cp_width(uint32_t cp) {
-    int w = ufont_width(cp);
-    return w ? w : CELL_W;
-}
-
-static void ime_draw_text(const char *text, int x, int y, uint32_t fg, uint32_t bg) {
-    const unsigned char *p = (const unsigned char*)text;
-    int limit = x + g_ime_saved_w - 4;
-    while (*p) {
-        uint32_t cp; int n = 1;
-        if (*p < 0x80) cp = *p;
-        else if ((*p & 0xE0) == 0xC0 && p[1]) { cp = ((*p & 0x1F) << 6) | (p[1] & 0x3F); n = 2; }
-        else if ((*p & 0xF0) == 0xE0 && p[1] && p[2]) { cp = ((*p & 0x0F) << 12) | ((p[1] & 0x3F) << 6) | (p[2] & 0x3F); n = 3; }
-        else if ((*p & 0xF8) == 0xF0 && p[1] && p[2] && p[3]) { cp = ((*p & 0x07) << 18) | ((p[1] & 0x3F) << 12) | ((p[2] & 0x3F) << 6) | (p[3] & 0x3F); n = 4; }
-        else { cp = '?'; n = 1; }
-        int w = ime_cp_width(cp);
-        if (x + w > limit) break;
-        draw_char_at(x, y, cp, fg, bg);
-        x += w; p += n;
-    }
-}
-
 static void ime_restore(void) {
     if (!g_ime_visible || !g_ime_saved_w || !g_pixels) return;
     int y = g_ch - FONT_H;
@@ -851,71 +823,60 @@ static void ime_restore(void) {
     g_ime_visible = 0;
 }
 
+static void ime_draw_text(const char *text, int x, int y, uint32_t fg, uint32_t bg) {
+    const unsigned char *p = (const unsigned char*)text;
+    int limit = x + g_ime_saved_w - 4;
+    while (*p) {
+        uint32_t cp; int n = 1;
+        if (*p < 0x80) cp = *p;
+        else if ((*p & 0xE0) == 0xC0 && p[1]) { cp = ((*p & 0x1F) << 6) | (p[1] & 0x3F); n = 2; }
+        else if ((*p & 0xF0) == 0xE0 && p[1] && p[2]) { cp = ((*p & 0x0F) << 12) | ((p[1] & 0x3F) << 6) | (p[2] & 0x3F); n = 3; }
+        else if ((*p & 0xF8) == 0xF0 && p[1] && p[2] && p[3]) { cp = ((*p & 0x07) << 18) | ((p[1] & 0x3F) << 12) | ((p[2] & 0x3F) << 6) | (p[3] & 0x3F); n = 4; }
+        else { cp = '?'; n = 1; }
+        int w = ufont_width(cp);
+        if (!w) w = CELL_W;
+        if (x + w > limit) break;
+        draw_char_at(x, y, cp, fg, bg);
+        x += w; p += n;
+    }
+}
+
 static void ime_draw(void) {
     ime_restore();
-    if (!g_ime_on || g_scrolled || !g_pixels) return;
+    if (!g_term_ime.active || g_scrolled || !g_pixels) return;
+    if (!g_term_ime.pinyin_len && !g_term_ime.show_hint) return;
+
     int w = g_text_w < IME_BAR_W ? g_text_w : IME_BAR_W;
     if (w < 80) return;
     int y = g_ch - FONT_H;
+    if (y < 0) return;
     g_ime_saved_w = w;
     for (int r = 0; r < FONT_H; r++)
         memcpy(g_ime_save + r * w, g_pixels + (y + r) * g_cw, w * 4);
     fill_rect(0, y, w, FONT_H, 0x2A2A3E);
-    char line[256];
-    int n = snprintf(line, sizeof(line), "%s", g_ime_len ? g_ime_buf : "IME:");
-    const struct ime_word *word = ime_lookup();
-    if (word) for (int i = 0; i < 5 && word->cand[i]; i++)
-        if (n < (int)sizeof(line) - 1)
-            n += snprintf(line + n, sizeof(line) - n, " %d:%s", i + 1, word->cand[i]);
-    ime_draw_text(line, 4, y, 0xFFFFFF, 0x2A2A3E);
+    
+    const char *hint = ime_get_hint(&g_term_ime);
+    if (hint[0]) {
+        ime_draw_text(hint, 4, y, 0xFFFFFF, 0x2A2A3E);
+    } else {
+        ime_draw_text("IME: 拼音输入", 4, y, 0xFFFFFF, 0x2A2A3E);
+    }
+    
     g_ime_visible = 1;
     mark_dirty(0, y, w, y + FONT_H);
 }
 
-static int ime_commit(int pick) {
-    const struct ime_word *word = ime_lookup();
-    if (!word || pick < 0 || pick >= 5 || !word->cand[pick]) return 0;
-    const char *out = word->cand[pick];
-    ime_restore();
-    g_ime_len = 0; g_ime_buf[0] = '\0';
-    pty_write(g_master, out, (unsigned int)strlen(out));
-    ime_draw();
-    return 1;
+/* 把上屏结果通过 PTY 传给终端子进程 */
+static void term_ime_commit_cb(const char *utf8, void *userdata) {
+    (void)userdata;
+    pty_write(g_master, utf8, (unsigned int)strlen(utf8));
 }
 
 static int ime_key(int key, unsigned int mods) {
-    if (key == ' ' && (mods & WM_MOD_CTRL)) {
-        g_ime_on = !g_ime_on; g_ime_len = 0; g_ime_buf[0] = '\0';
-        ime_draw(); return 1;
-    }
-    if (!g_ime_on) return 0;
-    if (key >= 'A' && key <= 'Z') key = key - 'A' + 'a';
-    if (key >= 'a' && key <= 'z') {
-        if (g_ime_len < IME_BUF_MAX - 1) {
-            g_ime_buf[g_ime_len++] = (char)key; g_ime_buf[g_ime_len] = '\0';
-        }
-        ime_draw(); return 1;
-    }
-    if (key == '\b' || key == 127) {
-        if (!g_ime_len) return 0;
-        g_ime_buf[--g_ime_len] = '\0';
-        ime_draw(); return 1;
-    }
-    if (key == ' ' || key == '\r' || key == '\n') {
-        if (!g_ime_len) return 0;
-        ime_commit(0);
-        return 1;
-    }
-    if (key >= '1' && key <= '9') {
-        if (!g_ime_len) return 0;
-        ime_commit(key - '1');
-        return 1;
-    }
-    if (key == 27) { ime_restore(); g_ime_len = 0; g_ime_buf[0] = '\0'; return 1; }
-    return 0;
+    int handled = ime_process_key(&g_term_ime, key, mods, NULL, term_ime_commit_cb, NULL);
+    ime_draw();
+    return handled;
 }
-
-/* ---------- 新标签页（WM_EV_NEW_TAB 处理） ---------- */
 
 static int g_tab_gen = 0;
 
@@ -1021,8 +982,7 @@ int main(int argc, char **argv) {
     }
 
     load_font();
-
-    /* pty + spawn shell */
+    ime_init(&g_term_ime);
     int fds[2];
     if (pty_open(fds) < 0) return 1;
     g_master = fds[0];
