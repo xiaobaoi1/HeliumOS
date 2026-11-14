@@ -17,7 +17,7 @@
 #include "methylui/mui_textbox.h"
 #include "methylui/mui_scroll.h"
 #include "methylui/mui_dialog.h"
-#include "ime_dict.h"
+#include "ime.h"
 
 static inline uint64_t tsc_now(void) {
     uint32_t lo, hi;
@@ -105,6 +105,7 @@ static int g_last_clicked_file = -1;
 static uint32_t g_click_tick = 0;
 static int g_desk_cols = 1;
 static struct mui_dialog g_desk_dialog;
+static struct ime_ctx g_desk_ime;
 
 static int desk_sel_count(void) {
     int n = 0;
@@ -377,6 +378,7 @@ struct fm_win {
     int drag_candidate;
     int drag_moved;
     int drag_start_x, drag_start_y;
+    struct ime_ctx ime;
 };
 
 static struct fm_win g_fm_wins[MAX_FM_WINDOWS];
@@ -1338,113 +1340,30 @@ static void fm_handle_esc_seq(struct fm_win *w, const char *seq, unsigned int mo
     }
 }
 
-/* ---------- Desktop-side pinyin IME for file-name fields ---------- */
-static int  g_ime_on, g_ime_len, g_ime_show;
-static char g_ime_buf[32];
-
-static struct mui_textbox *fm_ime_target(struct fm_win *w) {
-    if (!w) return NULL;
-    if (w->dialog.active) return &w->dialog.input;
-    if (w->input_mode != FM_INPUT_NONE) return &w->input_box;
-    return NULL;
-}
-
-static void ime_hint_build(char *out, int size) {
-    if (!out || size <= 0) return;
-    out[0] = '\0';
-    if (!g_ime_on || !g_ime_show) return;
-    if (!g_ime_len) {
-        snprintf(out, size, "IME: pinyin");
-        return;
-    }
-    int n = snprintf(out, size, "IME: %s", g_ime_buf);
-    const struct ime_word *word = ime_lookup_pinyin(g_ime_buf);
-    if (word) for (int i = 0; i < 3 && word->cand[i]; i++) {
-        if (n >= size - 1) break;
-        n += snprintf(out + n, size - n, " %d:%s", i + 1, word->cand[i]);
-    }
-}
-
-static int ime_handle_key(int key, unsigned int mods,
-                          struct mui_textbox *target) {
-    if (key == ' ' && (mods & WM_MOD_CTRL)) {
-        if (!target) return 0;
-        g_ime_on = !g_ime_on;
-        g_ime_len = 0;
-        g_ime_buf[0] = '\0';
-        g_ime_show = g_ime_on;
-        return 1;
-    }
-    if (!g_ime_on) return 0;
-    if (key >= 'A' && key <= 'Z') key = key - 'A' + 'a';
-    if (key >= 'a' && key <= 'z') {
-        if (g_ime_len < (int)sizeof(g_ime_buf) - 1) {
-            g_ime_buf[g_ime_len++] = (char)key;
-            g_ime_buf[g_ime_len] = '\0';
-        }
-        g_ime_show = 1;
-        return 1;
-    }
-    if (key == '\b' || key == 127) {
-        if (!g_ime_len) return 0;
-        g_ime_buf[--g_ime_len] = '\0';
-        g_ime_show = 1;
-        return 1;
-    }
-    if (key == ' ' || key == '\r' || key == '\n') {
-        if (!g_ime_len) return 0;
-        const struct ime_word *word = ime_lookup_pinyin(g_ime_buf);
-        if (word && word->cand[0]) {
-            mui_textbox_insert_utf8(target, word->cand[0]);
-            g_ime_len = 0;
-            g_ime_buf[0] = '\0';
-            g_ime_show = 0;
-        }
-        return 1;
-    }
-    if (key >= '1' && key <= '9') {
-        if (!g_ime_len) return 0;
-        const struct ime_word *word = ime_lookup_pinyin(g_ime_buf);
-        int pick = key - '1';
-        if (word && pick < 5 && word->cand[pick]) {
-            mui_textbox_insert_utf8(target, word->cand[pick]);
-            g_ime_len = 0;
-            g_ime_buf[0] = '\0';
-            g_ime_show = 0;
-        }
-        return 1;
-    }
-    if (key == 27) {
-        if (!g_ime_len && !g_ime_show) return 0;
-        g_ime_len = 0;
-        g_ime_buf[0] = '\0';
-        g_ime_show = 0;
-        return 1;
-    }
-    return 0;
-}
-
-static int desk_ime_key(struct fm_win *w, int key, unsigned int mods) {
-    struct mui_textbox *target = fm_ime_target(w);
-    if (!target) return 0;
-    if (!ime_handle_key(key, mods, target)) return 0;
-
-    char hint[96];
-    ime_hint_build(hint, sizeof(hint));
-    if (w->dialog.active) {
-        strncpy(w->dialog.error, hint, sizeof(w->dialog.error) - 1);
-        w->dialog.error[sizeof(w->dialog.error) - 1] = '\0';
-        fm_redraw(w);
-    } else {
-        strncpy(w->status, hint, sizeof(w->status) - 1);
-        w->status[sizeof(w->status) - 1] = '\0';
-        fm_redraw_topbar(w);
-    }
-    return 1;
-}
-
 static void fm_handle_key(struct fm_win *w, int key, unsigned int mods) {
-    if (desk_ime_key(w, key, mods)) return;
+    /* 1. 确定当前焦点文本框 */
+    struct mui_textbox *target = NULL;
+    if (w->dialog.active) 
+        target = &w->dialog.input;
+    else if (w->input_mode != FM_INPUT_NONE) 
+        target = &w->input_box;
+
+    /* 2. 输入法优先拦截处理 */
+    if (target) {
+        if (ime_process_key(&w->ime, key, mods, target, NULL, NULL)) {
+            const char *hint = ime_get_hint(&w->ime);
+            if (w->dialog.active) {
+                strncpy(w->dialog.error, hint, sizeof(w->dialog.error) - 1);
+                w->dialog.error[sizeof(w->dialog.error) - 1] = '\0';
+                fm_redraw(w);
+            } else {
+                strncpy(w->status, hint, sizeof(w->status) - 1);
+                w->status[sizeof(w->status) - 1] = '\0';
+                fm_redraw_topbar(w);
+            }
+            return; /* 拦截完毕，不再走默认按键逻辑 */
+        }
+    }
 
     if (w->dialog.active) {
         mui_dialog_key(&w->dialog, key, g_tick);
@@ -1583,6 +1502,7 @@ static struct fm_win *open_folder_window(const char *path) {
         w->input_box.base.focused = 0;
 
         mui_dialog_init(&w->dialog);
+        ime_init(&w->ime);
     }
 
     fm_navigate(w, path);
@@ -1938,10 +1858,6 @@ static void handle_fm_event(struct fm_win *w, struct wm_event *ev) {
     }
 }
 
-/* ============================================================
- *                   BMP 壁纸（全屏解码）
- * ============================================================ */
-
 #define BMP_MAX_DIM  4096
 
 struct bmp_file_hdr {
@@ -2239,14 +2155,15 @@ static void handle_wall_event(struct wm_event *ev) {
         int key = (int)ev->code;
 
         if (g_desk_dialog.active) {
-            if (ime_handle_key(key, ev->extra, &g_desk_dialog.input)) {
-                char hint[96];
-                ime_hint_build(hint, sizeof(hint));
+            /* 优先处理桌面重命名对话框的输入法 */
+            if (ime_process_key(&g_desk_ime, key, ev->extra, &g_desk_dialog.input, NULL, NULL)) {
+                const char *hint = ime_get_hint(&g_desk_ime);
                 strncpy(g_desk_dialog.error, hint, sizeof(g_desk_dialog.error) - 1);
                 g_desk_dialog.error[sizeof(g_desk_dialog.error) - 1] = '\0';
                 desk_dialog_redraw();
                 return;
             }
+            /* 正常文本框/对话框按键逻辑 */
             mui_dialog_key(&g_desk_dialog, key, g_tick);
             if (!g_desk_dialog.active) {
                 if (g_desk_dialog.result > 0) desktop_refresh_icons();
@@ -2869,6 +2786,7 @@ int main(int argc, char **argv) {
     wm_font_load();
     mui_font_load();
     mui_dialog_init(&g_desk_dialog);
+    ime_init(&g_desk_ime);
     calc_desk_cols();
     dprintf(2, "[MARK] desk_font: %llu\n", tsc_now() - t0);
 
