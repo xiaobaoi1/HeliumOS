@@ -24,8 +24,6 @@
  * output dates and directory ordering are affected by the current locale
  */
 
-#define mmap sys_mmap
-#define munmap sys_munmap
 #include "utils/config.h"
 
 #include <stdlib.h>
