@@ -1469,11 +1469,12 @@ static void handle_inbox(void) {
             int rem = sizeof(req) - 8;
             if (pipe_avail(g_inbox_rd) < rem) break;
             if (pipe_read(g_inbox_rd, (char*)&req + 8, rem) != rem) break;
+            /* 同一进程可能拥有多个窗口（tab、文件管理器等），
+             * 光标请求应作用于该进程的全部窗口，而不是第一个。 */
             for (int i = 0; i < MAX_WINDOWS; i++) {
                 if (g_wins[i].used &&
                     g_wins[i].owner_pid == (int)req.owner_pid) {
                     g_wins[i].cursor = req.cursor;
-                    break;
                 }
             }
         } else {

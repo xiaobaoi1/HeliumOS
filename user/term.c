@@ -673,6 +673,7 @@ static void ime_draw(void);
 static int  g_inbox_w = -1;
 static char g_my_shm_name[16];
 static char g_my_ev_name[24];
+static unsigned int g_term_id = 0;
 static int  g_resize_gen = 0;
 
 static int term_resize(int new_w, int new_h) {
@@ -682,9 +683,12 @@ static int term_resize(int new_w, int new_h) {
     g_ime_visible = 0;
     g_ime_saved_w = 0;
     g_resize_gen++;
+    /* 用进程号而不是事件名里的字符做唯一后缀。原来的
+     * g_my_ev_name[8] 只适用于 "wm-term-0".."wm-term-9"；
+     * 多 tab 的 "te-<pid>-<gen>" 和 slot >= 10 都会冲突。 */
     char new_shm[16];
-    snprintf(new_shm, sizeof(new_shm), "term-%d-r%d",
-             (int)g_my_ev_name[8] - '0', g_resize_gen);
+    snprintf(new_shm, sizeof(new_shm), "term-%u-r%d",
+             g_term_id, g_resize_gen);
 
     /* 先保存旧尺寸——复制完才更新 g_*，hist_line 依赖 g_cw */
     int old_cw     = g_cw;
@@ -931,6 +935,7 @@ int main(int argc, char **argv) {
 
     strncpy(g_my_shm_name, shm_name, sizeof(g_my_shm_name) - 1);
     strncpy(g_my_ev_name, ev_name, sizeof(g_my_ev_name) - 1);
+    g_term_id = (unsigned int)proc_getpid();
 
     int ev_rd = pipe_open(ev_name, /*wr=*/0);
     if (ev_rd < 0) {
