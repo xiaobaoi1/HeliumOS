@@ -1,0 +1,13 @@
+P3
+# test/ns-afl-bmp/id:000710,src:000698,op:havoc,rep:4.bmp
+# width                1 
+# height               8 
+1 8 256
+16 0 0 
+0 0 0 
+0 0 0 
+0 0 0 
+129 0 0 
+1 0 0 
+8 0 0 
+1 0 0 

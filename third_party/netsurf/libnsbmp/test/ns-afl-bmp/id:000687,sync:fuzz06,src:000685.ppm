@@ -1,0 +1,6 @@
+P3
+# test/ns-afl-bmp/id:000687,sync:fuzz06,src:000685.bmp
+# width                1 
+# height               1 
+1 1 256
+0 77 66 

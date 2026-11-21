@@ -259,6 +259,9 @@ $(DISK_IMG): $(KERNEL_ELF) $(USER_ELFS) $(USER_LIB_SOS) tcc-prepare $(BUILD_DIR)
 	sudo cp user/idle.c /mnt/build/idle.c; \
 	sudo cp user/kilo.c /mnt/build/kilo.c; \
 	sudo cp $(BUILD_DIR)/TCC.ELF /mnt/build/TCC; \
+	if [ -f $(BUILD_DIR)/nsmonkey.elf ]; then sudo cp $(BUILD_DIR)/nsmonkey.elf /mnt/build/NSMONKEY; fi; \
+	sudo mkdir -p /mnt/build/netsurf/res; \
+	sudo cp -r $(THIRD_PARTY)/netsurf/resources/* /mnt/build/netsurf/res/; \
 	sudo mkdir -p /mnt/build/INCLUDE /mnt/build/LIB; \
 	sudo cp -r $(BUILD_DIR)/tcc_sysroot/include/* /mnt/build/INCLUDE/; \
 	sudo cp -r $(BUILD_DIR)/tcc_sysroot/lib/* /mnt/build/LIB/; \
@@ -452,6 +455,11 @@ dc:
 # -------------------- 分层开发目标 --------------------
 kernel: $(KERNEL_ELF)
 
+nsmonkey:
+	bash tools/build_netsurf_libs.sh
+	bash tools/build_netsurf_core.sh
+	bash tools/ld_netsurf.sh
+
 user: $(BUILD_DIR)/shell.ELF $(BUILD_DIR)/desktop.ELF \
       $(BUILD_DIR)/wm.ELF $(BUILD_DIR)/term.ELF
 
@@ -460,5 +468,5 @@ third_party: $(BUILD_DIR)/bearssl/libbearssl.a $(SEVENZ_OBJS)
 image: $(DISK_IMG)
 
 # 声明伪目标
-.PHONY: all kernel user third_party image run run-disk debug debug-disk clean gdb pack run-net run-tcp $(DISK_IMG)
+.PHONY: all kernel user third_party nsmonkey image run run-disk debug debug-disk clean gdb pack run-net run-tcp $(DISK_IMG)
 -include $(wildcard $(BUILD_DIR)/*.d)

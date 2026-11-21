@@ -1,0 +1,6 @@
+P3
+# test/ns-afl-bmp/id:000699,src:000640+000653,op:splice,rep:2.bmp
+# width                2 
+# height               1 
+2 1 256
+0 0 0 0 0 0 

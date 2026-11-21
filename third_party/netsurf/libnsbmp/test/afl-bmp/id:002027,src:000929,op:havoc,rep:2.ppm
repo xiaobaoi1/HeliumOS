@@ -1,0 +1,9 @@
+P3
+# test/afl-bmp/id:002027,src:000929,op:havoc,rep:2.bmp
+# width                3 
+# height               4 
+3 4 256
+0 0 0 0 0 0 0 0 0 
+0 0 0 0 0 0 0 0 0 
+0 0 0 0 0 0 0 0 0 
+0 0 0 0 0 0 0 0 0 

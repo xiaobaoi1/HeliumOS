@@ -1,0 +1,10 @@
+name: "Static Analysis"
+
+on: [push]
+
+jobs:
+  static-analysis:
+    permissions:
+      contents: read
+      security-events: write
+    uses: netsurf-browser/ci-tools/.github/workflows/static-analysis.yaml@master

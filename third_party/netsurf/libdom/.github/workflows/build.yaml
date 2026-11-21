@@ -1,0 +1,23 @@
+name: "Build"
+
+on: [push]
+
+jobs:
+  build:
+    uses: netsurf-browser/ci-tools/.github/workflows/library-build.yaml@master
+    with:
+      # Perl modules used to convert the XML test suites to C.
+      extra-packages: >-
+        libswitch-perl
+        libxml-libxml-perl
+        libxml-parser-perl
+        libxml-perl
+        libxml-sax-base-perl
+        libxml-sax-expat-perl
+        libxml-sax-perl
+        libxml-xpath-perl
+      # Planet saving measure:
+      #   The tests take ages to convert from XML and we don't gain much by
+      #   running them on every combination in the matrix.
+      #   Another option might be to have the transformed C tests checked in.
+      test: one

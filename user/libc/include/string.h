@@ -25,6 +25,7 @@ char  *strcat(char *dest, const char *src);
 char  *strncat(char *dest, const char *src, size_t n);
 char  *strrchr(const char *s, int c);
 char  *strstr(const char *haystack, const char *needle);
+char  *strcasestr(const char *haystack, const char *needle);
 char *strpbrk(const char *s, const char *accept);
 size_t strcspn(const char *s, const char *reject);
 size_t strspn(const char *s, const char *accept);
