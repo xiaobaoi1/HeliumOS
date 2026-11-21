@@ -219,6 +219,7 @@
 - [x] U15：`shm_layout.h` 增加 `_Static_assert`
 - [x] U16：`make run` 改为硬盘镜像，新增 `make run-iso`
 - [x] K7/U13/U14：注释和 `ufont_width` 契约修正
+- [x] U17：任务栏点击 tab 条目改为 `activate_tab`，避免多个 tab 叠放/整组消失
 
 ### 后续批次
 

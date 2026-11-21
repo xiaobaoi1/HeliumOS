@@ -1423,7 +1423,20 @@ static void handle_inbox(void) {
             struct window *w = &g_wins[req.win_id];
             if (!w->used || w->kind != WM_KIND_NORMAL) continue;
 
-            if (req.action == WM_ACTION_MINIMIZE) {
+            /* tab 组内部只有一个 tab 是可见的。任务栏里的 tab 条目
+             * 必须走 activate_tab：否则 restore 只显示目标 tab，
+             * 已经可见的 tab 不会被隐藏，造成两个 tab 叠在一起；
+             * 而 minimize 当前 tab 会隐藏整个 tab 组。 */
+            if (tab_group_of(w) != 0) {
+                if (req.action == WM_ACTION_MINIMIZE ||
+                    req.action == WM_ACTION_RESTORE ||
+                    req.action == WM_ACTION_RAISE) {
+                    activate_tab(w);
+                } else if (req.action == WM_ACTION_MAXIMIZE) {
+                    if (w->maximized) unmaximize_window(w);
+                    else              maximize_window(w);
+                }
+            } else if (req.action == WM_ACTION_MINIMIZE) {
                 minimize_window(w);
             } else if (req.action == WM_ACTION_RESTORE) {
                 if (w->minimized) restore_window(w);
