@@ -321,6 +321,18 @@ static struct window *tab_nth(int group, int n) {
     return NULL;
 }
 
+/* 关闭当前 tab 后，优先接管“下一个”tab；没有下一个再回到第一个。 */
+static struct window *tab_after(int group, int seq) {
+    struct window *best = NULL;
+    for (int i = 0; i < MAX_WINDOWS; i++) {
+        struct window *w = &g_wins[i];
+        if (!w->used || tab_group_of(w) != group) continue;
+        if (w->tab_seq <= seq) continue;
+        if (!best || w->tab_seq < best->tab_seq) best = w;
+    }
+    return best ? best : tab_nth(group, 0);
+}
+
 /* 第 n 个 tab 的横向起点；超出 limit 后返回 limit（用于命中测试与绘制一致） */
 static int tab_x_at(int start, int idx) {
     return start + idx * (TAB_W + TAB_GAP);
@@ -993,6 +1005,7 @@ static void destroy_window(struct window *w) {
     win_bbox(w, &x0, &y0, &x1, &y1);
 
     int tab_group = tab_group_of(w);
+    int tab_seq = w->tab_seq;
     int was_max   = w->maximized;
     int was_active = (w->minimized == 0);
 
@@ -1030,7 +1043,7 @@ static void destroy_window(struct window *w) {
         }
 
         if (was_active || !have_active) {
-            struct window *next = tab_nth(tab_group, 0);
+            struct window *next = tab_after(tab_group, tab_seq);
             if (next) {
                 next->minimized = 0;
                 next->z = g_next_z++;
