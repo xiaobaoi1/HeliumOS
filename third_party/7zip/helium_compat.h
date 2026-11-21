@@ -10,6 +10,6 @@
 #ifndef EOF
 #define EOF (-1)
 #endif
-#define errno 0
-static inline int ferror(FILE *f) { (void)f; return 0; }
+/* errno 由 libc 提供 */
+/* ferror 由 libc 提供 */
 #endif

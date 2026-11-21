@@ -1,13 +1,21 @@
 #ifndef USER_FCNTL_H
 #define USER_FCNTL_H
 
-#include "syscall.h"
+#define O_RDONLY  0x01
+#define O_WRONLY  0x02
+#define O_RDWR    0x03
+#define O_CREAT   0x04
+#define O_TRUNC   0x08
+#define O_APPEND  0x10
 
-#define O_RDONLY FS_O_RDONLY
-#define O_WRONLY FS_O_WRONLY
-#define O_RDWR   FS_O_RDWR
-#define O_CREAT  FS_O_CREAT
-#define O_TRUNC  FS_O_TRUNC
-#define O_APPEND FS_O_APPEND
+#ifndef AT_SYMLINK_NOFOLLOW
+#define AT_SYMLINK_NOFOLLOW 0x100
+#endif
+#ifndef AT_REMOVEDIR
+#define AT_REMOVEDIR        0x200
+#endif
+
+int open(const char *pathname, int flags, ...);
+int close(int fd);
 
 #endif

@@ -2,7 +2,7 @@
 # HeliumOS Makefile
 # 默认: 生成 ISO 镜像 (便于快速启动)
 # 可选: 生成 FAT32 硬盘镜像 (用于测试文件系统写入)
-# 头文件管理: 公共头文件位于 src/include，通过 -I 引用
+# 目录分层: kernel / user / third_party
 # ====================================================================
 
 # -------------------- 工具链 --------------------
@@ -11,27 +11,28 @@ CC      = gcc
 LD      = ld
 QEMU    = qemu-system-i386
 GRUB    = grub-mkrescue
+LIBGCC  = $(shell $(CC) -m32 -print-libgcc-file-name)
 
 # -------------------- 编译参数 --------------------
 CFLAGS  = -m32 -ffreestanding -nostdlib -fno-pie -Wall -Wextra -g \
-          -I src/include -MMD -MP                          # 公共头文件路径
+          -I kernel/include -MMD -MP                       # 公共头文件路径
 
 # CFLAGS  = -m32 -ffreestanding -nostdlib -fno-pie -Wall -Wextra -g \
-          -I src/include -DKERNEL_DEBUG -MMD -MP #DEBUG
+          -I kernel/include -DKERNEL_DEBUG -MMD -MP #DEBUG
 
 ASMFLAGS = -f elf32
-LDFLAGS = -m elf_i386 -T linker.ld -nostdlib
+LDFLAGS = -m elf_i386 -T kernel/linker.ld -nostdlib
 
 # -------------------- 目录结构 --------------------
-SRC_DIR     = src
 BUILD_DIR   = build
-BOOT_DIR    = $(SRC_DIR)/boot
-KERNEL_DIR  = $(SRC_DIR)/kernel
-DRIVERS_DIR = $(SRC_DIR)/drivers
-INCLUDE_DIR = $(SRC_DIR)/include
-MEMORY_DIR = $(SRC_DIR)/memory
-PROCESS_DIR = $(SRC_DIR)/process
-FILESYS_DIR = $(SRC_DIR)/fs
+BOOT_DIR    = kernel/boot
+KERNEL_DIR  = kernel/core
+DRIVERS_DIR = kernel/drivers
+INCLUDE_DIR = kernel/include
+MEMORY_DIR  = kernel/memory
+PROCESS_DIR = kernel/process
+FILESYS_DIR = kernel/fs
+THIRD_PARTY = third_party
 
 # -------------------- 目标文件列表 --------------------
 OBJS = $(BUILD_DIR)/start.o \
@@ -114,7 +115,7 @@ all: $(DISK_IMG)
 # ==================== 用户程序变量 ====================
 
 USER_CFLAGS = -m32 -ffreestanding -fno-pic -fno-stack-protector \
-              -Iuser/ -Iuser/libc/include -Iuser/posix/include -Iuser/BearSSL-master/inc -MMD -MP
+              -Iuser/ -Iuser/libc/include -I$(THIRD_PARTY)/bearssl/inc -MMD -MP
 
 METHYLUI_DIR  = user/methylui
 METHYLUI_OBJS = $(BUILD_DIR)/unicode_font.o \
@@ -149,18 +150,11 @@ USER_APPS = shell idle test testkill sleeper argtest test_write \
 PHOTO_PY ?= /mnt/d/Local/Python314/python.exe
 PHOTO_SRCS := $(wildcard user/*.gif user/*.png user/*.jpg user/*.jpeg)
 
-BEARSSL_SRCS := $(shell find user/BearSSL-master/src -name '*.c' 2>/dev/null)
-BEARSSL_OBJS := $(patsubst user/BearSSL-master/src/%.c,$(BUILD_DIR)/bearssl/%.o,$(BEARSSL_SRCS))
-BEARSSL_CFLAGS := -Iuser/BearSSL-master/inc -Iuser/BearSSL-master/src \
+BEARSSL_SRCS := $(shell find $(THIRD_PARTY)/bearssl/src -name '*.c' 2>/dev/null)
+BEARSSL_OBJS := $(patsubst $(THIRD_PARTY)/bearssl/src/%.c,$(BUILD_DIR)/bearssl/%.o,$(BEARSSL_SRCS))
+BEARSSL_CFLAGS := -I$(THIRD_PARTY)/bearssl/inc -I$(THIRD_PARTY)/bearssl/src \
                   -DBR_USE_URANDOM=0 -DBR_USE_WIN32_RAND=0 \
                   -DBR_USE_UNIX_TIME=0 -DBR_USE_WIN32_TIME=0
-
-POSIX_APPS = kilo
-POSIX_DIR  = user/posix
-POSIX_CFLAGS = -I$(POSIX_DIR)/include
-POSIX_OBJS = $(BUILD_DIR)/posix_fd.o \
-             $(BUILD_DIR)/posix_io.o \
-             $(BUILD_DIR)/posix_sys.o
 
 USER_LIBS = libmath libmylib
 USER_LIB_SOS = $(addprefix $(BUILD_DIR)/,$(addsuffix .so,$(USER_LIBS)))
@@ -168,9 +162,7 @@ USER_LIB_SOS = $(addprefix $(BUILD_DIR)/,$(addsuffix .so,$(USER_LIBS)))
 USER_OBJS = $(addprefix $(BUILD_DIR)/,$(addsuffix .o,$(USER_APPS)))
 USER_ELFS = $(addprefix $(BUILD_DIR)/,$(addsuffix .ELF,$(USER_APPS)))
 
-LIBC_SRCS = string printf malloc signal env assert ctype qsort \
-            abort stdlib inet netdb atexit dl \
-			stdio errno sem
+LIBC_SRCS = $(basename $(notdir $(wildcard user/libc/*.c)))
 
 LIBC_OBJS = $(addprefix $(BUILD_DIR)/libc_,$(addsuffix .o,$(LIBC_SRCS))) \
             $(BUILD_DIR)/libc_sigreturn.o \
@@ -186,7 +178,7 @@ $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.asm
 	@mkdir -p $(BUILD_DIR)
 	$(ASM) $(ASMFLAGS) $< -o $@
 
-# 通用规则：编译 src/kernel/ 和 src/drivers/ 下的 .c 文件
+# 通用规则：编译 kernel/core/ 和 kernel/drivers/ 下的 .c 文件
 $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.c
 	@mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -254,15 +246,15 @@ $(DISK_IMG): $(KERNEL_ELF) $(USER_ELFS) $(USER_LIB_SOS) tcc-prepare $(BUILD_DIR)
 	sudo mount $$PART_LOOP /mnt/build; \
 	sudo mkdir -p /mnt/build/boot/grub; \
 	sudo cp $(KERNEL_ELF) /mnt/build/boot/; \
-	sudo cp tools/unifont.hex /mnt/build/UNIFONT.HEX; \
-	sudo cp tools/unifont-17.0.03.hex /mnt/build/UNIFONT-17.HEX; \
+	sudo cp $(THIRD_PARTY)/fonts/unifont.hex /mnt/build/UNIFONT.HEX; \
+	sudo cp $(THIRD_PARTY)/fonts/unifont-17.0.03.hex /mnt/build/UNIFONT-17.HEX; \
 	for app in $(USER_APPS); do \
 	    sudo cp $(BUILD_DIR)/$$app.ELF /mnt/build/$$app; \
 	done; \
 	for lib in $(USER_LIBS); do \
 	    sudo cp $(BUILD_DIR)/$$lib.so /mnt/build/$$(echo $$lib | tr a-z A-Z).SO; \
 	done; \
-	sudo cp $(SRC_DIR)/kernel/kmain.c /mnt/build/kmain.c; \
+	sudo cp $(KERNEL_DIR)/kmain.c /mnt/build/kmain.c; \
 	sudo cp user/idle.c /mnt/build/idle.c; \
 	sudo cp user/kilo.c /mnt/build/kilo.c; \
 	sudo cp $(BUILD_DIR)/TCC.ELF /mnt/build/TCC; \
@@ -331,7 +323,7 @@ gdb: $(ISO)
 	gdb-multiarch -ex "target remote localhost:1234" -ex "symbol-file build/kernel.elf" build/kernel.elf
 
 pack:
-	find . -type d \( -path ./user/netsurf-master -o -path ./user/BearSSL-master \) -prune \
+	find . -type d \( -path ./third_party \) -prune \
   -o -type f \( -name "*.c" -o -name "*.h" -o -name "*.asm" -o -name "*.ld" -o -name "Makefile" \) -print0 \
   | xargs -0 -I {} sh -c 'echo "==================== {} ===================="; cat "{}"; echo ""' > project.txt
 
@@ -367,15 +359,6 @@ $(BUILD_DIR)/%.o: user/%.c
 	@mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/posix_%.o: $(POSIX_DIR)/posix_%.c
-	@mkdir -p $(BUILD_DIR)
-	$(CC) $(POSIX_CFLAGS) $(USER_CFLAGS) -c $< -o $@
-
-# POSIX 应用专用编译规则（自动添加头文件路径）
-$(addprefix $(BUILD_DIR)/,$(addsuffix .o,$(POSIX_APPS))): $(BUILD_DIR)/%.o: user/%.c
-	@mkdir -p $(BUILD_DIR)
-	$(CC) $(POSIX_CFLAGS) $(USER_CFLAGS) -c $< -o $@
-
 # 基础库
 # 每个库依赖的其他库（用 -l 指定）
 EXTRA_LDLIBS_math :=
@@ -401,7 +384,7 @@ EXTRA_OBJS_desktop := $(BUILD_DIR)/wm_font.o $(METHYLUI_OBJS) $(BUILD_DIR)/ime_d
 EXTRA_OBJS_test_mui_draw := $(METHYLUI_OBJS)
 EXTRA_OBJS_test_mui_button := $(METHYLUI_OBJS)
 EXTRA_OBJS_test_mui_form := $(METHYLUI_OBJS)
-EXTRA_OBJS_kilo := $(POSIX_OBJS)
+EXTRA_OBJS_kilo :=
 EXTRA_OBJS_methylate := $(METHYLUI_OBJS)
 EXTRA_OBJS_term      := $(BUILD_DIR)/unicode_font.o $(BUILD_DIR)/ime_dict.o $(BUILD_DIR)/ime.o \
                         $(BUILD_DIR)/methylui/mui_font.o \
@@ -416,7 +399,7 @@ $(BUILD_DIR)/math_lib.o: user/lib/libmath.c user/libc/include/math.h
 	@mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/bearssl/%.o: user/BearSSL-master/src/%.c
+$(BUILD_DIR)/bearssl/%.o: $(THIRD_PARTY)/bearssl/src/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(USER_CFLAGS) $(BEARSSL_CFLAGS) -c $< -o $@
 
@@ -424,10 +407,10 @@ $(BUILD_DIR)/bearssl/libbearssl.a: $(BEARSSL_OBJS)
 	@mkdir -p $(BUILD_DIR)/bearssl
 	ar rcs $@ $(BEARSSL_OBJS)
 
-$(BUILD_DIR)/7zip/%.o: user/7zip/C/%.c
+$(BUILD_DIR)/7zip/%.o: $(THIRD_PARTY)/7zip/C/%.c
 	@mkdir -p $(BUILD_DIR)/7zip
-	$(CC) $(USER_CFLAGS) -Iuser/7zip/C -DUSE_FOPEN -DZ7_PPMD_SUPPORT -DZ7_EXTRACT_ONLY -DZ7_ST \
-	      -include user/7zip/helium_compat.h -c $< -o $@
+	$(CC) $(USER_CFLAGS) -I$(THIRD_PARTY)/7zip/C -DUSE_FOPEN -DZ7_PPMD_SUPPORT -DZ7_EXTRACT_ONLY -DZ7_ST \
+	      -include $(THIRD_PARTY)/7zip/helium_compat.h -c $< -o $@
 
 .SECONDEXPANSION:
 $(BUILD_DIR)/%.ELF: $(BUILD_DIR)/%.o $(BUILD_DIR)/crt0.o $(LIBC_OBJS) $$(EXTRA_OBJS_$$*) user/linker.ld
@@ -436,23 +419,22 @@ $(BUILD_DIR)/%.ELF: $(BUILD_DIR)/%.o $(BUILD_DIR)/crt0.o $(LIBC_OBJS) $$(EXTRA_O
 
 
 # 打包静态库，供 TCC 使用
-libc.a: $(LIBC_OBJS) $(POSIX_OBJS)
-	ar rcs $(BUILD_DIR)/libc.a $(LIBC_OBJS) $(POSIX_OBJS)
+libc.a: $(LIBC_OBJS)
+	ar rcs $(BUILD_DIR)/libc.a $(LIBC_OBJS)
 
 tcc-prepare: libc.a
 	@mkdir -p $(BUILD_DIR)/tcc_sysroot/include
 	@mkdir -p $(BUILD_DIR)/tcc_sysroot/lib
 	# 拷贝头文件
 	cp -r user/libc/include/* $(BUILD_DIR)/tcc_sysroot/include/
-	cp -r user/posix/include/* $(BUILD_DIR)/tcc_sysroot/include/
 	# 拷贝 crt0.o 和 libc.a
 	cp $(BUILD_DIR)/crt0.o $(BUILD_DIR)/tcc_sysroot/lib/
 	cp $(BUILD_DIR)/libc.a $(BUILD_DIR)/tcc_sysroot/lib/
-	cp user/libtcc1.a build/tcc_sysroot/lib/
+	cp $(THIRD_PARTY)/tcc/libtcc1.a $(BUILD_DIR)/tcc_sysroot/lib/
 
 
-$(BUILD_DIR)/TCC.ELF: user/tcc.out user/libtcc.a user/libtcc1.a $(BUILD_DIR)/crt0.o libc.a
-	gcc -m32 -static -nostdlib     -Wl,-T,user/linker.ld     -Wl,--start-group     user/tcc.out     user/libtcc.a     $(BUILD_DIR)/crt0.o     $(BUILD_DIR)/libc.a     -Wl,--end-group     /usr/lib/gcc/x86_64-linux-gnu/15/32/libgcc.a     -o $@
+$(BUILD_DIR)/TCC.ELF: $(THIRD_PARTY)/tcc/tcc.out $(THIRD_PARTY)/tcc/libtcc.a $(THIRD_PARTY)/tcc/libtcc1.a $(BUILD_DIR)/crt0.o libc.a
+	gcc -m32 -static -nostdlib     -Wl,-T,user/linker.ld     -Wl,--start-group     $(THIRD_PARTY)/tcc/tcc.out     $(THIRD_PARTY)/tcc/libtcc.a     $(BUILD_DIR)/crt0.o     $(BUILD_DIR)/libc.a     -Wl,--end-group     $(LIBGCC)     -o $@
 
 tcc: $(BUILD_DIR)/TCC.ELF
 
@@ -466,6 +448,16 @@ dc:
 
 
 
+# -------------------- 分层开发目标 --------------------
+kernel: $(KERNEL_ELF)
+
+user: $(BUILD_DIR)/shell.ELF $(BUILD_DIR)/desktop.ELF \
+      $(BUILD_DIR)/wm.ELF $(BUILD_DIR)/term.ELF
+
+third_party: $(BUILD_DIR)/bearssl/libbearssl.a $(SEVENZ_OBJS)
+
+image: $(DISK_IMG)
+
 # 声明伪目标
-.PHONY: all run run-disk debug debug-disk clean gdb pack run-net run-tcp $(DISK_IMG)
+.PHONY: all kernel user third_party image run run-disk debug debug-disk clean gdb pack run-net run-tcp $(DISK_IMG)
 -include $(wildcard $(BUILD_DIR)/*.d)

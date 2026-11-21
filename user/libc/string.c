@@ -126,3 +126,129 @@ char *strpbrk(const char *s, const char *accept) {
     }
     return NULL;
 }
+
+void *memchr(const void *s, int c, size_t n) {
+    const unsigned char *p = (const unsigned char *)s;
+    for (size_t i = 0; i < n; i++)
+        if (p[i] == (unsigned char)c) return (void *)(p + i);
+    return NULL;
+}
+
+int strncasecmp(const char *a, const char *b, size_t n) {
+    while (n--) {
+        unsigned char ca = (unsigned char)*a++;
+        unsigned char cb = (unsigned char)*b++;
+        if (ca >= 'A' && ca <= 'Z') ca += 32;
+        if (cb >= 'A' && cb <= 'Z') cb += 32;
+        if (ca != cb) return (int)ca - (int)cb;
+        if (!ca) return 0;
+    }
+    return 0;
+}
+
+char *strndup(const char *s, size_t n) {
+    size_t len = 0;
+    while (len < n && s[len]) len++;
+    char *p = (char*)malloc(len + 1);
+    if (p) {
+        memcpy(p, s, len);
+        p[len] = '\0';
+    }
+    return p;
+}
+
+size_t strcspn(const char *s, const char *reject) {
+    size_t n = 0;
+    while (s[n]) {
+        for (const char *r = reject; *r; r++)
+            if (s[n] == *r) return n;
+        n++;
+    }
+    return n;
+}
+
+char *strtok(char *str, const char *delim) {
+    static char *next = NULL;
+
+    if (str) next = str;
+    if (!next) return NULL;
+
+    /* 跳过前导分隔符 */
+    while (*next) {
+        int is_delim = 0;
+        for (const char *d = delim; *d; d++)
+            if (*next == *d) { is_delim = 1; break; }
+        if (!is_delim) break;
+        next++;
+    }
+    if (!*next) { next = NULL; return NULL; }
+
+    char *token = next;
+    while (*next) {
+        for (const char *d = delim; *d; d++) {
+            if (*next == *d) {
+                *next = '\0';
+                next++;
+                return token;
+            }
+        }
+        next++;
+    }
+    next = NULL;
+    return token;
+}
+
+size_t strspn(const char *s, const char *accept) {
+    size_t n = 0;
+    while (s[n]) {
+        int found = 0;
+        for (const char *a = accept; *a; a++)
+            if (s[n] == *a) { found = 1; break; }
+        if (!found) break;
+        n++;
+    }
+    return n;
+}
+
+int strcasecmp(const char *a, const char *b) {
+    while (*a && *b) {
+        unsigned char ca = (unsigned char)*a++;
+        unsigned char cb = (unsigned char)*b++;
+        if (ca >= 'A' && ca <= 'Z') ca += 32;
+        if (cb >= 'A' && cb <= 'Z') cb += 32;
+        if (ca != cb) return (int)ca - (int)cb;
+    }
+    return (int)(unsigned char)*a - (int)(unsigned char)*b;
+}
+
+char *strerror(int errnum) {
+    switch (errnum) {
+        case  0: return "OK";
+        case -1: return "Operation not permitted";
+        case -2: return "No such file or directory";
+        case -3: return "I/O error";
+        case -4: return "Out of memory";
+        case -5: return "Bad address";
+        case -6: return "Invalid argument";
+        case -7: return "Resource busy";
+        case -8: return "No space left";
+        case -9: return "Not implemented";
+        case -10: return "Try again";
+        case -11: return "Interrupted";
+        case -12: return "Range error";
+        case -13: return "Not a directory";
+        case -14: return "Is a directory";
+        case -15: return "File exists";
+        case -16: return "Directory not empty";
+        case -17: return "Broken pipe";
+        case -18: return "No child processes";
+        case -19: return "Exec format error";
+        case -20: return "Name too long";
+        case -21: return "Cross-device link";
+        case -22: return "Address in use";
+        case -23: return "Timed out";
+        case -24: return "Connection refused";
+        case -25: return "Bad file descriptor";
+        default:  return "Unknown error";
+    }
+}

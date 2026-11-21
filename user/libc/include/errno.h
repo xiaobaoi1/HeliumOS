@@ -1,7 +1,7 @@
 #ifndef USER_ERRNO_H
 #define USER_ERRNO_H
 
-/* 与内核 src/include/errno.h 保持一致 */
+/* 与内核 kernel/include/errno.h 保持一致 */
 #define OK           0
 #define EPERM       -1
 #define ENOENT      -2
@@ -28,5 +28,19 @@
 #define ETIMEDOUT  -23
 #define ECONNREFUSED -24
 #define EBADF -25
+#define EACCES -28
+
+/* 补 E2BIG / EILSEQ（NetSurf parserutils 用到） */
+#ifndef E2BIG
+#define E2BIG      -26
+#endif
+#ifndef EILSEQ
+#define EILSEQ     -27
+#endif
+
+/* errno 宏：映射到 __helio_errno（errno.c 定义） */
+int *__errno_location(void);
+#define errno (*__errno_location())
+
 
 #endif
