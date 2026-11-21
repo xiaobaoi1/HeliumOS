@@ -12,10 +12,10 @@ static int wm_create_window(const char *title, int kind, int x, int y, int w, in
                             unsigned int **out_pixels, struct shm_hdr **out_hdr,
                             char *out_shm_name, char *out_ev_name, int *out_ev_rd) {
     int shm_size = shm_total_size(w, h);
-    int shm_id = shm_open(out_shm_name, shm_size, 0);
+    int shm_id = sys_shm_open(out_shm_name, shm_size, 0);
     if (shm_id < 0) return -1;
 
-    unsigned int addr = mmap(0, shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_id, 0);
+    unsigned int addr = sys_mmap(0, shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_id, 0);
     if ((int)addr <= 0) return -1;
 
     struct shm_hdr *hdr = (struct shm_hdr*)addr;
@@ -31,7 +31,7 @@ static int wm_create_window(const char *title, int kind, int x, int y, int w, in
     int fds[2];
     if (pipe_named(out_ev_name, fds) < 0) return -1;
     *out_ev_rd = fds[0];
-    ipc_close(fds[1]);
+    pipe_close(fds[1]);
 
     struct wm_request req;
     memset(&req, 0, sizeof(req));
@@ -40,7 +40,7 @@ static int wm_create_window(const char *title, int kind, int x, int y, int w, in
     req.kind = kind;
     req.x = x; req.y = y;
     req.w = w; req.h = h;
-    req.owner_pid = getpid();
+    req.owner_pid = proc_getpid();
     strncpy(req.shm_name, out_shm_name, sizeof(req.shm_name) - 1);
     strncpy(req.ev_name, out_ev_name, sizeof(req.ev_name) - 1);
     strncpy(req.title, title, sizeof(req.title) - 1);
@@ -57,7 +57,7 @@ static int wm_set_window_alpha(const char *shm_name, uint32_t alpha) {
     memset(&req, 0, sizeof(req));
     req.magic = WM_MAGIC;
     req.type = WM_REQ_SET_ALPHA;
-    req.owner_pid = getpid();
+    req.owner_pid = proc_getpid();
     req.alpha = alpha > 255 ? 255 : alpha;
     strncpy(req.shm_name, shm_name, sizeof(req.shm_name) - 1);
     return pipe_write(g_inbox_w, &req, sizeof(req)) == sizeof(req) ? 0 : -1;

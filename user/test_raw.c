@@ -21,7 +21,7 @@ int main(void) {
     // printf("raw mode: type 5 chars\n");
     // for (int i = 0; i < 5; i++) {
     //     char c;
-    //     read(0, &c, 1);
+    //     sys_read(0, &c, 1);
     //     printf("[%d]\n", (int)(unsigned char)c);
     // }
 

@@ -26,7 +26,7 @@ int main(int argc, char **argv) {
             .envp = 0,
             .out_pid = 0,
         };
-        int h = spawn("COUNT", NULL, &p);
+        int h = proc_spawn("COUNT", NULL, &p);
         if (h < 0) { printf("spawn: %d\n", h); return 1; }
         printf("spawned COUNT handle=%d pid=%u\n", h, p.out_pid);
 
@@ -35,11 +35,11 @@ int main(int argc, char **argv) {
         const char *msg = "hello pty!\n";
         pty_write(master, msg, strlen(msg));
 
-        sleep_ms(100);
+        sys_sleep_ms(100);
 
         char eof = 0x04;
         pty_write(master, &eof, 1);
-        sleep_ms(100);
+        sys_sleep_ms(100);
 
         char buf[128];
         int n = pty_read(master, buf, sizeof(buf));
@@ -50,8 +50,8 @@ int main(int argc, char **argv) {
         }
 
         int st;
-        wait(h, &st, 1000);
-        process_close(h);
+        proc_wait(h, &st, 1000);
+        proc_close(h);
     }
 
     /* 测试 2：^C 杀死前台 */
@@ -65,25 +65,25 @@ int main(int argc, char **argv) {
             .in_pty = slave, .out_pty = slave, .err_pty = slave,
             .flags = 0, .envp = 0, .out_pid = 0,
         };
-        int h = spawn("SLEEPER", NULL, &p);
+        int h = proc_spawn("SLEEPER", NULL, &p);
         if (h < 0) { printf("spawn 2: %d\n", h); return 1; }
         printf("spawned SLEEPER handle=%d pid=%u\n", h, p.out_pid);
 
         pty_set_fg(master, p.out_pid);
-        sleep_ms(50);
+        sys_sleep_ms(50);
 
         char ctrl_c = 0x03;
         pty_write(master, &ctrl_c, 1);
-        sleep_ms(100);
+        sys_sleep_ms(100);
 
         int st;
-        int wr = wait(h, &st, 500);
+        int wr = proc_wait(h, &st, 500);
         if (wr == 0 && st == 130) {
             printf("^C test: PASS (status 130)\n");
         } else {
             printf("^C test: FAIL (wr=%d st=%d)\n", wr, st);
         }
-        process_close(h);
+        proc_close(h);
     }
 
     pty_close(master);

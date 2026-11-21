@@ -6,7 +6,7 @@
 #include "string.h"
 
 static int read_chunk(int fd, char *buf, int n, int is_file) {
-    return is_file ? fs_read(fd, buf, n) : read(0, buf, n);
+    return is_file ? fs_read(fd, buf, n) : sys_read(0, buf, n);
 }
 
 int main(int argc, char **argv) {

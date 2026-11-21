@@ -253,9 +253,9 @@ static void press(const char *t) {
 
 static int create_window(void) {
     int size = shm_total_size(CW, CH);
-    int shm_id = shm_open(g_shm, size, 0);
+    int shm_id = sys_shm_open(g_shm, size, 0);
     if (shm_id < 0) return -1;
-    unsigned int addr = mmap(0, size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_id, 0);
+    unsigned int addr = sys_mmap(0, size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_id, 0);
     if ((int)addr <= 0) return -1;
     g_hdr = (struct shm_hdr*)addr;
     g_pixels = (unsigned int*)(addr + SHM_HDR_SIZE);
@@ -269,13 +269,13 @@ static int create_window(void) {
     pipe_unlink(g_ev);
     int fds[2];
     if (pipe_named(g_ev, fds) < 0) return -1;
-    g_evfd = fds[0]; ipc_close(fds[1]);
+    g_evfd = fds[0]; pipe_close(fds[1]);
 
     struct wm_request req;
     memset(&req, 0, sizeof(req));
     req.magic = WM_MAGIC; req.type = WM_REQ_CREATE; req.kind = WM_KIND_NORMAL;
     req.x = 280; req.y = 130; req.w = CW; req.h = CH;
-    req.owner_pid = getpid();
+    req.owner_pid = proc_getpid();
     strncpy(req.shm_name, g_shm, sizeof(req.shm_name) - 1);
     strncpy(req.ev_name, g_ev, sizeof(req.ev_name) - 1);
     strncpy(req.title, "Calculator", sizeof(req.title) - 1);
@@ -286,11 +286,11 @@ int main(void) {
     for (int i = 0; i < 2000; i++) {
         g_inbox = pipe_open(WM_INBOX_NAME, 1);
         if (g_inbox >= 0) break;
-        sleep_ms(5);
+        sys_sleep_ms(5);
     }
     if (g_inbox < 0) return 1;
     wm_font_load();
-    int pid = getpid();
+    int pid = proc_getpid();
     snprintf(g_shm, sizeof(g_shm), "calc-%d", pid);
     snprintf(g_ev, sizeof(g_ev), "calc-ev-%d", pid);
     if (create_window() < 0) return 1;
@@ -319,6 +319,6 @@ int main(void) {
                 else if (strchr("0123456789.+-*/^()", k)) press(s);
             }
         }
-        sleep_ms(1);
+        sys_sleep_ms(1);
     }
 }

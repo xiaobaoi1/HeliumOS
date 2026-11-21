@@ -709,10 +709,10 @@ static int term_resize(int new_w, int new_h) {
     for (size_t i = 0; i < new_hist_size / 4; i++) new_hist[i] = g_bg;
 
     int new_shm_size = shm_total_size(new_w, new_h);
-    int new_id = shm_open(new_shm, new_shm_size, 0);
+    int new_id = sys_shm_open(new_shm, new_shm_size, 0);
     if (new_id < 0) { free(new_live); free(new_hist); return -1; }
 
-    unsigned int new_addr = mmap(0, new_shm_size,
+    unsigned int new_addr = sys_mmap(0, new_shm_size,
                                  PROT_READ | PROT_WRITE,
                                  MAP_SHARED, new_id, 0);
     if ((int)new_addr <= 0) { free(new_live); free(new_hist); return -1; }
@@ -755,7 +755,7 @@ static int term_resize(int new_w, int new_h) {
     memset(&req, 0, sizeof(req));
     req.magic = WM_MAGIC;
     req.type  = WM_REQ_RESIZE;
-    req.owner_pid = getpid();
+    req.owner_pid = proc_getpid();
     strncpy(req.old_shm, g_my_shm_name, sizeof(req.old_shm) - 1);
     strncpy(req.new_shm, new_shm,      sizeof(req.new_shm) - 1);
     req.new_w = new_w;
@@ -763,12 +763,12 @@ static int term_resize(int new_w, int new_h) {
 
     if (pipe_write(g_inbox_w, &req, sizeof(req)) != sizeof(req)) {
         free(new_live); free(new_hist);
-        munmap(new_addr, new_shm_size);
-        shm_unlink(new_shm);
+        sys_munmap(new_addr, new_shm_size);
+        sys_shm_unlink(new_shm);
         return -1;
     }
 
-    munmap((unsigned int)g_shm, shm_total_size(old_cw, old_ch));
+    sys_munmap((unsigned int)g_shm, shm_total_size(old_cw, old_ch));
     if (g_live) free(g_live);
     if (g_hist) free(g_hist);
 
@@ -883,20 +883,20 @@ static int g_tab_gen = 0;
 static void term_spawn_tab(void) {
     char shm[16], ev[16], wbuf[8], hbuf[8];
     int gen = ++g_tab_gen;
-    snprintf(shm, sizeof(shm), "tt-%d-%d", getpid() & 0xFFFF, gen);
-    snprintf(ev, sizeof(ev), "te-%d-%d", getpid() & 0xFFFF, gen);
+    snprintf(shm, sizeof(shm), "tt-%d-%d", proc_getpid() & 0xFFFF, gen);
+    snprintf(ev, sizeof(ev), "te-%d-%d", proc_getpid() & 0xFFFF, gen);
     int size = shm_total_size(g_cw, g_ch);
-    if (shm_open(shm, size, 0) < 0) return;
+    if (sys_shm_open(shm, size, 0) < 0) return;
     pipe_unlink(ev);
     int fds[2];
     if (pipe_named(ev, fds) < 0) return;
-    ipc_close(fds[0]); ipc_close(fds[1]);
+    pipe_close(fds[0]); pipe_close(fds[1]);
 
     struct wm_request req;
     memset(&req, 0, sizeof(req));
     req.magic = WM_MAGIC; req.type = WM_REQ_CREATE; req.kind = WM_KIND_NORMAL;
     req.x = 200; req.y = 100; req.w = g_cw; req.h = g_ch;
-    req.owner_pid = getpid();
+    req.owner_pid = proc_getpid();
     strncpy(req.shm_name, shm, sizeof(req.shm_name) - 1);
     strncpy(req.ev_name, ev, sizeof(req.ev_name) - 1);
     strncpy(req.title, "Terminal", sizeof(req.title) - 1);
@@ -912,7 +912,7 @@ static void term_spawn_tab(void) {
         .in_pty = -1, .out_pty = -1, .err_pty = -1,
         .flags = 0, .envp = 0, .out_pid = 0,
     };
-    spawn("TERM", argv, &sp);
+    proc_spawn("TERM", argv, &sp);
 }
 
 /* ---------- main ---------- */
@@ -939,10 +939,10 @@ int main(int argc, char **argv) {
     }
 
     int shm_size = shm_total_size(g_cw, g_ch);
-    int shm_id = shm_open(shm_name, shm_size, 0);
+    int shm_id = sys_shm_open(shm_name, shm_size, 0);
     if (shm_id < 0) { dprintf(2, "term: shm_open %d\n", shm_id); return 1; }
 
-    unsigned int addr = mmap(0, shm_size,
+    unsigned int addr = sys_mmap(0, shm_size,
                              PROT_READ | PROT_WRITE, MAP_SHARED, shm_id, 0);
     if ((int)addr <= 0) { dprintf(2, "term: mmap %d\n", (int)addr); return 1; }
 
@@ -1013,9 +1013,9 @@ int main(int argc, char **argv) {
         for (int i = 5; i < argc && cmd_argc < 7; i++)
             cmd_argv[cmd_argc++] = argv[i];
         cmd_argv[cmd_argc] = NULL;
-        sh = spawn(argv[5], cmd_argv, &sp);
+        sh = proc_spawn(argv[5], cmd_argv, &sp);
     } else {
-        sh = spawn("SHELL", NULL, &sp);
+        sh = proc_spawn("SHELL", NULL, &sp);
     }
     dprintf(2, "term: cols=%d rows=%d ch=%d\n", g_cols, g_rows, g_ch);
     if (sh < 0) { dprintf(2, "term: spawn %s %d\n", argc >= 6 ? argv[5] : "SHELL", sh); return 1; }
@@ -1047,7 +1047,7 @@ int main(int argc, char **argv) {
                 struct wm_destroy_request dr;
                 dr.magic = WM_MAGIC;
                 dr.type = WM_REQ_DESTROY;
-                dr.owner_pid = getpid();
+                dr.owner_pid = proc_getpid();
                 strncpy(dr.shm_name, g_my_shm_name, sizeof(dr.shm_name) - 1);
                 pipe_write(g_inbox_w, &dr, sizeof(dr));
                 return 0;
@@ -1125,7 +1125,7 @@ int main(int argc, char **argv) {
             struct wm_destroy_request dr;
             dr.magic = WM_MAGIC;
             dr.type = WM_REQ_DESTROY;
-            dr.owner_pid = getpid();
+            dr.owner_pid = proc_getpid();
             strncpy(dr.shm_name, g_my_shm_name, sizeof(dr.shm_name) - 1);
             pipe_write(g_inbox_w, &dr, sizeof(dr));
 
@@ -1164,7 +1164,7 @@ int main(int argc, char **argv) {
             }
         }
 
-        sleep_ms(1);
+        sys_sleep_ms(1);
     }
 
     return 0;

@@ -115,7 +115,8 @@ all: $(DISK_IMG)
 # ==================== 用户程序变量 ====================
 
 USER_CFLAGS = -m32 -ffreestanding -fno-pic -fno-stack-protector \
-              -Iuser/ -Iuser/libc/include -I$(THIRD_PARTY)/bearssl/inc -MMD -MP
+              -Iuser/ -Iuser/libc/include -I$(THIRD_PARTY) \
+              -I$(THIRD_PARTY)/bearssl/inc -MMD -MP
 
 METHYLUI_DIR  = user/methylui
 METHYLUI_OBJS = $(BUILD_DIR)/unicode_font.o \

@@ -691,7 +691,7 @@ static void exec_elf(const char *path) {
         .child_class = CLASS_USER,
         .child_caps = 0,
     };
-    spawn(path, argv, &sp);
+    proc_spawn(path, argv, &sp);
 }
 
 static void fm_path_join(const char *dir, const char *name, char *out, int out_size) {
@@ -1300,10 +1300,10 @@ static int compile_source_path(const char *src) {
         .flags = 0, .envp = 0, .out_pid = 0,
         .child_class = CLASS_USER, .child_caps = 0,
     };
-    int h = spawn("TCC", argv, &sp);
+    int h = proc_spawn("TCC", argv, &sp);
     if (h < 0) return 0;
-    int st = 0, wr = wait(h, &st, 0);
-    process_close(h);
+    int st = 0, wr = proc_wait(h, &st, 0);
+    proc_close(h);
     return wr == 0 && st == 0;
 }
 
@@ -1684,13 +1684,13 @@ static void close_fm_window(struct fm_win *w) {
     struct wm_destroy_request dr;
     memset(&dr, 0, sizeof(dr));
     dr.magic = WM_MAGIC; dr.type = WM_REQ_DESTROY;
-    dr.owner_pid = getpid();
+    dr.owner_pid = proc_getpid();
     strncpy(dr.shm_name, w->shm_name, sizeof(dr.shm_name) - 1);
     pipe_write(g_inbox_w, &dr, sizeof(dr));
 
-    munmap((unsigned int)w->hdr,
+    sys_munmap((unsigned int)w->hdr,
            w->map_size ? w->map_size : shm_total_size(w->cw, w->ch));
-    if (w->ev >= 0) ipc_close(w->ev);
+    if (w->ev >= 0) pipe_close(w->ev);
     if (g_drag_src_fm == (int)(w - g_fm_wins)) drag_clear();
     w->ev = -1;
     w->hdr = NULL;
@@ -1708,10 +1708,10 @@ static void fm_resize_window(struct fm_win *w, int new_cw, int new_ch) {
              (int)(w - g_fm_wins), ++g_fm_shm_gen);
 
     int shm_size = shm_total_size(new_cw, new_ch);
-    int shm_id = shm_open(new_shm, shm_size, 0);
+    int shm_id = sys_shm_open(new_shm, shm_size, 0);
     if (shm_id < 0) return;
 
-    unsigned int addr = mmap(0, shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_id, 0);
+    unsigned int addr = sys_mmap(0, shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_id, 0);
     if ((int)addr <= 0) return;
 
     struct shm_hdr *new_hdr = (struct shm_hdr*)addr;
@@ -1727,14 +1727,14 @@ static void fm_resize_window(struct fm_win *w, int new_cw, int new_ch) {
     memset(&req, 0, sizeof(req));
     req.magic = WM_MAGIC;
     req.type = WM_REQ_RESIZE;
-    req.owner_pid = getpid();
+    req.owner_pid = proc_getpid();
     strncpy(req.old_shm, w->shm_name, sizeof(req.old_shm) - 1);
     strncpy(req.new_shm, new_shm, sizeof(req.new_shm) - 1);
     req.new_w = new_cw;
     req.new_h = new_ch;
     pipe_write(g_inbox_w, &req, sizeof(req));
 
-    munmap((unsigned int)w->hdr,
+    sys_munmap((unsigned int)w->hdr,
            w->map_size ? w->map_size : shm_total_size(w->cw, w->ch));
 
     w->cw = new_cw;
@@ -2729,18 +2729,18 @@ static void spawn_term_argv(int cw, int ch, int x, int y,
     snprintf(ev_name, sizeof(ev_name), "wm-term-%d", term_slot);
 
     int shm_size = shm_total_size(cw, ch);
-    int shm_id = shm_open(shm_name, shm_size, 0);
+    int shm_id = sys_shm_open(shm_name, shm_size, 0);
     if (shm_id < 0) return;
 
     pipe_unlink(ev_name);
     int fds[2];
     if (pipe_named(ev_name, fds) < 0) return;
-    ipc_close(fds[0]); ipc_close(fds[1]);
+    pipe_close(fds[0]); pipe_close(fds[1]);
 
     struct wm_request req;
     memset(&req, 0, sizeof(req));
     req.magic = WM_MAGIC; req.type = WM_REQ_CREATE; req.kind = WM_KIND_NORMAL;
-    req.x = x; req.y = y; req.w = cw; req.h = ch; req.owner_pid = getpid();
+    req.x = x; req.y = y; req.w = cw; req.h = ch; req.owner_pid = proc_getpid();
     strncpy(req.shm_name, shm_name, sizeof(req.shm_name) - 1);
     strncpy(req.ev_name, ev_name, sizeof(req.ev_name) - 1);
     strncpy(req.title, title ? title : "Terminal", sizeof(req.title) - 1);
@@ -2768,7 +2768,7 @@ static void spawn_term_argv(int cw, int ch, int x, int y,
         .in_pipe = -1, .out_pipe = -1, .err_pipe = -1, .in_pty = -1, .out_pty = -1, .err_pty = -1,
         .flags = 0, .envp = 0, .out_pid = 0, .child_class = CLASS_USER, .child_caps = 0,
     };
-    spawn("TERM", argv, &sp);
+    proc_spawn("TERM", argv, &sp);
     term_slot++;
 }
 
@@ -2786,7 +2786,7 @@ static void spawn_netsurf(void) {
         .flags = 0, .envp = 0, .out_pid = 0,
         .child_class = CLASS_USER, .child_caps = 0,
     };
-    spawn("NETSURF", argv, &sp);
+    proc_spawn("NETSURF", argv, &sp);
 }
 
 static void spawn_about(void) {
@@ -2801,7 +2801,7 @@ static void spawn_about(void) {
         .flags = 0, .envp = 0, .out_pid = 0,
         .child_class = CLASS_USER, .child_caps = 0,
     };
-    spawn("ABOUT", argv, &sp);
+    proc_spawn("ABOUT", argv, &sp);
 }
 
 static void open_photo_file(const char *path) {
@@ -2813,7 +2813,7 @@ static void open_photo_file(const char *path) {
         .in_pty = -1, .out_pty = -1, .err_pty = -1, .flags = 0, .envp = 0,
         .out_pid = 0, .child_class = CLASS_USER, .child_caps = 0,
     };
-    spawn("PHOTOS", argv, &sp);
+    proc_spawn("PHOTOS", argv, &sp);
 }
 
 static void open_source_file(const char *path) {
@@ -2938,7 +2938,7 @@ static void open_context_item_menu(int file_idx, int x, int y) {
 static void close_menu_request(void) {
     if (!g_menu_visible) return;
     struct wm_destroy_request dr;
-    dr.magic = WM_MAGIC; dr.type = WM_REQ_DESTROY; dr.owner_pid = getpid();
+    dr.magic = WM_MAGIC; dr.type = WM_REQ_DESTROY; dr.owner_pid = proc_getpid();
     strcpy(dr.shm_name, g_menu_shm);
     pipe_write(g_inbox_w, &dr, sizeof(dr));
 }
@@ -2953,9 +2953,9 @@ static int menu_item_count(void) {
 
 static void handle_menu_event(struct wm_event *ev) {
     if (ev->type == WM_EV_CLOSE) {
-        if (g_menu_hdr) { munmap((unsigned int)g_menu_hdr, shm_total_size(g_menu_w, g_menu_h)); g_menu_hdr = NULL; g_menu_pixels = NULL; }
-        shm_unlink(g_menu_shm); pipe_unlink("menu-ev");
-        if (g_menu_ev >= 0) { ipc_close(g_menu_ev); g_menu_ev = -1; }
+        if (g_menu_hdr) { sys_munmap((unsigned int)g_menu_hdr, shm_total_size(g_menu_w, g_menu_h)); g_menu_hdr = NULL; g_menu_pixels = NULL; }
+        sys_shm_unlink(g_menu_shm); pipe_unlink("menu-ev");
+        if (g_menu_ev >= 0) { pipe_close(g_menu_ev); g_menu_ev = -1; }
         g_menu_visible = 0;
         return;
     }
@@ -3036,7 +3036,7 @@ static void handle_panel_event(struct wm_event *ev) {
             if (idx >= 0 && idx < g_win_count) {
                 struct wm_action_request req;
                 memset(&req, 0, sizeof(req));
-                req.magic = WM_MAGIC; req.type = WM_REQ_WIN_ACTION; req.owner_pid = getpid();
+                req.magic = WM_MAGIC; req.type = WM_REQ_WIN_ACTION; req.owner_pid = proc_getpid();
                 req.win_id = g_win_list[idx].id;
                 req.action = g_win_list[idx].minimized ? WM_ACTION_RESTORE : WM_ACTION_MINIMIZE;
                 pipe_write(g_inbox_w, &req, sizeof(req));
@@ -3060,7 +3060,7 @@ int main(int argc, char **argv) {
     for (int i = 0; i < 1000; i++) {
         g_inbox_w = pipe_open(WM_INBOX_NAME, 1);
         if (g_inbox_w >= 0) break;
-        sleep_ms(10);
+        sys_sleep_ms(10);
     }
     if (g_inbox_w < 0) { printf("desktop: wm-inbox open failed\n"); return 1; }
     dprintf(2, "[MARK] desk_inbox: %llu\n", tsc_now() - t0);
@@ -3136,7 +3136,7 @@ int main(int argc, char **argv) {
 
         if (++clock_tick >= 500) { clock_tick = 0; update_clock(); }
         g_tick++;
-        sleep_ms(1);
+        sys_sleep_ms(1);
     }
     return 0;
 }

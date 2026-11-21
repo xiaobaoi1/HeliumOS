@@ -32,7 +32,7 @@ int main(int argc, char **argv) {
 
     for (;;) {
         int c = accept(s, NULL, NULL);
-        if (c < 0) { sleep_ms(20); continue; }
+        if (c < 0) { sys_sleep_ms(20); continue; }
 
         printf("accepted fd=%d\n", c);
 
@@ -42,7 +42,7 @@ int main(int argc, char **argv) {
             int n = recvfrom(c, buf, sizeof(buf), NULL, NULL);
             if (n > 0) {
                 printf("recv %d bytes: ", n);
-                write(1, buf, n);
+                sys_write(1, buf, n);
                 if (buf[n-1] != '\n') putchar('\n');
                 sendto(c, buf, n, NULL, 0);
             } else if (n == 0) {
@@ -50,7 +50,7 @@ int main(int argc, char **argv) {
             } else if (n != -10) {   /* EAGAIN */
                 break;    /* 其他错误 */
             }
-            sleep_ms(20);
+            sys_sleep_ms(20);
         }
         printf("closed fd=%d\n", c);
         sockclose(c);

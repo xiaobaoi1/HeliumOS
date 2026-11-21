@@ -78,7 +78,7 @@ static int glob_expand(const char *pattern, char **out, int out_max) {
         strncpy(pat, last_slash + 1, sizeof(pat) - 1);
         pat[sizeof(pat) - 1] = '\0';
     } else {
-        if (getcwd(dir, sizeof(dir)) <= 0) return 0;
+        if (fs_getcwd(dir, sizeof(dir)) <= 0) return 0;
         strncpy(pat, pattern, sizeof(pat) - 1);
         pat[sizeof(pat) - 1] = '\0';
     }
@@ -299,7 +299,7 @@ static void line_redraw(const char *buf, int len, int cursor) {
         out[o++] = '\x1b'; out[o++] = '['; out[o++] = 'D';
     }
 
-    write(1, out, o);
+    sys_write(1, out, o);
 }
 
 /* ---------- 基础输入：读一行，带退格支持 ---------- */
@@ -315,12 +315,12 @@ static int read_line(char *buf, int max) {
 
     /* 打印 prompt */
     set_color(VGA_LIGHT_GREEN, VGA_BLACK);
-    write(1, "$ ", 2);
+    sys_write(1, "$ ", 2);
     set_color(VGA_LIGHT_GRAY, VGA_BLACK);
 
     for (;;) {
         char c;
-        if (read(0, &c, 1) != 1) return -1;   /* 连接断了 / pty master 关闭 */
+        if (sys_read(0, &c, 1) != 1) return -1;   /* 连接断了 / pty master 关闭 */
 
         /* ---------- ESC 序列 ---------- */
         if (c == 0x1B) {
@@ -328,7 +328,7 @@ static int read_line(char *buf, int max) {
             int sl = 0;
             for (int i = 0; i < 3; i++) {
                 char x;
-                if (read(0, &x, 1) != 1) break;
+                if (sys_read(0, &x, 1) != 1) break;
                 seq[sl++] = x;
                 if (i == 0 && x != '[' && x != 'O') break;
                 if (i >= 1 && ((x >= 'A' && x <= 'Z') || x == '~')) break;
@@ -372,13 +372,13 @@ static int read_line(char *buf, int max) {
                     cursor = len;
                     line_redraw(buf, len, cursor);
                 } else if (final == 'C') {       /* 右 */
-                    if (cursor < len) { cursor++; write(1, "\x1b[C", 3); }
+                    if (cursor < len) { cursor++; sys_write(1, "\x1b[C", 3); }
                 } else if (final == 'D') {       /* 左 */
-                    if (cursor > 0) { cursor--; write(1, "\x1b[D", 3); }
+                    if (cursor > 0) { cursor--; sys_write(1, "\x1b[D", 3); }
                 } else if (final == 'H') {       /* Home */
-                    while (cursor > 0) { cursor--; write(1, "\x1b[D", 3); }
+                    while (cursor > 0) { cursor--; sys_write(1, "\x1b[D", 3); }
                 } else if (final == 'F') {       /* End */
-                    while (cursor < len) { cursor++; write(1, "\x1b[C", 3); }
+                    while (cursor < len) { cursor++; sys_write(1, "\x1b[C", 3); }
                 } else if (final == '~' && sl >= 3 && seq[1] == '5') {
                     /* PageUp：跳到历史最老一条 */
                     if (g_hist_count == 0) continue;
@@ -422,19 +422,19 @@ static int read_line(char *buf, int max) {
 
         /* ---------- 控制字符 ---------- */
         if (c == '\r' || c == '\n') {
-            while (cursor < len) { cursor++; write(1, "\x1b[C", 3); }
-            write(1, "\r\n", 2);
+            while (cursor < len) { cursor++; sys_write(1, "\x1b[C", 3); }
+            sys_write(1, "\r\n", 2);
             buf[len] = '\0';
             return len;
         }
 
         if (c == 0x03) {                         /* ^C */
-            write(1, "^C\r\n", 4);
+            sys_write(1, "^C\r\n", 4);
             return 0;
         }
 
         if (c == 0x04) {                         /* ^D */
-            if (len == 0) { write(1, "\r\n", 2); return -1; }
+            if (len == 0) { sys_write(1, "\r\n", 2); return -1; }
             continue;
         }
 
@@ -463,7 +463,7 @@ static int read_line(char *buf, int max) {
             len++;
             buf[len] = '\0';
             if (cursor == len - 1) {
-                write(1, &c, 1);
+                sys_write(1, &c, 1);
                 cursor++;
             } else {
                 cursor++;
@@ -672,11 +672,11 @@ static void cmd_ls(int argc, char **argv) {
 static void cmd_cd(int argc, char **argv) {
     if (argc < 2) {
         char buf[128];
-        int n = getcwd(buf, sizeof(buf));
+        int n = fs_getcwd(buf, sizeof(buf));
         if (n > 0) printf("%s\n", buf);
         return;
     }
-    int r = chdir(argv[1]);
+    int r = fs_chdir(argv[1]);
     if (r < 0) {
         set_color(VGA_LIGHT_RED, VGA_BLACK);
         printf("cd: %s: error %d\n", argv[1], r);
@@ -686,7 +686,7 @@ static void cmd_cd(int argc, char **argv) {
 
 static void cmd_pwd(void) {
     char buf[128];
-    int n = getcwd(buf, sizeof(buf));
+    int n = fs_getcwd(buf, sizeof(buf));
     if (n > 0) {
         printf("%s\n", buf);
     } else {
@@ -699,7 +699,7 @@ static void cmd_pwd(void) {
 /* 清屏 + 光标归位。term.c 支持 ANSI CSI 序列（\x1b[J 等），这里用 2J 清整屏，
  * H 不带参数即回到 (1,1)。 */
 static void cmd_clear(void) {
-    write(1, "\x1b[2J\x1b[H", 7);
+    sys_write(1, "\x1b[2J\x1b[H", 7);
 }
 
 static void cmd_touch(int argc, char **argv) {
@@ -875,8 +875,8 @@ static void cmd_kill(int argc, char **argv) {
         return;
     }
 
-    int r = kill(h, SIGTERM);
-    process_close(h);
+    int r = proc_kill(h, SIGTERM);
+    proc_close(h);
 
     if (r < 0) {
         set_color(VGA_LIGHT_RED, VGA_BLACK);
@@ -976,13 +976,13 @@ static void run_pipeline(char **argv) {
     int npipe = nseg - 1;
     int made = 0;
     for (int i = 0; i < npipe; i++) {
-        if (pipe(pipes[i]) < 0) {
+        if (pipe_create(pipes[i]) < 0) {
             set_color(VGA_LIGHT_RED, VGA_BLACK);
             printf("pipe failed\n");
             set_color(VGA_LIGHT_GRAY, VGA_BLACK);
             for (int j = 0; j < made; j++) {
-                ipc_close(pipes[j][0]);
-                ipc_close(pipes[j][1]);
+                pipe_close(pipes[j][0]);
+                pipe_close(pipes[j][1]);
             }
             return;
         }
@@ -1046,7 +1046,7 @@ static void run_pipeline(char **argv) {
             .envp = (uint32_t)environ,
         };
 
-        handles[i] = spawn(segs[i][0], segs[i], &p);
+        handles[i] = proc_spawn(segs[i][0], segs[i], &p);
         if (handles[i] < 0) {
             set_color(VGA_LIGHT_RED, VGA_BLACK);
             printf("spawn '%s' failed (error %d)\n", segs[i][0], handles[i]);
@@ -1064,16 +1064,16 @@ static void run_pipeline(char **argv) {
 
     /* 关 shell 侧的 pipe handle */
     for (int i = 0; i < npipe; i++) {
-        ipc_close(pipes[i][0]);
-        ipc_close(pipes[i][1]);
+        pipe_close(pipes[i][0]);
+        pipe_close(pipes[i][1]);
     }
 
     /* wait 所有已 spawn 的子进程 */
     for (int i = 0; i < nseg; i++) {
         if (handles[i] < 0) continue;
         int st = 0;
-        wait(handles[i], &st, 0);
-        process_close(handles[i]);
+        proc_wait(handles[i], &st, 0);
+        proc_close(handles[i]);
     }
 
     (void)failed;
@@ -1258,10 +1258,10 @@ int main(int _argc, char **_argv) {
             if (argc < 2) {
                 printf("usage: sink <prog>\n");
             } else {
-                int h = spawn(argv[1], argv + 1, &p);
+                int h = proc_spawn(argv[1], argv + 1, &p);
                 if (h >= 0) {
-                    int st; wait(h, &st, 0);
-                    process_close(h);
+                    int st; proc_wait(h, &st, 0);
+                    proc_close(h);
                 } else {
                     set_color(VGA_LIGHT_RED, VGA_BLACK);
                     printf("spawn '%s' failed (error %d)\n", argv[1], h);
@@ -1294,7 +1294,7 @@ int main(int _argc, char **_argv) {
                     .flags = 0,
                     .envp = (uint32_t)environ,
                 };
-                int h = spawn(c, argv, &sp);
+                int h = proc_spawn(c, argv, &sp);
                 if (h < 0) {
                     set_color(VGA_LIGHT_RED, VGA_BLACK);
                     printf("spawn '%s' failed (error %d)\n", c, h);
@@ -1304,17 +1304,17 @@ int main(int _argc, char **_argv) {
                     if (sp.out_pid > 0) pty_set_fg(-1, sp.out_pid);
 
                     int status = 0;
-                    int wr = wait(h, &status, 0);
+                    int wr = proc_wait(h, &status, 0);
 
                     /* 子进程退出或自己被其他信号打断后，恢复前台为 shell */
-                    pty_set_fg(-1, getpid());
+                    pty_set_fg(-1, proc_getpid());
 
                     if (wr == 0 && status != 0) {
                         set_color(VGA_LIGHT_RED, VGA_BLACK);
                         printf("[shell] child exited with status %d\n", status);
                         set_color(VGA_LIGHT_GRAY, VGA_BLACK);
                     }
-                    process_close(h);
+                    proc_close(h);
                 }
             }
         }

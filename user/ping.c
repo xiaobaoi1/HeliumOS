@@ -64,7 +64,7 @@ int main(int argc, char **argv) {
         for (int t = 0; t < 10; t++) {
             int r = sendto(s, pkt, 64, (struct sockaddr*)&dst, sizeof(dst));
             if (r > 0) { sent = 1; break; }
-            sleep_ms(50);
+            sys_sleep_ms(50);
         }
         if (!sent) { printf("seq=%u: send failed\n", seq); continue; }
 
@@ -81,10 +81,10 @@ int main(int argc, char **argv) {
                 got = 1;
                 break;
             }
-            sleep_ms(50);
+            sys_sleep_ms(50);
         }
         if (!got) printf("seq=%u: timeout\n", seq);
-        sleep_ms(200);
+        sys_sleep_ms(200);
     }
 
     sockclose(s);

@@ -85,10 +85,10 @@ static void shm_publish_all(void) {
 
 static int create_about_window(void) {
     g_map_size = shm_total_size(g_cw, g_ch);
-    int shm_id = shm_open(g_shm_name, g_map_size, 0);
+    int shm_id = sys_shm_open(g_shm_name, g_map_size, 0);
     if (shm_id < 0) return -1;
 
-    unsigned int addr = mmap(0, g_map_size, PROT_READ | PROT_WRITE,
+    unsigned int addr = sys_mmap(0, g_map_size, PROT_READ | PROT_WRITE,
                              MAP_SHARED, shm_id, 0);
     if ((int)addr <= 0) return -1;
 
@@ -106,7 +106,7 @@ static int create_about_window(void) {
     int fds[2];
     if (pipe_named(g_ev_name, fds) < 0) return -1;
     g_ev = fds[0];
-    ipc_close(fds[1]);
+    pipe_close(fds[1]);
 
     struct wm_request req;
     memset(&req, 0, sizeof(req));
@@ -121,7 +121,7 @@ static int create_about_window(void) {
     req.min_h = 200;
     req.max_w = 0;
     req.max_h = 0;
-    req.owner_pid = getpid();
+    req.owner_pid = proc_getpid();
     strncpy(req.shm_name, g_shm_name, sizeof(req.shm_name) - 1);
     strncpy(req.ev_name, g_ev_name, sizeof(req.ev_name) - 1);
     strncpy(req.title, "关于 - Helium OS", sizeof(req.title) - 1);
@@ -156,7 +156,7 @@ static void request_destroy_window(void) {
     memset(&dr, 0, sizeof(dr));
     dr.magic = WM_MAGIC;
     dr.type  = WM_REQ_DESTROY;
-    dr.owner_pid = getpid();
+    dr.owner_pid = proc_getpid();
     strncpy(dr.shm_name, g_shm_name, sizeof(dr.shm_name) - 1);
     if (g_inbox_w >= 0)
         pipe_write(g_inbox_w, &dr, sizeof(dr));
@@ -168,7 +168,7 @@ int main(int argc, char **argv) {
     for (int i = 0; i < 2000; i++) {
         g_inbox_w = pipe_open(WM_INBOX_NAME, 1);
         if (g_inbox_w >= 0) break;
-        sleep_ms(5);
+        sys_sleep_ms(5);
     }
     if (g_inbox_w < 0) {
         printf("about: wm-inbox open failed\n");
@@ -177,7 +177,7 @@ int main(int argc, char **argv) {
 
     wm_font_load();
 
-    int pid = getpid();
+    int pid = proc_getpid();
     snprintf(g_shm_name, sizeof(g_shm_name), "about-%d", pid);
     snprintf(g_ev_name,  sizeof(g_ev_name),  "about-ev-%d", pid);
 
@@ -202,12 +202,12 @@ int main(int argc, char **argv) {
                 break;
             }
         }
-        if (!done) sleep_ms(1);
+        if (!done) sys_sleep_ms(1);
     }
 
     request_destroy_window();
 
-    if (g_hdr) munmap((unsigned int)g_hdr, g_map_size);
-    if (g_ev >= 0) ipc_close(g_ev);
+    if (g_hdr) sys_munmap((unsigned int)g_hdr, g_map_size);
+    if (g_ev >= 0) pipe_close(g_ev);
     return 0;
 }
