@@ -285,58 +285,42 @@ static void fetch_file_process_plain(struct fetch_file_context *ctx,
 				     struct stat *fdstat)
 {
 	fetch_msg msg;
-	struct fstat_buf st;
-	uint32_t size, done = 0;
-	uint8_t *buf = NULL;
-	int fd;
+	uint32_t size = 0;
+	uint8_t *buf;
+	int fd, n;
 
 	(void)fdstat;
 
-	if (ctx->file_etag != 0 && fdstat != NULL &&
-	    (time_t)fdstat->st_mtime == ctx->file_etag) {
-		fetch_set_http_code(ctx->fetchh, 304);
-		msg.type = FETCH_NOTMODIFIED;
-		fetch_file_send_callback(&msg, ctx);
-		return;
-	}
-
 	fd = fs_open(ctx->path, O_RDONLY);
+	fprintf(stderr, "NSFILE open [%s] = %d\n", ctx->path, fd);
+
 	if (fd < 0) {
 		fetch_file_process_error(ctx, 404);
 		return;
 	}
 
-	if (fs_fstat(fd, &st) != 0) {
+	buf = malloc(FETCH_FILE_MAX_BUF_SIZE);
+	if (buf == NULL) {
 		fs_close(fd);
-		fetch_file_process_error(ctx, 500);
-		return;
-	}
-	size = st.size;
-
-	if (size > 0) {
-		buf = malloc(size);
-		if (buf == NULL) {
-			fs_close(fd);
-			msg.type = FETCH_ERROR;
-			msg.data.error = "Unable to allocate memory for file data buffer";
-			fetch_file_send_callback(&msg, ctx);
-			return;
-		}
-		while (done < size) {
-			int n = fs_read(fd, buf + done, size - done);
-			if (n <= 0) break;
-			done += (uint32_t)n;
-		}
-	}
-	fs_close(fd);
-
-	if (done != size) {
-		free(buf);
 		msg.type = FETCH_ERROR;
-		msg.data.error = "Error reading file";
+		msg.data.error = "Unable to allocate memory for file data buffer";
 		fetch_file_send_callback(&msg, ctx);
 		return;
 	}
+
+	while (size < FETCH_FILE_MAX_BUF_SIZE) {
+		n = fs_read(fd, buf + size, FETCH_FILE_MAX_BUF_SIZE - size);
+		fprintf(stderr, "NSFILE read %d (total=%u)\n", n, size);
+		if (n < 0) {
+			free(buf);
+			fs_close(fd);
+			fetch_file_process_error(ctx, 500);
+			return;
+		}
+		if (n == 0) break;
+		size += (uint32_t)n;
+	}
+	fs_close(fd);
 
 	fetch_set_http_code(ctx->fetchh, 200);
 

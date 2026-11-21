@@ -272,6 +272,7 @@ $(DISK_IMG): $(KERNEL_ELF) $(USER_ELFS) $(USER_LIB_SOS) tcc-prepare $(BUILD_DIR)
         sudo cp user/example.jpg /mnt/build/example.jpg; \
         sudo cp user/example.gif /mnt/build/example.gif; \
         sudo sh -c 'echo "int main() { return 42; }" > /mnt/build/test.c'; \
+	sudo sh -c 'echo "<html><body><h1>HeliumOS NetSurf</h1><p>Hello world!</p></body></html>" > /mnt/build/test.html'; \
 	echo "set timeout=5" | sudo tee /mnt/build/boot/grub/grub.cfg > /dev/null; \
 	echo "menuentry \"HeliumOS\" {" | sudo tee -a /mnt/build/boot/grub/grub.cfg > /dev/null; \
 	echo "  multiboot2 /boot/kernel.elf" | sudo tee -a /mnt/build/boot/grub/grub.cfg > /dev/null; \
