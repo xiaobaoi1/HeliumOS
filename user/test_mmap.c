@@ -47,7 +47,7 @@ int main(int argc, char **argv) {
 
     /* 3. MAP_FILE offset 必须页对齐 */
     printf("\n=== MAP_FILE offset test ===\n");
-    int fd = fs_open("SYS:/test.html", FS_O_RDONLY);
+    int fd = fs_open("SYS:/test.c", FS_O_RDONLY);
     if (fd >= 0) {
         unsigned int bad = sys_mmap(0, 4096, PROT_READ, MAP_FILE, fd, 1);
         printf("misaligned offset: %d (expect < 0)\n", (int)bad);
@@ -55,12 +55,12 @@ int main(int argc, char **argv) {
         unsigned int good = sys_mmap(0, 4096, PROT_READ, MAP_FILE, fd, 0);
         printf("aligned offset:   0x%x (expect > 0)\n", good);
         if ((int)good > 0) {
-            printf("  first byte: '%c' (expect '<')\n", ((char*)good)[0]);
+            printf("  first byte: '%c' (expect 'i')\n", ((char*)good)[0]);
             sys_munmap(good, 4096);
         }
         fs_close(fd);
     } else {
-        printf("skip: SYS:/test.html not found\n");
+        printf("skip: SYS:/test.c not found\n");
     }
 
     printf("=== done ===\n");
