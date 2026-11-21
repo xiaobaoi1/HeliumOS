@@ -19,6 +19,7 @@ struct block {
 #define MMAP_THRESHOLD  (64 * 1024)
 
 static struct block *head = NULL;
+static size_t g_grow_size = 0;
 
 /* 扩展物理内存：brk 对齐到 4KB */
 static void *heap_grow(size_t need) {
@@ -30,6 +31,7 @@ static void *heap_grow(size_t need) {
 
     if (sys_brk(new_brk) != 0) return NULL;
 
+    g_grow_size = (size_t)(new_brk - cur);
     return (void*)cur;
 }
 
@@ -59,7 +61,7 @@ void *malloc(size_t size) {
         void *p = heap_grow(sizeof(struct block) + size + 4096);
         if (!p) return NULL;
         head = (struct block*)p;
-        head->size    = 4096;
+        head->size    = g_grow_size - HEADER_SIZE;
         head->free    = 1;
         head->is_mmap = 0;
         head->next    = NULL;
@@ -85,7 +87,7 @@ void *malloc(size_t size) {
     if (!p) return NULL;
 
     struct block *nb = (struct block*)p;
-    nb->size    = size;
+    nb->size    = g_grow_size - HEADER_SIZE;
     nb->free    = 0;
     nb->is_mmap = 0;
     nb->next    = head;
