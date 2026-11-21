@@ -753,8 +753,12 @@ html_process_data(struct content *c, const char *data, unsigned int size)
 	dom_hubbub_error dom_ret;
 	nserror err = NSERROR_OK; /* assume its all going to be ok */
 
-	fprintf(stderr, "HTML: process_data size=%u first=%.*s\n",
-			size, size > 20 ? 20 : (int)size, data);
+	if (size > 0) {
+		fprintf(stderr, "HTML: process_data size=%u first=%.*s\n",
+				size, size > 20 ? 20 : (int)size, data);
+	} else {
+		fprintf(stderr, "HTML: process_data size=0\n");
+	}
 	dom_ret = dom_hubbub_parser_parse_chunk(html->parser,
 					      (const uint8_t *) data,
 					      size);
