@@ -672,6 +672,9 @@ html_process_encoding_change(struct content *c,
 	/* Retrieve new encoding */
 	encoding = dom_hubbub_parser_get_encoding(html->parser,
 						  &html->encoding_source);
+	fprintf(stderr, "HTML: encoding change enc=%s source=%d\n",
+			encoding != NULL ? encoding : "(null)",
+			(int)html->encoding_source);
 	if (encoding == NULL) {
 		fprintf(stderr, "HTML: encoding change without detected "
 				"encoding, fallback UTF-8\n");
@@ -708,6 +711,7 @@ html_process_encoding_change(struct content *c,
 	error = dom_hubbub_parser_create(&parse_params,
 					 &html->parser,
 					 &html->document);
+	fprintf(stderr, "HTML: encoding change parser create=%d\n", error);
 	if (error != DOM_HUBBUB_OK) {
 		/* Ok, we don't support the declared encoding. Bailing out
 		 * isn't exactly user-friendly, so fall back to Windows-1252 */
@@ -721,6 +725,9 @@ html_process_encoding_change(struct content *c,
 		error = dom_hubbub_parser_create(&parse_params,
 						 &html->parser,
 						 &html->document);
+		fprintf(stderr, "HTML: encoding change fallback create=%d\n",
+				error);
+
 
 		if (error != DOM_HUBBUB_OK) {
 			return libdom_hubbub_error_to_nserror(error);
@@ -729,6 +736,8 @@ html_process_encoding_change(struct content *c,
 	}
 
 	source_data = content__get_source_data(c, &source_size);
+	fprintf(stderr, "HTML: encoding change reparse size=%u\n",
+			(unsigned)source_size);
 
 	/* Reprocess all the data.  This is safe because
 	 * the encoding is now specified at parser start which means
@@ -737,6 +746,7 @@ html_process_encoding_change(struct content *c,
 	error = dom_hubbub_parser_parse_chunk(html->parser,
 					      source_data,
 					      source_size);
+	fprintf(stderr, "HTML: encoding change reparse ret=%d\n", error);
 
 	return libdom_hubbub_error_to_nserror(error);
 }
