@@ -673,7 +673,9 @@ html_process_encoding_change(struct content *c,
 	encoding = dom_hubbub_parser_get_encoding(html->parser,
 						  &html->encoding_source);
 	if (encoding == NULL) {
-		return NSERROR_NOMEM;
+		fprintf(stderr, "HTML: encoding change without detected "
+				"encoding, fallback UTF-8\n");
+		encoding = "UTF-8";
 	}
 
 	if (html->encoding != NULL) {
