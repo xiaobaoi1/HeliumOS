@@ -371,6 +371,8 @@ void html_finish_conversion(html_content *htmlc)
 	/* create new css selection context */
 	error = html_css_new_selection_context(htmlc, &htmlc->select_ctx);
 	if (error != NSERROR_OK) {
+		fprintf(stderr, "HTML finish: css selection error=%d\n", error);
+
 		content_broadcast_error(&htmlc->base, error, NULL);
 		content_set_error(&htmlc->base);
 		return;

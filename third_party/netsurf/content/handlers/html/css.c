@@ -29,6 +29,7 @@
 #include <string.h>
 #include <strings.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 #include "utils/nsoption.h"
 #include "utils/corestrings.h"
@@ -664,6 +665,8 @@ html_css_new_selection_context(html_content *c, css_select_ctx **ret_select_ctx)
 	/* Create selection context */
 	css_ret = css_select_ctx_create(&select_ctx);
 	if (css_ret != CSS_OK) {
+		fprintf(stderr, "CSS select ctx create=%d\n", css_ret);
+
 		return css_error_to_nserror(css_ret);
 	}
 
@@ -699,6 +702,8 @@ html_css_new_selection_context(html_content *c, css_select_ctx **ret_select_ctx)
 							      sheet,
 							      origin,
 							      "screen");
+			fprintf(stderr, "CSS select append=%d\n", css_ret);
+
 			if (css_ret != CSS_OK) {
 				css_select_ctx_destroy(select_ctx);
 				return css_error_to_nserror(css_ret);
