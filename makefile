@@ -260,6 +260,7 @@ $(DISK_IMG): $(KERNEL_ELF) $(USER_ELFS) $(USER_LIB_SOS) tcc-prepare $(BUILD_DIR)
 	sudo cp user/kilo.c /mnt/build/kilo.c; \
 	sudo cp $(BUILD_DIR)/TCC.ELF /mnt/build/TCC; \
 	if [ -f $(BUILD_DIR)/nsmonkey.elf ]; then sudo cp $(BUILD_DIR)/nsmonkey.elf /mnt/build/NSMONKEY; fi; \
+	sudo rm -rf /mnt/build/netsurf; \
 	sudo mkdir -p /mnt/build/netsurf/res; \
 	sudo cp -r $(THIRD_PARTY)/netsurf/resources/* /mnt/build/netsurf/res/; \
 	sudo mkdir -p /mnt/build/INCLUDE /mnt/build/LIB; \

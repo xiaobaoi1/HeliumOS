@@ -40,6 +40,7 @@
 #include "content/fetch.h"
 #include "content/backing_store.h"
 
+#include "syscall.h"
 #include "monkey/output.h"
 #include "monkey/dispatch.h"
 #include "monkey/browser.h"
@@ -485,8 +486,12 @@ main(int argc, char **argv)
 	}
 
 
+	term_set_raw(0);
+
 	moutf(MOUT_GENERIC, "STARTED");
 	monkey_run();
+	term_set_raw(1);
+
 
 	moutf(MOUT_GENERIC, "CLOSING_DOWN");
 	monkey_kill_browser_windows();
