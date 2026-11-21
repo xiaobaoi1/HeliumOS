@@ -905,14 +905,13 @@ html_begin_conversion(html_content *htmlc)
 		encoding = dom_hubbub_parser_get_encoding(htmlc->parser,
 					&htmlc->encoding_source);
 		if (encoding == NULL) {
-			content_broadcast_error(&htmlc->base,
-						NSERROR_NOMEM,
-						NULL);
-			return false;
+			fprintf(stderr, "HTML: no detected encoding, fallback UTF-8\n");
+			encoding = "UTF-8";
 		}
 
 		htmlc->encoding = strdup(encoding);
 		if (htmlc->encoding == NULL) {
+			fprintf(stderr, "HTML NOMEM: encoding strdup\n");
 			content_broadcast_error(&htmlc->base,
 						NSERROR_NOMEM,
 						NULL);
