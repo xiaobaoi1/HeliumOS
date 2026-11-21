@@ -658,6 +658,8 @@ static void push_window_list(void) {
     }
     if (n > MAX_WINDOWS) n = MAX_WINDOWS;
 
+    dprintf(2, "WM: LIST n=%d\n", n);
+
     uint8_t buf[sizeof(struct wm_event) + MAX_WINDOWS * sizeof(struct wm_window_entry)];
     struct wm_event *ev = (struct wm_event*)buf;
     ev->type  = WM_EV_WINDOW_LIST;
@@ -674,6 +676,8 @@ static void push_window_list(void) {
         e->minimized = (uint32_t)w->minimized;
         memset(e->title, 0, 32);
         strncpy(e->title, w->title, 31);
+        dprintf(2, "WM:   id=%u seq=%d min=%d title=%s\n",
+                e->id, w->tab_seq, w->minimized, w->title);
         off += sizeof(struct wm_window_entry);
     }
 
@@ -1008,6 +1012,8 @@ static void destroy_window(struct window *w) {
     int tab_seq = w->tab_seq;
     int was_max   = w->maximized;
     int was_active = (w->minimized == 0);
+    dprintf(2, "WM: DESTROY id=%d group=%d seq=%d active=%d title=%s\n",
+            (int)(w - g_wins), tab_group, tab_seq, was_active, w->title);
 
     if (w->kind == WM_KIND_POPUP) {
         send_event(w, WM_EV_CLOSE, 0, 0, 0, 0);
@@ -1044,6 +1050,7 @@ static void destroy_window(struct window *w) {
 
         if (was_active || !have_active) {
             struct window *next = tab_after(tab_group, tab_seq);
+            dprintf(2, "WM:   next=%d\n", next ? (int)(next - g_wins) : -1);
             if (next) {
                 next->minimized = 0;
                 next->z = g_next_z++;
@@ -1448,6 +1455,8 @@ static void handle_inbox(void) {
             if (pipe_avail(g_inbox_rd) < rem) break;
             if (pipe_read(g_inbox_rd, (char*)&req + 8, rem) != rem) break;
             struct window *w = find_by_shm(req.shm_name);
+            dprintf(2, "WM: REQ_DESTROY shm=%s found=%d\n",
+                    req.shm_name, w ? (int)(w - g_wins) : -1);
             if (w) destroy_window(w);
         } else if (hdr[1] == WM_REQ_WIN_ACTION) {
             struct wm_action_request req;
@@ -1457,6 +1466,8 @@ static void handle_inbox(void) {
             if (pipe_avail(g_inbox_rd) < rem) break;
             if (pipe_read(g_inbox_rd, (char*)&req + 8, rem) != rem) break;
 
+            dprintf(2, "WM: ACTION id=%u action=%u\n",
+                    req.win_id, req.action);
             if (req.win_id >= MAX_WINDOWS) continue;
             struct window *w = &g_wins[req.win_id];
             if (!w->used || w->kind != WM_KIND_NORMAL) continue;
