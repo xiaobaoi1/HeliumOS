@@ -628,9 +628,21 @@ static void push_window_list(void) {
     struct window *dock = find_by_kind(WM_KIND_DOCK);
     if (!dock || dock->event_w < 0) return;
 
+    /* 按 tab_seq（创建顺序）排序，而不是 g_wins 槽位顺序。
+     * 槽位会复用，直接按 slot 遍历会让任务栏出现
+     * tab2 / tab1 / tab3 这种和标题栏不一致的顺序。 */
+    struct window *ordered[MAX_WINDOWS];
     int n = 0;
     for (int i = 0; i < MAX_WINDOWS; i++) {
-        if (g_wins[i].used && g_wins[i].kind == WM_KIND_NORMAL) n++;
+        if (!g_wins[i].used || g_wins[i].kind != WM_KIND_NORMAL) continue;
+        struct window *w = &g_wins[i];
+        int pos = n;
+        while (pos > 0 && ordered[pos - 1]->tab_seq > w->tab_seq) {
+            ordered[pos] = ordered[pos - 1];
+            pos--;
+        }
+        ordered[pos] = w;
+        n++;
     }
     if (n > MAX_WINDOWS) n = MAX_WINDOWS;
 
@@ -643,17 +655,14 @@ static void push_window_list(void) {
     ev->extra = 0;
 
     int off = sizeof(struct wm_event);
-    int count = 0;
-    for (int i = 0; i < MAX_WINDOWS && count < n; i++) {
-        struct window *w = &g_wins[i];
-        if (!w->used || w->kind != WM_KIND_NORMAL) continue;
+    for (int i = 0; i < n; i++) {
+        struct window *w = ordered[i];
         struct wm_window_entry *e = (struct wm_window_entry*)(buf + off);
-        e->id = (uint32_t)i;
+        e->id = (uint32_t)(w - g_wins);
         e->minimized = (uint32_t)w->minimized;
         memset(e->title, 0, 32);
         strncpy(e->title, w->title, 31);
         off += sizeof(struct wm_window_entry);
-        count++;
     }
 
     pipe_write(dock->event_w, buf, off);
@@ -984,7 +993,8 @@ static void destroy_window(struct window *w) {
     win_bbox(w, &x0, &y0, &x1, &y1);
 
     int tab_group = tab_group_of(w);
-    int was_max   = w->maximized;                    /* 新增 */
+    int was_max   = w->maximized;
+    int was_active = (w->minimized == 0);
 
     if (w->kind == WM_KIND_POPUP) {
         send_event(w, WM_EV_CLOSE, 0, 0, 0, 0);
@@ -1006,16 +1016,31 @@ static void destroy_window(struct window *w) {
     if (g_dragging == w) g_dragging = NULL;
 
     if (tab_group) {
-        struct window *next = tab_nth(tab_group, 0);
-        if (next) {
-            next->minimized = 0;
-            next->z = g_next_z++;
-            apply_maximized_state(next, was_max);    /* 新增 */
-            if (!was_max) {                          /* 改 */
-                next->x = x0;                        /*   窗口化接管：保持原逻辑 */
-                next->y = y0;
-            }                                        /*   全屏接管：位置由 helper 设 (0,0) */
-            set_focus(next);
+        /* 关闭非活动 tab 时不要强行把第一个 tab 切出来；
+         * 只有关闭当前可见 tab（或组里已经没有可见 tab）时
+         * 才选择剩余 tab 接管窗口。 */
+        int have_active = 0;
+        for (int i = 0; i < MAX_WINDOWS; i++) {
+            struct window *o = &g_wins[i];
+            if (o->used && o != w && tab_group_of(o) == tab_group &&
+                !o->minimized) {
+                have_active = 1;
+                break;
+            }
+        }
+
+        if (was_active || !have_active) {
+            struct window *next = tab_nth(tab_group, 0);
+            if (next) {
+                next->minimized = 0;
+                next->z = g_next_z++;
+                apply_maximized_state(next, was_max);
+                if (!was_max) {
+                    next->x = x0;
+                    next->y = y0;
+                }
+                set_focus(next);
+            }
         }
     }
     forget_window_buttons(w);

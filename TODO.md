@@ -220,6 +220,8 @@
 - [x] U16：`make run` 改为硬盘镜像，新增 `make run-iso`
 - [x] K7/U13/U14：注释和 `ufont_width` 契约修正
 - [x] U17：任务栏点击 tab 条目改为 `activate_tab`，避免多个 tab 叠放/整组消失
+- [x] U18：任务栏窗口列表按 `tab_seq` 排序，修复 tab2/tab1/tab3 顺序错乱
+- [x] U19：关闭 tab 时仅在关闭当前 tab 后切换剩余 tab，避免误切换/整组消失
 
 ### 后续批次
 
