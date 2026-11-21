@@ -22,6 +22,7 @@
  */
 
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <nsutils/time.h>
@@ -770,6 +771,9 @@ content_broadcast_error(struct content *c, nserror errorcode, const char *msg)
 {
 	struct content_user *user, *next;
 	union content_msg_data data;
+
+	fprintf(stderr, "CONTENT ERROR code=%d caller=%p\n",
+			errorcode, __builtin_return_address(0));
 
 	assert(c);
 

@@ -219,6 +219,8 @@ static void html_box_convert_done(html_content *c, bool success)
 	dom_exception exc; /* returned by libdom functions */
 	dom_node *html;
 
+	fprintf(stderr, "HTML: box_convert_done enter success=%d aborted=%d\n", success, c->aborted);
+
 	NSLOG(netsurf, INFO, "DOM to box conversion complete (content %p)", c);
 
 	c->box_conversion_context = NULL;
@@ -261,6 +263,7 @@ static void html_box_convert_done(html_content *c, bool success)
 
 	/* extract image maps - can't do this sensibly in dom_to_box */
 	err = imagemap_extract(c);
+	fprintf(stderr, "HTML: imagemap_extract=%d\n", err);
 	if (err != NSERROR_OK) {
 		NSLOG(netsurf, INFO, "imagemap extraction failed");
 		html_object_free_objects(c);
@@ -276,6 +279,7 @@ static void html_box_convert_done(html_content *c, bool success)
 	c->parser = NULL;
 
 	content_set_ready(&c->base);
+	fprintf(stderr, "HTML: content_set_ready, proceed_to_done\n");
 
 	html_proceed_to_done(c);
 
