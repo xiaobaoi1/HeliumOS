@@ -9,6 +9,7 @@
 #define AF_INET     2
 #define SOCK_DGRAM  2
 #define SOCK_ICMP   3
+#define AF_INET6    10
 
 struct sockaddr {
     unsigned short sa_family;

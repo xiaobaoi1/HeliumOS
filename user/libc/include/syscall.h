@@ -151,7 +151,7 @@ struct proc_info {
 #define MAP_FIXED      0x10
 
 
-/* 进程 access 掩码。与内核 src/include/proc.h 一致。 */
+/* 进程 access 掩码。与内核 kernel/include/proc.h 一致。 */
 #define PROC_QUERY        0x01
 #define PROC_TERMINATE    0x02
 #define PROC_WAIT         0x04
@@ -265,7 +265,7 @@ struct dirent {
     unsigned int   pad;
 };
 
-/* 与内核 src/include/rtc.h 一致 */
+/* 与内核 kernel/include/rtc.h 一致 */
 struct rtc_time {
     unsigned short year;
     unsigned char  month;
@@ -328,30 +328,30 @@ struct net_if_info {
 /* ---------- 便捷包装 ---------- */
 
 /* 进程控制 */
-static inline void _exit(int status) {
+static inline void proc_exit(int status) {
     __syscall(SYS_EXIT, status, 0, 0);
     for (;;) {}   /* 不会返回 */
 }
 
-static inline int getpid(void) {
+static inline int proc_getpid(void) {
     return __syscall(SYS_GETPID, 0, 0, 0);
 }
 
 /* 进程控制 */
-static inline int spawn(const char *path, char *const argv[],
+static inline int proc_spawn(const char *path, char *const argv[],
                         struct spawn_params *redir) {
     return __syscall(SYS_SPAWN, (int)path, (int)argv, (int)redir);
 }
 
-static inline int wait(int handle, int *status, unsigned int timeout_ms) {
+static inline int proc_wait(int handle, int *status, unsigned int timeout_ms) {
     return __syscall(SYS_WAIT, handle, (int)status, (int)timeout_ms);
 }
 
-static inline int kill(int handle, int status) {
+static inline int proc_kill(int handle, int status) {
     return __syscall(SYS_KILL, handle, status, 0);
 }
 
-static inline int process_close(int handle) {
+static inline int proc_close(int handle) {
     return __syscall(SYS_PROC_CLOSE, handle, 0, 0);
 }
 
@@ -359,11 +359,11 @@ static inline int proc_open(unsigned int pid, int access) {
     return __syscall(SYS_PROC_OPEN, (int)pid, access, 0);
 }
 
-static inline void sleep_ms(int ms) {
+static inline void sys_sleep_ms(int ms) {
     __syscall(SYS_SLEEP, ms, 0, 0);
 }
 
-static inline int pipe(int fds[2]) {
+static inline int pipe_create(int fds[2]) {
     return __syscall(SYS_PIPE, (int)fds, 0, 0);
 }
 static inline int pipe_read(int h, void *buf, unsigned int n) {
@@ -372,7 +372,7 @@ static inline int pipe_read(int h, void *buf, unsigned int n) {
 static inline int pipe_write(int h, const void *buf, unsigned int n) {
     return __syscall(SYS_PIPE_WRITE, h, (int)buf, (int)n);
 }
-static inline int ipc_close(int h) {
+static inline int pipe_close(int h) {
     return __syscall(SYS_IPC_CLOSE, h, 0, 0);
 }
 static inline int pipe_named(const char *name, int fds[2]) {
@@ -402,15 +402,15 @@ static inline int sys_reboot(void) {
 }
 
 /* 控制台 I/O */
-static inline int write(int stream, const void *buf, unsigned int n) {
+static inline int sys_write(int stream, const void *buf, unsigned int n) {
     return __syscall(SYS_WRITE, stream, (int)buf, (int)n);
 }
 
-static inline int read(int stream, void *buf, unsigned int n) {
+static inline int sys_read(int stream, void *buf, unsigned int n) {
     return __syscall(SYS_READ, stream, (int)buf, (int)n);
 }
 
-static inline int getppid(void) {
+static inline int proc_getppid(void) {
     return __syscall(SYS_GETPPID, 0, 0, 0);
 }
 
@@ -431,26 +431,26 @@ static inline int fs_fstat(int fd, struct fstat_buf *st) {
 }
 
 /* 内存 */
-static inline int brk(int new_brk) {
+static inline int sys_brk(int new_brk) {
     return __syscall(SYS_BRK, new_brk, 0, 0);
 }
 
-static inline unsigned int mmap(unsigned int addr, unsigned int length,
+static inline unsigned int sys_mmap(unsigned int addr, unsigned int length,
                                 int prot, int flags, int shm_idx, unsigned int offset) {
     return (unsigned int)__syscall6(SYS_MMAP, (int)addr, (int)length,
                                     prot, flags, shm_idx, (int)offset);
 }
 
-static inline int munmap(unsigned int addr, unsigned int length) {
+static inline int sys_munmap(unsigned int addr, unsigned int length) {
     return __syscall(SYS_MUNMAP, (int)addr, (int)length, 0);
 }
 
-static inline int shm_open(const char *name, unsigned int size_bytes,
+static inline int sys_shm_open(const char *name, unsigned int size_bytes,
                            int flags) {
     return __syscall(SYS_SHM_OPEN, (int)name, (int)size_bytes, flags);
 }
 
-static inline int shm_unlink(const char *name) {
+static inline int sys_shm_unlink(const char *name) {
     return __syscall(SYS_SHM_UNLINK, (int)name, 0, 0);
 }
 
@@ -507,11 +507,11 @@ static inline int fs_truncate(int fd) {
     return __syscall(SYS_FS_TRUNCATE, fd, 0, 0);
 }
 
-static inline int getcwd(char *buf, int size) {
+static inline int fs_getcwd(char *buf, int size) {
     return __syscall(SYS_GETCWD, (int)buf, size, 0);
 }
 
-static inline int chdir(const char *path) {
+static inline int fs_chdir(const char *path) {
     return __syscall(SYS_CHDIR, (int)path, 0, 0);
 }
 
@@ -536,18 +536,6 @@ static inline int dev_close(int dev) {
 
 
 
-
-
-static inline unsigned int htonl(unsigned int x) {
-    return ((x & 0xFF) << 24) | ((x & 0xFF00) << 8) |
-           ((x >> 8) & 0xFF00) | ((x >> 24) & 0xFF);
-}
-static inline unsigned short htons(unsigned short x) {
-    return ((x & 0xFF) << 8) | ((x >> 8) & 0xFF);
-}
-
-static inline unsigned int   ntohl(unsigned int x)   { return htonl(x); }
-static inline unsigned short ntohs(unsigned short x) { return htons(x); }
 
 
 static inline int input_poll(struct input_event *ev) {
@@ -598,7 +586,7 @@ static inline int pty_avail(int h) {
 static inline int pty_set_winsize(int h, unsigned int cols, unsigned int rows) {
     return __syscall(SYS_PTY_SET_WINSIZE, h, (int)cols, (int)rows);
 }
-static inline int fd_avail(int fd) {
+static inline int sys_fd_avail(int fd) {
     return __syscall(SYS_FD_AVAIL, fd, 0, 0);
 }
 
@@ -625,5 +613,49 @@ static inline int term_set_raw(int raw) {
 static inline int term_get_winsize(unsigned int *out) {
     return __syscall(SYS_TERM_GET_WINSIZE, (int)out, 0, 0);
 }
+
+/* ---------- 旧应用兼容别名 ----------
+ * main 上已有 shell/desktop 等代码使用旧名字；保留它们，
+ * 新代码继续使用 proc_* / sys_* 前缀。
+ */
+static inline int getpid(void) { return proc_getpid(); }
+static inline int getppid(void) { return proc_getppid(); }
+static inline int spawn(const char *path, char *const argv[],
+                        struct spawn_params *redir) {
+    return proc_spawn(path, argv, redir);
+}
+static inline int wait(int handle, int *status, unsigned int timeout_ms) {
+    return proc_wait(handle, status, timeout_ms);
+}
+static inline int kill(int handle, int status) { return proc_kill(handle, status); }
+static inline int process_close(int handle) { return proc_close(handle); }
+static inline void sleep_ms(int ms) { sys_sleep_ms(ms); }
+static inline int pipe(int fds[2]) { return pipe_create(fds); }
+static inline int ipc_close(int h) { return pipe_close(h); }
+static inline int shm_open(const char *name, unsigned int size_bytes, int flags) {
+    return sys_shm_open(name, size_bytes, flags);
+}
+static inline int shm_unlink(const char *name) { return sys_shm_unlink(name); }
+
+#ifndef USER_UNISTD_H
+static inline int read(int stream, void *buf, unsigned int n) {
+    return sys_read(stream, buf, n);
+}
+static inline int write(int stream, const void *buf, unsigned int n) {
+    return sys_write(stream, buf, n);
+}
+static inline int getcwd(char *buf, int size) { return fs_getcwd(buf, size); }
+static inline int chdir(const char *path) { return fs_chdir(path); }
+#endif
+
+#ifndef USER_SYS_MMAN_H
+static inline unsigned int mmap(unsigned int addr, unsigned int length,
+                                int prot, int flags, int shm_idx, unsigned int offset) {
+    return sys_mmap(addr, length, prot, flags, shm_idx, offset);
+}
+static inline int munmap(unsigned int addr, unsigned int length) {
+    return sys_munmap(addr, length);
+}
+#endif
 
 #endif

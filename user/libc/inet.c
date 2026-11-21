@@ -40,3 +40,20 @@ char *inet_ntoa(uint32_t in) {
              (h >> 8) & 0xFF, h & 0xFF);
     return buf;
 }
+
+int inet_aton(const char *cp, struct in_addr *inp) {
+    uint32_t ip = inet_addr(cp);
+    if (ip == 0) return 0;
+    if (inp) inp->s_addr = ip;
+    return 1;
+}
+
+int inet_pton(int af, const char *src, void *dst) {
+    if (af == 2 /* AF_INET */) {
+        uint32_t ip = inet_addr(src);
+        if (ip == 0) return 0;
+        if (dst) *(uint32_t*)dst = ip;
+        return 1;
+    }
+    return 0;   /* AF_INET6 不支持，返回 0 表示"不是 IPv6" */
+}

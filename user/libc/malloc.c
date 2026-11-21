@@ -22,13 +22,13 @@ static struct block *head = NULL;
 
 /* 扩展物理内存：brk 对齐到 4KB */
 static void *heap_grow(size_t need) {
-    int cur = brk(0);
+    int cur = sys_brk(0);
     if (cur < 0) return NULL;
 
     int new_brk = cur + (int)need;
     new_brk = (new_brk + 4095) & ~4095;
 
-    if (brk(new_brk) != 0) return NULL;
+    if (sys_brk(new_brk) != 0) return NULL;
 
     return (void*)cur;
 }
@@ -41,7 +41,7 @@ void *malloc(size_t size) {
     if (size >= MMAP_THRESHOLD) {
         size_t total = size + HEADER_SIZE;
         size_t map_size = (total + 4095) & ~4095u;
-        unsigned int addr = mmap(0, map_size,
+        unsigned int addr = sys_mmap(0, map_size,
                                  PROT_READ | PROT_WRITE,
                                  MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if ((int)addr <= 0) return NULL;
@@ -101,7 +101,7 @@ void free(void *ptr) {
     if (b->is_mmap) {
         size_t total = b->size + HEADER_SIZE;
         size_t map_size = (total + 4095) & ~4095u;
-        munmap((unsigned int)b, map_size);
+        sys_munmap((unsigned int)b, map_size);
         return;
     }
 
@@ -133,5 +133,5 @@ extern void __libc_run_atexit(void);
 
 void exit(int status) {
     __libc_run_atexit();
-    _exit(status);
+    proc_exit(status);
 }

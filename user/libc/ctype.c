@@ -56,3 +56,7 @@ int tolower(int c) {
     if (c >= 'A' && c <= 'Z') return c + 32;
     return c;
 }
+
+int isascii(int c) {
+    return c >= 0 && c <= 0x7F;
+}
