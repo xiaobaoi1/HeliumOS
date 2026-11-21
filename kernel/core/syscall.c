@@ -85,7 +85,7 @@ static int sys_write(int stream, const char *buf, uint32_t count) {
     struct task *cur = get_current_task();
     if (!cur) return EINVAL;
 
-    if(stream == STREAM_STDERR){ // test code
+    if(stream == STREAM_STDERR || stream == STREAM_STDOUT){ // test code
         serial_write_nstring(buf, count);
     }
 
