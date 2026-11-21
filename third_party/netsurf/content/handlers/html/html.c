@@ -219,8 +219,6 @@ static void html_box_convert_done(html_content *c, bool success)
 	dom_exception exc; /* returned by libdom functions */
 	dom_node *html;
 
-	fprintf(stderr, "HTML: box_convert_done enter success=%d aborted=%d\n", success, c->aborted);
-
 	NSLOG(netsurf, INFO, "DOM to box conversion complete (content %p)", c);
 
 	c->box_conversion_context = NULL;
@@ -228,8 +226,6 @@ static void html_box_convert_done(html_content *c, bool success)
 	/* Clean up and report error if unsuccessful or aborted */
 	if ((success == false) || (c->aborted)) {
 		html_object_free_objects(c);
-		fprintf(stderr, "HTML: box_convert_done success=%d aborted=%d\n", success, c->aborted);
-
 
 		if (success == false) {
 			content_broadcast_error(&c->base, NSERROR_BOX_CONVERT, NULL);
@@ -263,7 +259,6 @@ static void html_box_convert_done(html_content *c, bool success)
 
 	/* extract image maps - can't do this sensibly in dom_to_box */
 	err = imagemap_extract(c);
-	fprintf(stderr, "HTML: imagemap_extract=%d\n", err);
 	if (err != NSERROR_OK) {
 		NSLOG(netsurf, INFO, "imagemap extraction failed");
 		html_object_free_objects(c);
@@ -279,7 +274,6 @@ static void html_box_convert_done(html_content *c, bool success)
 	c->parser = NULL;
 
 	content_set_ready(&c->base);
-	fprintf(stderr, "HTML: content_set_ready, proceed_to_done\n");
 
 	html_proceed_to_done(c);
 
@@ -377,8 +371,6 @@ void html_finish_conversion(html_content *htmlc)
 	/* create new css selection context */
 	error = html_css_new_selection_context(htmlc, &htmlc->select_ctx);
 	if (error != NSERROR_OK) {
-		fprintf(stderr, "HTML finish: css selection error=%d\n", error);
-
 		content_broadcast_error(&htmlc->base, error, NULL);
 		content_set_error(&htmlc->base);
 		return;
@@ -409,11 +401,7 @@ void html_finish_conversion(html_content *htmlc)
 
 	html_get_dimensions(htmlc);
 
-	fprintf(stderr, "HTML: dom_to_box begin\n");
-
 	error = dom_to_box(html, htmlc, html_box_convert_done, &htmlc->box_conversion_context);
-	fprintf(stderr, "HTML: dom_to_box ret=%d\n", error);
-
 	if (error != NSERROR_OK) {
 		NSLOG(netsurf, INFO, "box conversion failed");
 		dom_node_unref(html);
@@ -687,12 +675,7 @@ html_process_encoding_change(struct content *c,
 	/* Retrieve new encoding */
 	encoding = dom_hubbub_parser_get_encoding(html->parser,
 						  &html->encoding_source);
-	fprintf(stderr, "HTML: encoding change enc=%s source=%d\n",
-			encoding != NULL ? encoding : "(null)",
-			(int)html->encoding_source);
 	if (encoding == NULL) {
-		fprintf(stderr, "HTML: encoding change without detected "
-				"encoding, fallback UTF-8\n");
 		encoding = "UTF-8";
 	}
 
@@ -726,7 +709,6 @@ html_process_encoding_change(struct content *c,
 	error = dom_hubbub_parser_create(&parse_params,
 					 &html->parser,
 					 &html->document);
-	fprintf(stderr, "HTML: encoding change parser create=%d\n", error);
 	if (error != DOM_HUBBUB_OK) {
 		/* Ok, we don't support the declared encoding. Bailing out
 		 * isn't exactly user-friendly, so fall back to Windows-1252 */
@@ -740,10 +722,6 @@ html_process_encoding_change(struct content *c,
 		error = dom_hubbub_parser_create(&parse_params,
 						 &html->parser,
 						 &html->document);
-		fprintf(stderr, "HTML: encoding change fallback create=%d\n",
-				error);
-
-
 		if (error != DOM_HUBBUB_OK) {
 			return libdom_hubbub_error_to_nserror(error);
 		}
@@ -751,8 +729,6 @@ html_process_encoding_change(struct content *c,
 	}
 
 	source_data = content__get_source_data(c, &source_size);
-	fprintf(stderr, "HTML: encoding change reparse size=%u\n",
-			(unsigned)source_size);
 
 	/* Reprocess all the data.  This is safe because
 	 * the encoding is now specified at parser start which means
@@ -761,7 +737,6 @@ html_process_encoding_change(struct content *c,
 	error = dom_hubbub_parser_parse_chunk(html->parser,
 					      source_data,
 					      source_size);
-	fprintf(stderr, "HTML: encoding change reparse ret=%d\n", error);
 
 	return libdom_hubbub_error_to_nserror(error);
 }
@@ -778,16 +753,9 @@ html_process_data(struct content *c, const char *data, unsigned int size)
 	dom_hubbub_error dom_ret;
 	nserror err = NSERROR_OK; /* assume its all going to be ok */
 
-	if (size > 0) {
-		fprintf(stderr, "HTML: process_data size=%u first=%.*s\n",
-				size, size > 20 ? 20 : (int)size, data);
-	} else {
-		fprintf(stderr, "HTML: process_data size=0\n");
-	}
 	dom_ret = dom_hubbub_parser_parse_chunk(html->parser,
 					      (const uint8_t *) data,
 					      size);
-	fprintf(stderr, "HTML: process_data dom_ret=%d\n", dom_ret);
 
 	err = libdom_hubbub_error_to_nserror(dom_ret);
 
@@ -951,13 +919,11 @@ html_begin_conversion(html_content *htmlc)
 		encoding = dom_hubbub_parser_get_encoding(htmlc->parser,
 					&htmlc->encoding_source);
 		if (encoding == NULL) {
-			fprintf(stderr, "HTML: no detected encoding, fallback UTF-8\n");
 			encoding = "UTF-8";
 		}
 
 		htmlc->encoding = strdup(encoding);
 		if (htmlc->encoding == NULL) {
-			fprintf(stderr, "HTML NOMEM: encoding strdup\n");
 			content_broadcast_error(&htmlc->base,
 						NSERROR_NOMEM,
 						NULL);

@@ -292,7 +292,6 @@ static void fetch_file_process_plain(struct fetch_file_context *ctx,
 	(void)fdstat;
 
 	fd = fs_open(ctx->path, O_RDONLY);
-	fprintf(stderr, "NSFILE open [%s] = %d\n", ctx->path, fd);
 
 	if (fd < 0) {
 		fetch_file_process_error(ctx, 404);
@@ -310,7 +309,6 @@ static void fetch_file_process_plain(struct fetch_file_context *ctx,
 
 	while (size < FETCH_FILE_MAX_BUF_SIZE) {
 		n = fs_read(fd, buf + size, FETCH_FILE_MAX_BUF_SIZE - size);
-		fprintf(stderr, "NSFILE read %d (total=%u)\n", n, size);
 		if (n < 0) {
 			free(buf);
 			fs_close(fd);
