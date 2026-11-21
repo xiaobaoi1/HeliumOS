@@ -3,7 +3,7 @@
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
     for (;;) {
-        sleep_ms(1000);
+        sys_sleep_ms(1000);
     }
     return 0;
 }

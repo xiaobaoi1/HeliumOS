@@ -40,7 +40,7 @@ static void section(const char *title) {
 }
 
 static int spawn_sleeper(void) {
-    int h = spawn("SLEEPER", NULL, NULL);
+    int h = proc_spawn("SLEEPER", NULL, NULL);
     if (h < 0) {
         // tty_set_color(C_RED, C_BLACK);
         printf("  spawn SLEEPER failed: %d\n", h);
@@ -49,26 +49,26 @@ static int spawn_sleeper(void) {
     return h;
 }
 
-/* ---------- T1: kill(正在 sleep) + wait ----------
+/* ---------- T1: proc_kill(正在 sleep) + wait ----------
  *
  * SIGTERM = 15 → 进 pending → sleeper 被唤醒 → sleep 返回 EINTR
  * → 无 handler（SIG_DFL）→ 终止，退出码 = 128 + 15 = 143
  */
 static void test_kill_sleeping(void) {
-    section("kill sleeping + wait (SIGTERM)");
+    section("kill sleeping + proc_wait(SIGTERM)");
 
     int h = spawn_sleeper();
     if (h < 0) { fail("spawn", "returned error"); return; }
     ok("spawn SLEEPER");
 
-    sleep_ms(50);
+    sys_sleep_ms(50);
 
-    int r = kill(h, SIGTERM);
-    if (r == OK) ok("kill(h, SIGTERM)");
+    int r = proc_kill(h, SIGTERM);
+    if (r == OK) ok("proc_kill(h, SIGTERM)");
     else         fail("kill", "returned error");
 
     int status = -1;
-    int wr = wait(h, &status, 0);
+    int wr = proc_wait(h, &status, 0);
     if (wr == OK && status == 143) {
         ok("wait returns status=143 (128+SIGTERM)");
     } else {
@@ -77,12 +77,12 @@ static void test_kill_sleeping(void) {
         fail("wait", buf);
     }
 
-    int cr = process_close(h);
+    int cr = proc_close(h);
     if (cr == OK) ok("process_close");
     else          fail("process_close", "returned error");
 }
 
-/* ---------- T2: kill(SIGKILL) 后直接 close ---------- */
+/* ---------- T2: proc_kill(SIGKILL) 后直接 close ---------- */
 
 static void test_kill_then_close(void) {
     section("kill then close (no wait, SIGKILL)");
@@ -91,12 +91,12 @@ static void test_kill_then_close(void) {
     if (h < 0) { fail("spawn", "returned error"); return; }
     ok("spawn SLEEPER");
 
-    sleep_ms(50);
+    sys_sleep_ms(50);
 
-    if (kill(h, SIGKILL) == OK) ok("kill(h, SIGKILL)");
+    if (proc_kill(h, SIGKILL) == OK) ok("proc_kill(h, SIGKILL)");
     else                        fail("kill", "returned error");
 
-    if (process_close(h) == OK) ok("process_close without wait");
+    if (proc_close(h) == OK) ok("process_close without wait");
     else                        fail("process_close", "returned error");
 }
 
@@ -112,16 +112,16 @@ static void test_stress(void) {
         int h = spawn_sleeper();
         if (h < 0) { failures++; continue; }
 
-        sleep_ms(50);
-        if (kill(h, SIGKILL) != OK) { failures++; process_close(h); continue; }
+        sys_sleep_ms(50);
+        if (proc_kill(h, SIGKILL) != OK) { failures++; proc_close(h); continue; }
 
         int status = -1;
-        if (wait(h, &status, 0) != OK || status != 137) {
+        if (proc_wait(h, &status, 0) != OK || status != 137) {
             failures++;
-            process_close(h);
+            proc_close(h);
             continue;
         }
-        process_close(h);
+        proc_close(h);
     }
 
     if (failures == 0) {
@@ -143,7 +143,7 @@ static void test_wait_timeout_then_kill(void) {
     ok("spawn SLEEPER");
 
     int status = 0;
-    int wr = wait(h, &status, 50);
+    int wr = proc_wait(h, &status, 50);
     if (wr == EAGAIN) {
         ok("wait returns EAGAIN on timeout");
     } else {
@@ -152,10 +152,10 @@ static void test_wait_timeout_then_kill(void) {
         fail("wait timeout", buf);
     }
 
-    if (kill(h, SIGKILL) == OK) ok("kill(SIGKILL) after timeout");
+    if (proc_kill(h, SIGKILL) == OK) ok("proc_kill(SIGKILL) after timeout");
     else                        fail("kill", "returned error");
 
-    if (wait(h, &status, 100) == OK && status == 137) {
+    if (proc_wait(h, &status, 100) == OK && status == 137) {
         ok("wait after SIGKILL returns 137");
     } else {
         char buf[48];
@@ -163,7 +163,7 @@ static void test_wait_timeout_then_kill(void) {
         fail("wait after kill", buf);
     }
 
-    process_close(h);
+    proc_close(h);
 }
 
 /* ---------- 主入口 ---------- */

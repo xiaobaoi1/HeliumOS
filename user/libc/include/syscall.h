@@ -614,48 +614,4 @@ static inline int term_get_winsize(unsigned int *out) {
     return __syscall(SYS_TERM_GET_WINSIZE, (int)out, 0, 0);
 }
 
-/* ---------- 旧应用兼容别名 ----------
- * main 上已有 shell/desktop 等代码使用旧名字；保留它们，
- * 新代码继续使用 proc_* / sys_* 前缀。
- */
-static inline int getpid(void) { return proc_getpid(); }
-static inline int getppid(void) { return proc_getppid(); }
-static inline int spawn(const char *path, char *const argv[],
-                        struct spawn_params *redir) {
-    return proc_spawn(path, argv, redir);
-}
-static inline int wait(int handle, int *status, unsigned int timeout_ms) {
-    return proc_wait(handle, status, timeout_ms);
-}
-static inline int kill(int handle, int status) { return proc_kill(handle, status); }
-static inline int process_close(int handle) { return proc_close(handle); }
-static inline void sleep_ms(int ms) { sys_sleep_ms(ms); }
-static inline int pipe(int fds[2]) { return pipe_create(fds); }
-static inline int ipc_close(int h) { return pipe_close(h); }
-static inline int shm_open(const char *name, unsigned int size_bytes, int flags) {
-    return sys_shm_open(name, size_bytes, flags);
-}
-static inline int shm_unlink(const char *name) { return sys_shm_unlink(name); }
-
-#ifndef USER_UNISTD_H
-static inline int read(int stream, void *buf, unsigned int n) {
-    return sys_read(stream, buf, n);
-}
-static inline int write(int stream, const void *buf, unsigned int n) {
-    return sys_write(stream, buf, n);
-}
-static inline int getcwd(char *buf, int size) { return fs_getcwd(buf, size); }
-static inline int chdir(const char *path) { return fs_chdir(path); }
-#endif
-
-#ifndef USER_SYS_MMAN_H
-static inline unsigned int mmap(unsigned int addr, unsigned int length,
-                                int prot, int flags, int shm_idx, unsigned int offset) {
-    return sys_mmap(addr, length, prot, flags, shm_idx, offset);
-}
-static inline int munmap(unsigned int addr, unsigned int length) {
-    return sys_munmap(addr, length);
-}
-#endif
-
 #endif

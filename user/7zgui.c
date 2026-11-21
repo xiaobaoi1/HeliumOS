@@ -320,7 +320,7 @@ static int create_7z_native(struct app *a,
             break;
         }
         packed_total += packLen;
-        sleep_ms(1);
+        sys_sleep_ms(1);
     }
 
     if (npf == 0) {
@@ -503,8 +503,8 @@ static void set_progress(struct app *a, const char *fmt, ...) {
     publish(a);
 
     for (int i = 0; i < 20 && a->shm->pub_x0 != SHM_DIRTY_EMPTY; i++)
-        sleep_ms(5);
-    sleep_ms(5);
+        sys_sleep_ms(5);
+    sys_sleep_ms(5);
 }
 
 /* ==================== 基础文件操作 ==================== */
@@ -972,7 +972,7 @@ static int create_zip_compressed(struct app *a, const char *zipname, char **file
     for (int i = 0; i < nfiles; i++) {
         set_progress(a, "Packing %d/%d: %s", i + 1, nfiles, files[i]);
         int fd = fs_open(files[i], FS_O_RDONLY);
-        if (fd < 0) { sleep_ms(1); continue; }
+        if (fd < 0) { sys_sleep_ms(1); continue; }
         
         struct fstat_buf st;
         if (fs_fstat(fd, &st) < 0) { fs_close(fd); continue; }
@@ -1022,7 +1022,7 @@ static int create_zip_compressed(struct app *a, const char *zipname, char **file
                 if (r <= 0) break;
                 crc = update_crc(crc, buf, r);
                 remain -= r;
-                if ((remain & 0xFFFF) == 0) sleep_ms(1);
+                if ((remain & 0xFFFF) == 0) sys_sleep_ms(1);
             }
             crc ^= 0xFFFFFFFF;
             
@@ -1044,7 +1044,7 @@ static int create_zip_compressed(struct app *a, const char *zipname, char **file
                 if (r <= 0) break;
                 write_all(ffd, buf, (uint32_t)r);
                 remain -= r;
-                if ((remain & 0xFFFF) == 0) sleep_ms(1);
+                if ((remain & 0xFFFF) == 0) sys_sleep_ms(1);
             }
             
             struct zip_entry *e = &ents[nent++];
@@ -1053,7 +1053,7 @@ static int create_zip_compressed(struct app *a, const char *zipname, char **file
             offset += 30 + (uint32_t)nlen + csize;
         }
         fs_close(fd);
-        sleep_ms(1);
+        sys_sleep_ms(1);
     }
 
     if (nent == 0) { free(ents); free(buf); free(out_buf); fs_close(ffd); fs_unlink(zipname); return -1; }
@@ -1092,11 +1092,11 @@ static int create_7z_cmd(struct app *a, const char *szname, char **files, int nf
     argv[argc] = NULL;
     
     set_progress(a, "Spawning /bin/7z a ...");
-    int pid = spawn("/bin/7z", argv, NULL);
+    int pid = proc_spawn("/bin/7z", argv, NULL);
     if (pid < 0) return -1;
     
     int status = 0;
-    wait(pid, &status, 0);
+    proc_wait(pid, &status, 0);
     return (status == 0) ? 0 : -1;
 }
 
@@ -1119,7 +1119,7 @@ static void do_create_zip(struct app *a, int is_7z) {
 
     set_status(a, "Compressing...");
     redraw_all(a);
-    publish(a); sleep_ms(20);
+    publish(a); sys_sleep_ms(20);
 
 int r = is_7z ? create_7z_native(a, name, files, nfiles)
               : create_zip_compressed(a, name, files, nfiles);    read_dir(a);
@@ -1257,13 +1257,13 @@ static void handle_resize(struct app *a, int new_w, int new_h) {
 
     static int shm_gen = 0;
     char new_shm[24];
-    snprintf(new_shm, sizeof(new_shm), "shm%d_%d", getpid(), ++shm_gen);
+    snprintf(new_shm, sizeof(new_shm), "shm%d_%d", proc_getpid(), ++shm_gen);
 
     int shm_size = (int)shm_total_size(new_w, new_h);
-    int shm_id = shm_open(new_shm, shm_size, 0);
+    int shm_id = sys_shm_open(new_shm, shm_size, 0);
     if (shm_id < 0) return;
 
-    unsigned int addr = mmap(0, shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_id, 0);
+    unsigned int addr = sys_mmap(0, shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_id, 0);
     if ((int)addr <= 0) return;
 
     struct shm_hdr *new_hdr = (struct shm_hdr*)addr;
@@ -1279,14 +1279,14 @@ static void handle_resize(struct app *a, int new_w, int new_h) {
     memset(&req, 0, sizeof(req));
     req.magic = WM_MAGIC;
     req.type = WM_REQ_RESIZE;
-    req.owner_pid = getpid();
+    req.owner_pid = proc_getpid();
     strncpy(req.old_shm, a->shm_name, sizeof(req.old_shm) - 1);
     strncpy(req.new_shm, new_shm, sizeof(req.new_shm) - 1);
     req.new_w = new_w;
     req.new_h = new_h;
     pipe_write(a->wm_fd, &req, sizeof(req));
 
-    munmap((unsigned int)a->shm, a->map_size);
+    sys_munmap((unsigned int)a->shm, a->map_size);
 
     a->win_w = new_w;
     a->win_h = new_h;
@@ -1416,7 +1416,7 @@ static void do_extract(struct app *a) {
     set_status(a, "Extracting...");
     redraw_all(a);
     publish(a);
-    sleep_ms(20);
+    sys_sleep_ms(20);
 
     int r = extract_archive(path);
     if (r == 0) {
@@ -1437,8 +1437,8 @@ static void on_double_click(struct app *a, int idx) {
         if (a->in_archive) {
             read_dir(a);
             redraw_all(a);
-        } else if (chdir("..") == 0) {
-            getcwd(a->cwd, sizeof(a->cwd));
+        } else if (fs_chdir("..") == 0) {
+            fs_getcwd(a->cwd, sizeof(a->cwd));
             read_dir(a);
             redraw_all(a);
         } else {
@@ -1451,8 +1451,8 @@ static void on_double_click(struct app *a, int idx) {
     if (a->in_archive) return;
 
     if (e->is_dir) {
-        if (chdir(e->name) == 0) {
-            getcwd(a->cwd, sizeof(a->cwd));
+        if (fs_chdir(e->name) == 0) {
+            fs_getcwd(a->cwd, sizeof(a->cwd));
             read_dir(a);
         } else {
             set_status(a, "Cannot enter directory");
@@ -1511,7 +1511,7 @@ static void handle_event(struct app *a, struct wm_event *ev) {
                     switch (btns[i].action) {
                     case 0: /* Up */
                         if (a->in_archive) { read_dir(a); redraw_all(a); }
-                        else if (chdir("..") == 0) { getcwd(a->cwd, sizeof(a->cwd)); read_dir(a); redraw_all(a); }
+                        else if (fs_chdir("..") == 0) { fs_getcwd(a->cwd, sizeof(a->cwd)); read_dir(a); redraw_all(a); }
                         else { set_status(a, "Cannot go up"); redraw_all(a); }
                         break;
                     case 1: /* Refresh */
@@ -1522,7 +1522,7 @@ static void handle_event(struct app *a, struct wm_event *ev) {
                         a->menu_open = 1;
                         redraw_all(a);
                         break;
-                    case 4: _exit(0); break;
+                    case 4: proc_exit(0); break;
                     }
                     return;
                 }
@@ -1622,7 +1622,7 @@ static void handle_event(struct app *a, struct wm_event *ev) {
         break;
 
     case WM_EV_CLOSE_REQUEST:
-        _exit(0);
+        proc_exit(0);
         break;
 
     case WM_EV_KEY:
@@ -1713,16 +1713,16 @@ int main(int argc, char **argv) {
     (void)argc; (void)argv;
     struct app a; memset(&a, 0, sizeof(a));
     a.sel = -1; a.last_click_idx = -1; a.win_w = WIN_W; a.win_h = WIN_H;
-    if (getcwd(a.cwd, sizeof(a.cwd)) < 0) strcpy(a.cwd, "/");
+    if (fs_getcwd(a.cwd, sizeof(a.cwd)) < 0) strcpy(a.cwd, "/");
 
-    int pid = getpid();
+    int pid = proc_getpid();
     snprintf(a.shm_name, sizeof(a.shm_name), "shm%d", pid);
     char ev_name[16];
     snprintf(ev_name, sizeof(ev_name), "ev%d", pid);
 
     int shm_size = (int)shm_total_size(a.win_w, a.win_h);
-    a.shm_id = shm_open(a.shm_name, (unsigned int)shm_size, 0);
-    unsigned int addr = mmap(0, (unsigned int)shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, a.shm_id, 0);
+    a.shm_id = sys_shm_open(a.shm_name, (unsigned int)shm_size, 0);
+    unsigned int addr = sys_mmap(0, (unsigned int)shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, a.shm_id, 0);
     a.shm = (struct shm_hdr *)addr;
     a.pixels = (unsigned int *)(addr + SHM_HDR_SIZE);
     a.map_size = shm_size;
@@ -1732,7 +1732,7 @@ int main(int argc, char **argv) {
     a.shm->pub_x0 = SHM_DIRTY_EMPTY; a.shm->pub_y0 = 0; a.shm->pub_x1 = 0; a.shm->pub_y1 = 0;
 
     int fds[2]; pipe_unlink(ev_name);
-    pipe_named(ev_name, fds); a.ev_fd = fds[0]; ipc_close(fds[1]);
+    pipe_named(ev_name, fds); a.ev_fd = fds[0]; pipe_close(fds[1]);
 
     wm_font_load();
     a.wm_fd = pipe_open("wm-inbox", 1);
@@ -1762,7 +1762,7 @@ int main(int argc, char **argv) {
             handle_event(&a, &ev);
         }
         publish(&a);
-        sleep_ms(10);
+        sys_sleep_ms(10);
     }
     return 0;
 }

@@ -123,13 +123,13 @@ static int http_get(const char *host, int port, const char *path) {
     while (idle_ticks < 300) {   /* 3 秒无数据 → 认为结束 */
         int n = recvfrom(s, buf, sizeof(buf), NULL, NULL);
         if (n > 0) {
-            write(1, buf, n);
+            sys_write(1, buf, n);
             total += n;
             idle_ticks = 0;
         } else if (n == 0) {
             break;               /* EOF */
         } else if (n == EAGAIN_LOCAL) {
-            sleep_ms(10);
+            sys_sleep_ms(10);
             idle_ticks++;
         } else {
             break;               /* 其他错误 */

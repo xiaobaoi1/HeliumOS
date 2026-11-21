@@ -72,7 +72,7 @@ static int wait_msg(int s, uint8_t want, struct dhcp_pkt *out, int timeout_ms) {
             const uint8_t *t53 = dhcp_opt(out, 53);
             if (t53 && *t53 == want) return 0;
         }
-        sleep_ms(10);
+        sys_sleep_ms(10);
     }
     return -1;
 }

@@ -9,7 +9,7 @@
 #define TAIL_MAX_SIZE (1024 * 1024)
 
 static int read_chunk(int fd, char *buf, int n, int is_file) {
-    return is_file ? fs_read(fd, buf, n) : read(0, buf, n);
+    return is_file ? fs_read(fd, buf, n) : sys_read(0, buf, n);
 }
 
 int main(int argc, char **argv) {
@@ -71,7 +71,7 @@ int main(int argc, char **argv) {
             }
         }
     }
-    if (start < len) write(1, buf + start, len - start);
+    if (start < len) sys_write(1, buf + start, len - start);
     free(buf);
     return 0;
 }

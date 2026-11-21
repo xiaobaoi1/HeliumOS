@@ -21,7 +21,7 @@ int main(int argc, char **argv) {
         char buf[BUF_SIZE];
         int n;
         while ((n = fs_read(fd, buf, sizeof(buf))) > 0) {
-            write(1, buf, n);
+            sys_write(1, buf, n);
         }
         fs_close(fd);
         if (n < 0) {

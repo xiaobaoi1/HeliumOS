@@ -30,9 +30,9 @@ static void publish_all(void) {
 
 static int create_window(const char *title) {
     g_map_size = shm_total_size(g_cw, g_ch);
-    int shm_id = shm_open(g_shm_name, g_map_size, 0);
+    int shm_id = sys_shm_open(g_shm_name, g_map_size, 0);
     if (shm_id < 0) return -1;
-    unsigned int addr = mmap(0, g_map_size, PROT_READ | PROT_WRITE,
+    unsigned int addr = sys_mmap(0, g_map_size, PROT_READ | PROT_WRITE,
                              MAP_SHARED, shm_id, 0);
     if ((int)addr <= 0) return -1;
     g_hdr = (struct shm_hdr*)addr;
@@ -47,14 +47,14 @@ static int create_window(const char *title) {
     pipe_unlink(g_ev_name);
     int fds[2];
     if (pipe_named(g_ev_name, fds) < 0) return -1;
-    g_ev = fds[0]; ipc_close(fds[1]);
+    g_ev = fds[0]; pipe_close(fds[1]);
 
     struct wm_request req;
     memset(&req, 0, sizeof(req));
     req.magic = WM_MAGIC; req.type = WM_REQ_CREATE; req.kind = WM_KIND_NORMAL;
     req.x = 80; req.y = 50; req.w = g_cw; req.h = g_ch;
     req.min_w = 240; req.min_h = 180; req.max_w = 0; req.max_h = 0;
-    req.owner_pid = getpid();
+    req.owner_pid = proc_getpid();
     strncpy(req.shm_name, g_shm_name, sizeof(req.shm_name) - 1);
     strncpy(req.ev_name, g_ev_name, sizeof(req.ev_name) - 1);
     strncpy(req.title, title, sizeof(req.title) - 1);
@@ -94,7 +94,7 @@ int main(int argc, char **argv) {
     for (int i = 0; i < 2000; i++) {
         g_inbox = pipe_open(WM_INBOX_NAME, 1);
         if (g_inbox >= 0) break;
-        sleep_ms(5);
+        sys_sleep_ms(5);
     }
     if (g_inbox < 0) return 1;
 
@@ -111,7 +111,7 @@ int main(int argc, char **argv) {
         g_cw = cw; g_ch = ch;
     }
 
-    int pid = getpid();
+    int pid = proc_getpid();
     snprintf(g_shm_name, sizeof(g_shm_name), "photos-%d", pid);
     snprintf(g_ev_name, sizeof(g_ev_name), "photos-ev-%d", pid);
 
@@ -131,7 +131,7 @@ int main(int argc, char **argv) {
         struct wm_set_alpha_request ar;
         memset(&ar, 0, sizeof(ar));
         ar.magic = WM_MAGIC; ar.type = WM_REQ_SET_ALPHA;
-        ar.owner_pid = getpid(); ar.alpha = (uint32_t)a;
+        ar.owner_pid = proc_getpid(); ar.alpha = (uint32_t)a;
         strncpy(ar.shm_name, g_shm_name, sizeof(ar.shm_name) - 1);
         pipe_write(g_inbox, &ar, sizeof(ar));
     }
@@ -170,17 +170,17 @@ int main(int argc, char **argv) {
                 render_frame(g_frame);
             }
         }
-        sleep_ms(5);
+        sys_sleep_ms(5);
     }
 
     struct wm_destroy_request dr;
     memset(&dr, 0, sizeof(dr));
-    dr.magic = WM_MAGIC; dr.type = WM_REQ_DESTROY; dr.owner_pid = getpid();
+    dr.magic = WM_MAGIC; dr.type = WM_REQ_DESTROY; dr.owner_pid = proc_getpid();
     strncpy(dr.shm_name, g_shm_name, sizeof(dr.shm_name) - 1);
     if (g_inbox >= 0) pipe_write(g_inbox, &dr, sizeof(dr));
 
-    if (g_hdr) munmap((unsigned int)g_hdr, g_map_size);
-    if (g_ev >= 0) ipc_close(g_ev);
+    if (g_hdr) sys_munmap((unsigned int)g_hdr, g_map_size);
+    if (g_ev >= 0) pipe_close(g_ev);
     if (g_anim_ok) image_anim_free(&g_anim);
     return 0;
 }

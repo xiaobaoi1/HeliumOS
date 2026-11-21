@@ -19,7 +19,7 @@ int main(int argc, char **argv) {
     int rd = fds[0], wr = fds[1];
 
     /* 关掉自己的读端——只有子进程读 */
-    ipc_close(rd);
+    pipe_close(rd);
 
     /* 用同一名字再创建应失败 */
     int fds2[2];
@@ -37,7 +37,7 @@ int main(int argc, char **argv) {
     printf("read from wr: %d (expect -6 = EINVAL)\n", r);
 
     /* 关写端 */
-    ipc_close(wr);
+    pipe_close(wr);
 
     /* unlink */
     r = pipe_unlink("test-np");
