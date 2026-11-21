@@ -152,6 +152,41 @@ static nserror posix_nsurl_to_path(struct nsurl *url, char **path_out)
 		return res;
 	}
 
+	/* HeliumOS: 把 file:///... 路径转换成卷符路径。 */
+	{
+		char *helium = NULL;
+		size_t n = strlen(path);
+
+		if (strncmp(path, "/SYS:/", 6) == 0) {
+			helium = strdup(path + 1);
+		} else if (strncmp(path, "/SYS/", 5) == 0) {
+			helium = malloc(n + 3);
+			if (helium != NULL) {
+				strcpy(helium, "SYS:/");
+				strcat(helium, path + 5);
+			}
+		} else if (path[0] == '/') {
+			helium = malloc(n + 5);
+			if (helium != NULL) {
+				strcpy(helium, "SYS:");
+				strcat(helium, path);
+			}
+		} else {
+			helium = malloc(n + 6);
+			if (helium != NULL) {
+				strcpy(helium, "SYS:/");
+				strcat(helium, path);
+			}
+		}
+
+		if (helium == NULL) {
+			free(path);
+			return NSERROR_NOMEM;
+		}
+		free(path);
+		path = helium;
+	}
+
 	*path_out = path;
 
 	return NSERROR_OK;

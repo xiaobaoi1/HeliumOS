@@ -57,6 +57,8 @@
 #include "netsurf/fetch.h"
 #include "desktop/gui_internal.h"
 
+#include "syscall.h"
+
 #include "content/fetch.h"
 #include "content/fetchers.h"
 #include "dirlist.h"
@@ -282,176 +284,59 @@ fetch_file_process_error_aborted:
 static void fetch_file_process_plain(struct fetch_file_context *ctx,
 				     struct stat *fdstat)
 {
-#ifdef HAVE_MMAP
 	fetch_msg msg;
-	char *buf = NULL;
-	size_t buf_size;
+	uint32_t size = 0;
+	uint8_t *buf;
+	int fd, n;
 
-	int fd; /**< The file descriptor of the object */
+	(void)fdstat;
 
-	/* Check if we can just return not modified */
-	if (ctx->file_etag != 0 && ctx->file_etag == fdstat->st_mtime) {
-		fetch_set_http_code(ctx->fetchh, 304);
-		msg.type = FETCH_NOTMODIFIED;
+	fd = fs_open(ctx->path, O_RDONLY);
+
+	if (fd < 0) {
+		fetch_file_process_error(ctx, 404);
+		return;
+	}
+
+	buf = malloc(FETCH_FILE_MAX_BUF_SIZE);
+	if (buf == NULL) {
+		fs_close(fd);
+		msg.type = FETCH_ERROR;
+		msg.data.error = "Unable to allocate memory for file data buffer";
 		fetch_file_send_callback(&msg, ctx);
 		return;
 	}
 
-	fd = open(ctx->path, O_RDONLY);
-	if (fd < 0) {
-		/* process errors as appropriate */
-		fetch_file_process_error(ctx,
-				fetch_file_errno_to_http_code(errno));
-		return;
-	}
-
-	/* set buffer size */
-	buf_size = fdstat->st_size;
-
-	/* allocate the buffer storage */
-	if (buf_size > 0) {
-		buf = mmap(NULL, buf_size, PROT_READ, MAP_SHARED, fd, 0);
-		if (buf == MAP_FAILED) {
-			msg.type = FETCH_ERROR;
-			msg.data.error = "Unable to map memory for file data buffer";
-			fetch_file_send_callback(&msg, ctx);
-			close(fd);
+	while (size < FETCH_FILE_MAX_BUF_SIZE) {
+		n = fs_read(fd, buf + size, FETCH_FILE_MAX_BUF_SIZE - size);
+		if (n < 0) {
+			free(buf);
+			fs_close(fd);
+			fetch_file_process_error(ctx, 500);
 			return;
 		}
+		if (n == 0) break;
+		size += (uint32_t)n;
 	}
+	fs_close(fd);
 
-	/* fetch is going to be successful */
 	fetch_set_http_code(ctx->fetchh, 200);
 
-	/* Any callback can result in the fetch being aborted.
-	 * Therefore, we _must_ check for this after _every_ call to
-	 * fetch_file_send_callback().
-	 */
-
-	/* content type */
-	if (fetch_file_send_header(ctx, "Content-Type: %s", 
+	if (fetch_file_send_header(ctx, "Content-Type: %s",
 				   guit->fetch->filetype(ctx->path))) {
-		goto fetch_file_process_aborted;
+		free(buf);
+		return;
 	}
-
-	/* content length */
-	if (fetch_file_send_header(ctx, "Content-Length: %" PRIsizet,
-				   fdstat->st_size)) {
-		goto fetch_file_process_aborted;
-	}
-
-	/* create etag */
-	if (fetch_file_send_header(ctx, "ETag: \"%10" PRId64 "\"",
-				   (int64_t) fdstat->st_mtime)) {
-		goto fetch_file_process_aborted;
-	}
-
-	msg.type = FETCH_DATA;
-	msg.data.header_or_data.buf = (const uint8_t *) buf;
-	msg.data.header_or_data.len = buf_size;
-	fetch_file_send_callback(&msg, ctx);
-
-	if (ctx->aborted == false) {
-		msg.type = FETCH_FINISHED;
-		fetch_file_send_callback(&msg, ctx);
-	}
-
-fetch_file_process_aborted:
-
-	if (buf != NULL)
-		munmap(buf, buf_size);
-	close(fd);
-#else
-	fetch_msg msg;
-	char *buf;
-	size_t buf_size;
-
-	ssize_t tot_read = 0;
-	ssize_t res;
-
-	FILE *infile;
-
-	/* Check if we can just return not modified */
-	if (ctx->file_etag != 0 && ctx->file_etag == fdstat->st_mtime) {
-		fetch_set_http_code(ctx->fetchh, 304);
-		msg.type = FETCH_NOTMODIFIED;
-		fetch_file_send_callback(&msg, ctx);
+	if (fetch_file_send_header(ctx, "Content-Length: %" PRIsizet, (size_t)size)) {
+		free(buf);
 		return;
 	}
 
-	infile = fopen(ctx->path, "rb");
-	if (infile == NULL) {
-		/* process errors as appropriate */
-		fetch_file_process_error(ctx,
-				fetch_file_errno_to_http_code(errno));
-		return;
-	}
-
-	/* set buffer size */
-	buf_size = fdstat->st_size;
-	if (buf_size > FETCH_FILE_MAX_BUF_SIZE)
-		buf_size = FETCH_FILE_MAX_BUF_SIZE;
-
-	/* allocate the buffer storage */
-	buf = malloc(buf_size);
-	if (buf == NULL) {
-		msg.type = FETCH_ERROR;
-		msg.data.error =
-			"Unable to allocate memory for file data buffer";
-		fetch_file_send_callback(&msg, ctx);
-		fclose(infile);
-		return;
-	}
-
-	/* fetch is going to be successful */
-	fetch_set_http_code(ctx->fetchh, 200);
-
-	/* Any callback can result in the fetch being aborted.
-	 * Therefore, we _must_ check for this after _every_ call to
-	 * fetch_file_send_callback().
-	 */
-
-	/* content type */
-	if (fetch_file_send_header(ctx, "Content-Type: %s", 
-				   guit->fetch->filetype(ctx->path))) {
-		goto fetch_file_process_aborted;
-	}
-
-	/* content length */
-	if (fetch_file_send_header(ctx, "Content-Length: %" PRIsizet,
-				   fdstat->st_size)) {
-		goto fetch_file_process_aborted;
-	}
-
-	/* create etag */
-	if (fetch_file_send_header(ctx, "ETag: \"%10" PRId64 "\"", 
-				   (int64_t) fdstat->st_mtime)) {
-		goto fetch_file_process_aborted;
-	}
-
-	/* main data loop */
-	while (tot_read < fdstat->st_size) {
-		res = fread(buf, 1, buf_size, infile);
-		if (res == 0) {
-			if (feof(infile)) {
-				msg.type = FETCH_ERROR;
-				msg.data.error = "Unexpected EOF reading file";
-				fetch_file_send_callback(&msg, ctx);
-				goto fetch_file_process_aborted;
-			} else {
-				msg.type = FETCH_ERROR;
-				msg.data.error = "Error reading file";
-				fetch_file_send_callback(&msg, ctx);
-				goto fetch_file_process_aborted;
-			}
-		}
-		tot_read += res;
-
+	if (size > 0) {
 		msg.type = FETCH_DATA;
-		msg.data.header_or_data.buf = (const uint8_t *) buf;
-		msg.data.header_or_data.len = res;
-		if (fetch_file_send_callback(&msg, ctx))
-			break;
+		msg.data.header_or_data.buf = (const uint8_t *)buf;
+		msg.data.header_or_data.len = size;
+		fetch_file_send_callback(&msg, ctx);
 	}
 
 	if (ctx->aborted == false) {
@@ -459,12 +344,7 @@ fetch_file_process_aborted:
 		fetch_file_send_callback(&msg, ctx);
 	}
 
-fetch_file_process_aborted:
-
-	fclose(infile);
 	free(buf);
-#endif
-	return;
 }
 
 static char *gen_nice_title(char *path)

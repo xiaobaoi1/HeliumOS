@@ -533,6 +533,21 @@ html_create_html_data(html_content *c, const http_parameter *params)
 		c->encoding_source = DOM_HUBBUB_ENCODING_SOURCE_HEADER;
 	}
 
+	/* HeliumOS file fetches carry no charset.  Start in UTF-8 so the
+	 * parser does not raise an encoding-change event on the first chunk.
+	 */
+	if (c->encoding == NULL) {
+		c->encoding = strdup("UTF-8");
+		if (c->encoding == NULL) {
+			lwc_string_unref(c->universal);
+			c->universal = NULL;
+			lwc_string_unref(c->media.prefers_color_scheme);
+			c->media.prefers_color_scheme = NULL;
+			return NSERROR_NOMEM;
+		}
+		c->encoding_source = DOM_HUBBUB_ENCODING_SOURCE_DETECTED;
+	}
+
 	/* Create the parser binding */
 	parse_params.enc = c->encoding;
 	parse_params.fix_enc = true;
@@ -661,7 +676,7 @@ html_process_encoding_change(struct content *c,
 	encoding = dom_hubbub_parser_get_encoding(html->parser,
 						  &html->encoding_source);
 	if (encoding == NULL) {
-		return NSERROR_NOMEM;
+		encoding = "UTF-8";
 	}
 
 	if (html->encoding != NULL) {
@@ -707,7 +722,6 @@ html_process_encoding_change(struct content *c,
 		error = dom_hubbub_parser_create(&parse_params,
 						 &html->parser,
 						 &html->document);
-
 		if (error != DOM_HUBBUB_OK) {
 			return libdom_hubbub_error_to_nserror(error);
 		}
@@ -905,10 +919,7 @@ html_begin_conversion(html_content *htmlc)
 		encoding = dom_hubbub_parser_get_encoding(htmlc->parser,
 					&htmlc->encoding_source);
 		if (encoding == NULL) {
-			content_broadcast_error(&htmlc->base,
-						NSERROR_NOMEM,
-						NULL);
-			return false;
+			encoding = "UTF-8";
 		}
 
 		htmlc->encoding = strdup(encoding);

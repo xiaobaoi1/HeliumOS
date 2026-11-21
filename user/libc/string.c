@@ -110,6 +110,24 @@ char *strstr(const char *haystack, const char *needle) {
     return NULL;
 }
 
+char *strcasestr(const char *haystack, const char *needle) {
+    if (!*needle) return (char*)haystack;
+    for (; *haystack; haystack++) {
+        const char *h = haystack;
+        const char *n = needle;
+        while (*h && *n) {
+            unsigned char ch = (unsigned char)*h;
+            unsigned char cn = (unsigned char)*n;
+            if (ch >= 'A' && ch <= 'Z') ch += 32;
+            if (cn >= 'A' && cn <= 'Z') cn += 32;
+            if (ch != cn) break;
+            h++; n++;
+        }
+        if (!*n) return (char*)haystack;
+    }
+    return NULL;
+}
+
 char *strdup(const char *s) {
     size_t n = strlen(s) + 1;
     char *p = (char*)malloc(n);

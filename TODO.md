@@ -204,3 +204,15 @@
 - H 前缀：加固项（防御 / 正确性 / 边界）
 - F 前缀：功能项（新能力）
 - 优先级：低 = 不主动做，遇到再做；中 = 到某规模前必做
+
+## 新增待办
+
+| 编号 | 项目 | 说明 | 状态 |
+|---|---|---|---|
+| INIT-1 | init 程序 | 增加第一个用户态 init/reaper：接管孤儿进程、回收僵尸、作为所有服务的父进程 | 待办 |
+| SYS-1 | 清理无用 syscall / 调试代码 | 清理未被使用的 syscall、调试用 `STREAM_STDERR/STDOUT` 串口输出和临时调试开关 | 待办 |
+
+说明：
+
+- `kernel/core/syscall.c` 中当前的 `if (stream == STREAM_STDERR || stream == STREAM_STDOUT) serial_write_nstring(...)` 属于临时调试代码，后续应删除或改为编译期开关。
+- `INIT-1` 完成后，shell/term/服务进程的退出和孤儿回收逻辑应改为依赖 init 进程。

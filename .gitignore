@@ -9,7 +9,11 @@ build/
 
 # 第三方库的本地构建产物
 third_party/**/build-*
-third_party/netsurf/netsurf/nsmonkey
+third_party/netsurf/nsmonkey
+
+# libparserutils / libhubbub 的 build/ 里放的是生成脚本和源数据，必须保留
+!third_party/netsurf/lib*/build/
+!third_party/netsurf/lib*/build/**
 
 # VS Code 本地配置（可选，如果你不想提交 .vscode 文件夹）
 .vscode/

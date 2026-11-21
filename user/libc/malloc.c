@@ -1,6 +1,7 @@
 #include "stdlib.h"
 #include "syscall.h"
 #include "string.h"
+#include <stdio.h>
 
 #define ALIGN_UP(x, a)  (((x) + ((a) - 1)) & ~((a) - 1))
 #define ALIGN_8(x)      ALIGN_UP((x), 8)
@@ -19,6 +20,7 @@ struct block {
 #define MMAP_THRESHOLD  (64 * 1024)
 
 static struct block *head = NULL;
+static size_t g_grow_size = 0;
 
 /* 扩展物理内存：brk 对齐到 4KB */
 static void *heap_grow(size_t need) {
@@ -30,28 +32,30 @@ static void *heap_grow(size_t need) {
 
     if (sys_brk(new_brk) != 0) return NULL;
 
+    g_grow_size = (size_t)(new_brk - cur);
     return (void*)cur;
 }
 
 void *malloc(size_t size) {
-    if (size == 0) return NULL;
+    if (size == 0) size = 1;   /* 避免零大小分配被部分调用方当成 OOM */
     size = ALIGN_8(size);
 
-    /* 大分配：走 mmap */
+    /* 大分配：优先 mmap；失败则回退到 brk */
     if (size >= MMAP_THRESHOLD) {
         size_t total = size + HEADER_SIZE;
         size_t map_size = (total + 4095) & ~4095u;
         unsigned int addr = sys_mmap(0, map_size,
                                  PROT_READ | PROT_WRITE,
                                  MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        if ((int)addr <= 0) return NULL;
-
-        struct block *b = (struct block*)addr;
-        b->size    = size;
-        b->free    = 0;
-        b->is_mmap = 1;
-        b->next    = NULL;
-        return (char*)b + HEADER_SIZE;
+        if ((int)addr > 0) {
+            struct block *b = (struct block*)addr;
+            b->size    = size;
+            b->free    = 0;
+            b->is_mmap = 1;
+            b->next    = NULL;
+            return (char*)b + HEADER_SIZE;
+        }
+        fprintf(stderr, "MALLOC mmap fail size=%u, fallback brk\n", (unsigned)size);
     }
 
     /* 小分配：走 brk */
@@ -59,7 +63,7 @@ void *malloc(size_t size) {
         void *p = heap_grow(sizeof(struct block) + size + 4096);
         if (!p) return NULL;
         head = (struct block*)p;
-        head->size    = 4096;
+        head->size    = g_grow_size - HEADER_SIZE;
         head->free    = 1;
         head->is_mmap = 0;
         head->next    = NULL;
@@ -82,10 +86,13 @@ void *malloc(size_t size) {
     }
 
     void *p = heap_grow(HEADER_SIZE + size);
-    if (!p) return NULL;
+    if (!p) {
+        fprintf(stderr, "MALLOC brk fail size=%u\n", (unsigned)size);
+        return NULL;
+    }
 
     struct block *nb = (struct block*)p;
-    nb->size    = size;
+    nb->size    = g_grow_size - HEADER_SIZE;
     nb->free    = 0;
     nb->is_mmap = 0;
     nb->next    = head;

@@ -699,6 +699,7 @@ html_css_new_selection_context(html_content *c, css_select_ctx **ret_select_ctx)
 							      sheet,
 							      origin,
 							      "screen");
+
 			if (css_ret != CSS_OK) {
 				css_select_ctx_destroy(select_ctx);
 				return css_error_to_nserror(css_ret);

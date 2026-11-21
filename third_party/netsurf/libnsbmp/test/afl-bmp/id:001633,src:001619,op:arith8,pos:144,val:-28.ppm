@@ -1,0 +1,6 @@
+P3
+# test/afl-bmp/id:001633,src:001619,op:arith8,pos:144,val:-28.bmp
+# width                1 
+# height               1 
+1 1 256
+51 51 51 

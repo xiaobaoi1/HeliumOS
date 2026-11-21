@@ -1,0 +1,7 @@
+name: "Build"
+
+on: [push]
+
+jobs:
+  build:
+    uses: netsurf-browser/ci-tools/.github/workflows/library-build.yaml@master
