@@ -226,6 +226,8 @@ static void html_box_convert_done(html_content *c, bool success)
 	/* Clean up and report error if unsuccessful or aborted */
 	if ((success == false) || (c->aborted)) {
 		html_object_free_objects(c);
+		fprintf(stderr, "HTML: box_convert_done success=%d aborted=%d\n", success, c->aborted);
+
 
 		if (success == false) {
 			content_broadcast_error(&c->base, NSERROR_BOX_CONVERT, NULL);
@@ -403,7 +405,11 @@ void html_finish_conversion(html_content *htmlc)
 
 	html_get_dimensions(htmlc);
 
+	fprintf(stderr, "HTML: dom_to_box begin\n");
+
 	error = dom_to_box(html, htmlc, html_box_convert_done, &htmlc->box_conversion_context);
+	fprintf(stderr, "HTML: dom_to_box ret=%d\n", error);
+
 	if (error != NSERROR_OK) {
 		NSLOG(netsurf, INFO, "box conversion failed");
 		dom_node_unref(html);
