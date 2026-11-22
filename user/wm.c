@@ -79,6 +79,7 @@ static void blit_back_to_fb(int x0, int y0, int x1, int y1) {
 #define CTRL_BTN_MARGIN  4
 
 struct window {
+    uint32_t id;                    /* 稳定窗口 ID，不复用 slot 编号 */
     int used;
     int kind;
     int x, y, w, h;
@@ -117,6 +118,8 @@ static int g_tab_seq = 1;
 #define TAB_GAP 2
 static struct window g_wins[MAX_WINDOWS];
 static int g_next_z = 1;
+static uint32_t g_next_win_id = 1;
+#define WM_EVENT_PIPE_CAP 4096
 static struct window *g_mouse_entered = NULL;
 
 static struct window *g_mouse_down_win[3] = { NULL, NULL, NULL };
@@ -144,6 +147,8 @@ static void send_event(struct window *w, uint32_t type, uint32_t code,
     if (!w || w->event_w < 0) return;
 
     if (type == WM_EV_MOUSE_MOVE && pipe_avail(w->event_w) > 512)
+        return;
+    if (pipe_avail(w->event_w) + (int)sizeof(struct wm_event) > WM_EVENT_PIPE_CAP)
         return;
 
     struct wm_event ev;
@@ -670,13 +675,15 @@ static void push_window_list(void) {
     for (int i = 0; i < n; i++) {
         struct window *w = ordered[i];
         struct wm_window_entry *e = (struct wm_window_entry*)(buf + off);
-        e->id = (uint32_t)(w - g_wins);
+        e->id = w->id;
         e->minimized = (uint32_t)w->minimized;
         memset(e->title, 0, 32);
         strncpy(e->title, w->title, 31);
         off += sizeof(struct wm_window_entry);
     }
 
+    /* dock 不读时不要阻塞 WM；下一次窗口变化会重新推送完整列表。 */
+    if (pipe_avail(dock->event_w) + off > WM_EVENT_PIPE_CAP) return;
     pipe_write(dock->event_w, buf, off);
 }
 
@@ -819,6 +826,8 @@ static struct window *make_app_window(struct wm_request *req) {
 
     struct window *w = &g_wins[slot];
     memset(w, 0, sizeof(*w));
+    w->id = g_next_win_id++;
+    if (g_next_win_id == 0) g_next_win_id = 1;
     w->used = 1;
     w->kind = req->kind;
     w->cw = req->w;
@@ -1457,9 +1466,14 @@ static void handle_inbox(void) {
             if (pipe_avail(g_inbox_rd) < rem) break;
             if (pipe_read(g_inbox_rd, (char*)&req + 8, rem) != rem) break;
 
-            if (req.win_id >= MAX_WINDOWS) continue;
-            struct window *w = &g_wins[req.win_id];
-            if (!w->used || w->kind != WM_KIND_NORMAL) continue;
+            struct window *w = NULL;
+            for (int i = 0; i < MAX_WINDOWS; i++) {
+                if (g_wins[i].used && g_wins[i].id == req.win_id) {
+                    w = &g_wins[i];
+                    break;
+                }
+            }
+            if (!w || w->kind != WM_KIND_NORMAL) continue;
 
             /* tab 组内部只有一个 tab 是可见的。任务栏里的 tab 条目
              * 必须走 activate_tab：否则 restore 只显示目标 tab，

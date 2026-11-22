@@ -234,12 +234,12 @@
 
 ### 后续批次
 
-- [ ] U2：PTY master 的 slave EOF 检测
-- [ ] U3：WM `push_window_list` / `send_event` 的 pipe 满保护
+- [x] U2：PTY master 的 slave EOF 检测
+- [x] U3：WM `push_window_list` / `send_event` 的 pipe 满保护
 - [ ] U5/U6：桌面图标和文字绘制的 `ph` 边界检查
 - [ ] U7：shm counter 的 i386 原子性
 - [ ] U8：`toggle_safeguard` 关闭右键菜单
-- [ ] U9：稳定窗口 ID，避免 slot 复用误操作
+- [x] U9：稳定窗口 ID，避免 slot 复用误操作
 - [ ] U12：resize 失败路径的 shm 清理/ack
 - [ ] K1/K2：TCP 流控和 accept 队列泄漏
 - [ ] K6：`kfree` double-free 检测（加固，暂缓）
