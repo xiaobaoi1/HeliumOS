@@ -578,6 +578,26 @@ static void dynarray_split(char ***argv, int *argc, const char *p, int sep)
     }
 }
 
+/* HeliumOS 的绝对路径形如 "SYS:/LIB"：卷名后的 ':' 属于路径本身，
+ * 而不是 Unix 的路径列表分隔符。仅对全大写/数字/下划线组成的卷名生效，
+ * 避免把普通 "-I/usr:/opt" 中的 ':' 误当成卷名分隔符。 */
+static int is_volume_colon(const char *base, const char *p)
+{
+    const char *q = p;
+    if (p == base)
+        return 0;
+    while (q > base && q[-1] != PATHSEP[0])
+        --q;
+    if (q == p)
+        return 0;
+    for (; q < p; ++q) {
+        if (!((*q >= 'A' && *q <= 'Z') ||
+              (*q >= '0' && *q <= '9') || *q == '_'))
+            return 0;
+    }
+    return 1;
+}
+
 static void tcc_split_path(TCCState *s, void *p_ary, int *p_nb_ary, const char *in)
 {
     const char *p;
@@ -586,10 +606,9 @@ static void tcc_split_path(TCCState *s, void *p_ary, int *p_nb_ary, const char *
         CString str;
 
         cstr_new(&str);
-        /* HeliumOS 使用 "SYS:/LIB" 形式的卷路径；不要把卷名后的 ':' 当作
-         * 路径列表分隔符。只有 ':' 后面不是路径分隔符时才拆分。 */
         for (p = in; c = *p, c != '\0' &&
-             (c != PATHSEP[0] || p[1] == '/' || p[1] == '\\'); ++p) {
+             (c != PATHSEP[0] || ((p[1] == '/' || p[1] == '\\')
+                                  && is_volume_colon(in, p))); ++p) {
             if (c == '{' && p[1] && p[2] == '}') {
                 c = p[1], p += 2;
                 if (c == 'B')
