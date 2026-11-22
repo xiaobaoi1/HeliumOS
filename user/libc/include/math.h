@@ -60,5 +60,11 @@ double exp(double x);
 double log(double x);
 double log10(double x);
 double pow(double x, double y);
+double ldexp(double x, int exp);
+double frexp(double x, int *exp);
+
+/* TinyCC 常量解析使用；HeliumOS 的 long double 按 double 处理。 */
+long double ldexpl(long double x, int exp);
+long double frexpl(long double x, int *exp);
 
 #endif

@@ -5,6 +5,8 @@
 #define RTLD_NOW    0x00002
 #define RTLD_GLOBAL 0x00100
 #define RTLD_LOCAL  0x00000
+#define RTLD_DEFAULT ((void *)0)
+#define RTLD_NEXT    ((void *)-1)
 
 void *dlopen(const char *path, int mode);
 void *dlsym(void *handle, const char *name);

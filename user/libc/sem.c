@@ -1,4 +1,4 @@
-typedef int sem_t;
+#include <semaphore.h>
 
 int sem_init(sem_t *sem, int pshared, unsigned int value) {
     (void)pshared; (void)value;

@@ -36,6 +36,8 @@ typedef int pid_t;
 #define X_OK 1
 #define F_OK 0
 
+extern char **environ;
+
 #ifndef AT_SYMLINK_NOFOLLOW
 #define AT_SYMLINK_NOFOLLOW 0x100
 #endif
@@ -57,6 +59,7 @@ int     rmdir(const char *path);
 int     unlink(const char *pathname);
 int     unlinkat(int dirfd, const char *pathname, int flags);
 int     chdir(const char *path);
+int     execvp(const char *file, char *const argv[]);
 char   *getcwd(char *buf, size_t size);
 
 long    pread(int fd, void *buf, size_t count, unsigned int offset);

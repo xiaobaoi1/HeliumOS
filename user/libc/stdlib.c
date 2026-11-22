@@ -111,9 +111,6 @@ float strtof(const char *nptr, char **endptr) {
 long double strtold(const char *nptr, char **endptr) {
     return (long double)strtod(nptr, endptr);
 }
-long double ldexpl(long double x, int exp) {
-    return x; /* 简易兜底 */
-}
 
 unsigned long __isoc23_strtoul(const char *s, char **endptr, int base) {
     return strtoul(s, endptr, base);
