@@ -1,5 +1,6 @@
 /* wm — 窗口管理器（Desktop 版） */
 #include "syscall.h"
+#include "errno.h"
 #include "stdio.h"
 #include "string.h"
 #include <stdint.h>
@@ -110,7 +111,41 @@ struct window {
     uint32_t cursor;
     uint32_t alpha;                     /* 0/255 = 不透明；否则按字节 alpha 混合 */
     int tab_seq;                        /* 同组 tab 顺序号，越小越靠左 */
+    char ev_name[16];                   /* WM 重启后重新打开 event pipe */
 };
+
+/* ---------- WM 状态快照（跨 WM 进程重启） ---------- */
+
+#define WM_STATE_NAME   "wm-state"
+#define WM_STATE_MAGIC  0x574D5354u
+#define WM_STATE_VERSION 1u
+
+struct wm_state_entry {
+    uint32_t used;
+    uint32_t id;
+    uint32_t kind;
+    int32_t  x, y, w, h;
+    int32_t  cw, ch;
+    uint32_t owner_pid;
+    uint32_t minimized;
+    uint32_t maximized;
+    uint32_t z;
+    uint32_t cursor;
+    uint32_t alpha;
+    int32_t  tab_seq;
+    char     shm_name[16];
+    char     ev_name[16];
+    char     title[32];
+};
+
+struct wm_state {
+    uint32_t magic;
+    uint32_t version;
+    uint32_t count;
+    struct wm_state_entry entries[MAX_WINDOWS];
+};
+
+static struct wm_state *g_wm_state = NULL;
 
 static int g_inbox_rd = -1;
 static int g_tab_seq = 1;
@@ -639,6 +674,141 @@ static int dock_height(void) {
     return dock ? dock->h : 0;
 }
 
+/* ==================== WM 状态快照 ==================== */
+
+static void wm_state_save(void) {
+    struct wm_state *s = g_wm_state;
+    if (!s || s->magic != WM_STATE_MAGIC ||
+        s->version != WM_STATE_VERSION) return;
+
+    uint32_t count = 0;
+    for (int i = 0; i < MAX_WINDOWS; i++) {
+        struct window *w = &g_wins[i];
+        if (!w->used || w->kind == WM_KIND_POPUP) continue;
+        struct wm_state_entry *e = &s->entries[count++];
+        memset(e, 0, sizeof(*e));
+        e->used      = 1;
+        e->id        = w->id;
+        e->kind      = (uint32_t)w->kind;
+        e->x         = w->x; e->y = w->y;
+        e->w         = w->w; e->h = w->h;
+        e->cw        = w->cw; e->ch = w->ch;
+        e->owner_pid = (uint32_t)w->owner_pid;
+        e->minimized = (uint32_t)w->minimized;
+        e->maximized = (uint32_t)w->maximized;
+        e->z         = (uint32_t)w->z;
+        e->cursor    = w->cursor;
+        e->alpha     = w->alpha;
+        e->tab_seq   = w->tab_seq;
+        strncpy(e->shm_name, w->shm_name, sizeof(e->shm_name) - 1);
+        strncpy(e->ev_name, w->ev_name, sizeof(e->ev_name) - 1);
+        strncpy(e->title, w->title, sizeof(e->title) - 1);
+    }
+    s->count = count;
+}
+
+static void wm_state_restore(void) {
+    struct wm_state *s = g_wm_state;
+    if (!s || s->magic != WM_STATE_MAGIC ||
+        s->version != WM_STATE_VERSION) return;
+
+    int max_z = 0;
+    uint32_t max_id = 0;
+    int max_seq = 0;
+
+    for (uint32_t i = 0; i < s->count && i < MAX_WINDOWS; i++) {
+        struct wm_state_entry *e = &s->entries[i];
+        if (!e->used || e->kind == WM_KIND_POPUP) continue;
+        if (e->owner_pid == 0 || e->shm_name[0] == '\0' ||
+            e->ev_name[0] == '\0' || e->cw <= 0 || e->ch <= 0) continue;
+
+        /* 客户端已经退出就不要恢复窗口。 */
+        struct proc_info pi;
+        if (proc_query(e->owner_pid, &pi) != OK) continue;
+
+        int slot = -1;
+        for (int j = 0; j < MAX_WINDOWS; j++)
+            if (!g_wins[j].used) { slot = j; break; }
+        if (slot < 0) break;
+
+        int shm_size = shm_total_size(e->cw, e->ch);
+        int shm_id = sys_shm_open(e->shm_name, shm_size, 0);
+        if (shm_id < 0) continue;
+        unsigned int addr = sys_mmap(0, shm_size,
+                                 PROT_READ | PROT_WRITE,
+                                 MAP_SHARED, shm_id, 0);
+        if ((int)addr <= 0) continue;
+
+        int ev_w = pipe_open(e->ev_name, 1);
+        if (ev_w < 0) {
+            sys_munmap(addr, shm_size);
+            continue;
+        }
+
+        struct window *w = &g_wins[slot];
+        memset(w, 0, sizeof(*w));
+        w->id        = e->id;
+        w->used      = 1;
+        w->kind      = (int)e->kind;
+        w->x         = e->x; w->y = e->y;
+        w->w         = e->w; w->h = e->h;
+        w->cw        = e->cw; w->ch = e->ch;
+        w->owner_pid = (int)e->owner_pid;
+        w->minimized = (int)e->minimized;
+        w->maximized = (int)e->maximized;
+        w->z         = (int)e->z;
+        w->cursor    = e->cursor;
+        w->alpha     = e->alpha;
+        w->tab_seq   = e->tab_seq;
+        strncpy(w->shm_name, e->shm_name, sizeof(w->shm_name) - 1);
+        strncpy(w->ev_name, e->ev_name, sizeof(w->ev_name) - 1);
+        strncpy(w->title, e->title, sizeof(w->title) - 1);
+        w->event_w = ev_w;
+        w->shm_idx = shm_id;
+        w->map_addr = addr;
+        w->map_size = shm_size;
+        w->shm = (struct shm_hdr*)addr;
+        w->counter = &w->shm->counter;
+        w->pixels = (unsigned int*)(addr + SHM_HDR_SIZE);
+        w->last_seen = 0;
+
+        if (w->z > max_z) max_z = w->z;
+        if (w->id > max_id) max_id = w->id;
+        if (w->tab_seq > max_seq) max_seq = w->tab_seq;
+    }
+
+    g_next_z = max_z + 1;
+    g_next_win_id = max_id + 1;
+    if (g_next_win_id == 0) g_next_win_id = 1;
+    g_tab_seq = max_seq + 1;
+
+    g_focus = NULL;
+    for (int i = 0; i < MAX_WINDOWS; i++) {
+        struct window *w = &g_wins[i];
+        if (!w->used || w->kind != WM_KIND_NORMAL || w->minimized) continue;
+        if (!g_focus || w->z > g_focus->z) g_focus = w;
+    }
+}
+
+static void wm_state_init(void) {
+    int shm_id = sys_shm_open(WM_STATE_NAME, sizeof(struct wm_state), 0);
+    if (shm_id < 0) return;
+    unsigned int addr = sys_mmap(0, sizeof(struct wm_state),
+                             PROT_READ | PROT_WRITE,
+                             MAP_SHARED, shm_id, 0);
+    if ((int)addr <= 0) return;
+
+    g_wm_state = (struct wm_state*)addr;
+    if (g_wm_state->magic != WM_STATE_MAGIC ||
+        g_wm_state->version != WM_STATE_VERSION) {
+        memset(g_wm_state, 0, sizeof(struct wm_state));
+        g_wm_state->magic = WM_STATE_MAGIC;
+        g_wm_state->version = WM_STATE_VERSION;
+    } else {
+        wm_state_restore();
+    }
+}
+
 /* ==================== 窗口列表推送 ==================== */
 
 static void push_window_list(void) {
@@ -662,6 +832,8 @@ static void push_window_list(void) {
         n++;
     }
     if (n > MAX_WINDOWS) n = MAX_WINDOWS;
+
+    wm_state_save();
 
     uint8_t buf[sizeof(struct wm_event) + MAX_WINDOWS * sizeof(struct wm_window_entry)];
     struct wm_event *ev = (struct wm_event*)buf;
@@ -844,6 +1016,7 @@ static struct window *make_app_window(struct wm_request *req) {
     w->alpha = 255;
     strncpy(w->title, req->title, sizeof(w->title) - 1);
     strncpy(w->shm_name, req->shm_name, sizeof(w->shm_name) - 1);
+    strncpy(w->ev_name, req->ev_name, sizeof(w->ev_name) - 1);
     w->tab_seq = g_tab_seq++;
 
     if (req->kind == WM_KIND_NORMAL) {
@@ -1144,6 +1317,7 @@ static void handle_resize_request(struct wm_resize_request *req) {
     mouse_restore();
     redraw_region(ux0, uy0, ux1, uy1);
     mouse_draw();
+    wm_state_save();
 }
 
 static void cleanup_dead_windows(void) {
@@ -1521,6 +1695,7 @@ static void handle_inbox(void) {
             struct window *w = find_by_shm(req.shm_name);
             if (w && w->owner_pid == (int)req.owner_pid) {
                 w->alpha = req.alpha > 255 ? 255 : req.alpha;
+                wm_state_save();
                 int x0, y0, x1, y1;
                 win_bbox(w, &x0, &y0, &x1, &y1);
                 mouse_restore();
@@ -1580,18 +1755,25 @@ int main(int argc, char **argv) {
     fill_rect_buf(g_back, 0, 0, g_W, g_H, COL_BG);
     reset_clip();
 
-    pipe_unlink(WM_INBOX_NAME);
-    int inbox_fds[2];
-    if (pipe_named(WM_INBOX_NAME, inbox_fds) < 0) {
-        printf("wm: wm-inbox create failed\n");
-        return 1;
+    /* WM 重启时优先复用旧 inbox pipe：已有客户端的 write handle
+     * 仍然有效，不需要重新注册。只有 pipe 不存在时才新建。 */
+    g_inbox_rd = pipe_open(WM_INBOX_NAME, 0);
+    if (g_inbox_rd < 0) {
+        pipe_unlink(WM_INBOX_NAME);
+        int inbox_fds[2];
+        if (pipe_named(WM_INBOX_NAME, inbox_fds) < 0) {
+            printf("wm: wm-inbox create failed\n");
+            return 1;
+        }
+        g_inbox_rd = inbox_fds[0];
+        pipe_close(inbox_fds[1]);
     }
-    g_inbox_rd = inbox_fds[0];
-    pipe_close(inbox_fds[1]);
 
     wm_font_load();
+    wm_state_init();
 
     blit_back_to_fb(0, 0, g_W, g_H);
+    redraw_region(0, 0, g_W, g_H);
     mouse_x = g_W / 2;
     mouse_y = g_H / 2;
     mouse_draw();
