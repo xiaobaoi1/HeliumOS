@@ -6,6 +6,7 @@
 #include "stdio.h"
 #include "stdlib.h"
 #include "string.h"
+#include "signal.h"
 #include "wm_proto.h"
 #include "shm_layout.h"
 #include "methylui/mui_surface.h"
@@ -896,16 +897,6 @@ static void term_spawn_tab(void) {
     if (pipe_named(ev, fds) < 0) return;
     pipe_close(fds[0]); pipe_close(fds[1]);
 
-    struct wm_request req;
-    memset(&req, 0, sizeof(req));
-    req.magic = WM_MAGIC; req.type = WM_REQ_CREATE; req.kind = WM_KIND_NORMAL;
-    req.x = 200; req.y = 100; req.w = g_cw; req.h = g_ch;
-    req.owner_pid = proc_getpid();
-    strncpy(req.shm_name, shm, sizeof(req.shm_name) - 1);
-    strncpy(req.ev_name, ev, sizeof(req.ev_name) - 1);
-    strncpy(req.title, "Terminal", sizeof(req.title) - 1);
-    if (pipe_write(g_inbox_w, &req, sizeof(req)) != sizeof(req)) return;
-
     snprintf(wbuf, sizeof(wbuf), "%d", g_cw);
     snprintf(hbuf, sizeof(hbuf), "%d", g_ch);
     char *argv[] = { "TERM", shm, wbuf, hbuf, ev, NULL };
@@ -916,7 +907,35 @@ static void term_spawn_tab(void) {
         .in_pty = -1, .out_pty = -1, .err_pty = -1,
         .flags = 0, .envp = 0, .out_pid = 0,
     };
-    proc_spawn("TERM", argv, &sp);
+
+    /* 先 spawn 子 TERM，拿到它真正的 pid，再把 owner_pid 填进
+     * WM_REQ_CREATE。否则子 tab 的窗口 owner 会指向“父 TERM”，
+     * 父 TERM 一退出，cleanup_dead_windows() 会把子 tab 窗口一起销毁。 */
+    int h = proc_spawn("TERM", argv, &sp);
+    if (h < 0) {
+        sys_shm_unlink(shm);
+        pipe_unlink(ev);
+        return;
+    }
+
+    struct wm_request req;
+    memset(&req, 0, sizeof(req));
+    req.magic = WM_MAGIC; req.type = WM_REQ_CREATE; req.kind = WM_KIND_NORMAL;
+    req.x = 200; req.y = 100; req.w = g_cw; req.h = g_ch;
+    req.owner_pid = sp.out_pid ? sp.out_pid : proc_getpid();
+    strncpy(req.shm_name, shm, sizeof(req.shm_name) - 1);
+    strncpy(req.ev_name, ev, sizeof(req.ev_name) - 1);
+    strncpy(req.title, "Terminal", sizeof(req.title) - 1);
+    if (pipe_write(g_inbox_w, &req, sizeof(req)) != sizeof(req)) {
+        int ph = proc_open(sp.out_pid, PROC_TERMINATE);
+        if (ph >= 0) {
+            proc_kill(ph, SIGTERM);
+            proc_close(ph);
+        }
+        sys_shm_unlink(shm);
+        pipe_unlink(ev);
+        return;
+    }
 }
 
 /* ---------- main ---------- */

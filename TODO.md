@@ -222,6 +222,7 @@
 - [x] U17：任务栏点击 tab 条目改为 `activate_tab`，避免多个 tab 叠放/整组消失
 - [x] U18：任务栏窗口列表按 `tab_seq` 排序，修复 tab2/tab1/tab3 顺序错乱
 - [x] U19：关闭 tab 时仅在关闭当前 tab 后切换剩余 tab，避免误切换/整组消失
+- [x] U20：新建 tab 的 WM owner_pid 改为子 TERM pid，避免父 TERM 退出时 cleanup 误删后续 tab
 
 ### 后续批次
 
