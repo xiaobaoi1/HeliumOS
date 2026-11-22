@@ -32,17 +32,14 @@ int main(int argc, char **argv) {
     if (w) snprintf(screen_w, sizeof(screen_w), "SCREEN_W=%s", w);
     if (h) snprintf(screen_h, sizeof(screen_h), "SCREEN_H=%s", h);
     char *desk_env[] = { screen_w, screen_h, NULL };
-    char *shell_env[] = { "PATH=SYS:/", "HOME=SYS:/", "TERM=helium", NULL };
 
     char *wm_argv[] = { "WM", NULL };
     char *desk_argv[] = { "DESKTOP", NULL };
     char *dhcp_argv[] = { "DHCPCLIENT", NULL };
-    char *shell_argv[] = { "SHELL", NULL };
 
     int wm_h = -1;
     int desk_h = -1;
     int dhcp_h = -1;
-    int shell_h = -1;
 
     /* WM 必须先启动并 claim fb/input。 */
     wm_h = spawn_service("SYS:/WM", wm_argv, NULL,
@@ -59,10 +56,8 @@ int main(int argc, char **argv) {
                            CLASS_SERVICE, 0);
     dprintf(2, "init: DHCP client handle=%d\n", dhcp_h);
 
-    /* 保留一个默认 TTY 上的 shell；桌面终端仍可另行打开。 */
-    shell_h = spawn_service("SYS:/SHELL", shell_argv, shell_env,
-                            CLASS_USER, 0);
-    dprintf(2, "init: SHELL handle=%d\n", shell_h);
+    /* 默认 TTY 上没有 PTY 行规程，直接跑 SHELL 会立即 EOF；
+     * Terminal 由桌面启动，这里不再启动裸 shell。 */
 
     /* init 作为 PID 1：服务退出后重新拉起，避免桌面/终端永久消失。 */
     for (;;) {
@@ -81,15 +76,8 @@ int main(int argc, char **argv) {
         }
         if (dhcp_h >= 0 && proc_wait(dhcp_h, &status, 5) == OK) {
             proc_close(dhcp_h);
-            dprintf(2, "init: DHCP exited status=%d, restart\n", status);
-            dhcp_h = spawn_service("SYS:/DHCPCLIENT", dhcp_argv, NULL,
-                                   CLASS_SERVICE, 0);
-        }
-        if (shell_h >= 0 && proc_wait(shell_h, &status, 5) == OK) {
-            proc_close(shell_h);
-            dprintf(2, "init: SHELL exited status=%d, restart\n", status);
-            shell_h = spawn_service("SYS:/SHELL", shell_argv, shell_env,
-                                    CLASS_USER, 0);
+            dprintf(2, "init: DHCP exited status=%d (not restarted)\n", status);
+            dhcp_h = -1;
         }
         sys_sleep_ms(50);
     }
