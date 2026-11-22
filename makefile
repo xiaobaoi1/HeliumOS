@@ -138,7 +138,7 @@ SEVENZ_NAMES := 7zAlloc 7zArcIn 7zBuf 7zBuf2 7zCrc 7zCrcOpt 7zDec 7zFile 7zStrea
                 LzmaEnc LzFind
 SEVENZ_OBJS := $(addprefix $(BUILD_DIR)/7zip/,$(addsuffix .o,$(SEVENZ_NAMES)))
 
-USER_APPS = shell idle test testkill sleeper argtest test_write \
+USER_APPS = init shell idle test testkill sleeper argtest test_write \
             test_fault test_env count methylate cat echo head tail wc \
             test_mmap test_stack ping test_dns nc tcpserver \
             test_input test_pty wm term test_namedpipe test_perm \

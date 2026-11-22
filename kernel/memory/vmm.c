@@ -2,6 +2,7 @@
 #include <pmm.h>
 #include <printf.h>
 #include <stddef.h>
+#include <vma.h>
 
 /* 取消注释可打开 VMM 映射调试日志 */
 // #define DEBUG_VMM
@@ -137,16 +138,25 @@ uint32_t vmm_get_phys(uint32_t *pgd, uint32_t virt) {
 }
 
 
-void vmm_free_process_address_space(uint32_t *pgd) {
+static int page_is_shared(struct vma *vma_list, uint32_t page) {
+    for (struct vma *v = vma_list; v; v = v->next) {
+        if (page < v->start || page >= v->end) continue;
+        if (v->shm || v->filemap) return 1;
+    }
+    return 0;
+}
+
+void vmm_free_process_address_space(uint32_t *pgd, struct vma *vma_list) {
     if (!pgd) return;
     for (int i = KERNEL_PDE_COUNT; i < 1024; i++) {
         if (pgd[i] & PTE_PRESENT) {
             uint32_t pt_phys = pgd[i] & 0xFFFFF000;
             uint32_t *pt = (uint32_t*)pt_phys;
             for (int j = 0; j < 1024; j++) {
-                if (pt[j] & PTE_PRESENT) {
-                    pmm_free_page(pt[j] & 0xFFFFF000);
-                }
+                if (!(pt[j] & PTE_PRESENT)) continue;
+                uint32_t page = (uint32_t)i * 0x400000u + (uint32_t)j * 0x1000u;
+                if (page_is_shared(vma_list, page)) continue;
+                pmm_free_page(pt[j] & 0xFFFFF000);
             }
             pmm_free_page(pt_phys);
         }

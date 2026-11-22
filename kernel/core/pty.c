@@ -33,6 +33,7 @@ struct pty_pair {
     uint32_t fg_pid;    /* HeliumOS：用 pid 而非 pgid */
 
     int refcount;
+    int slave_refs;     /* 当前打开的 slave handle 数量（master EOF 判断） */
     int eof_pending;
 };
 
@@ -301,6 +302,9 @@ static int pty_read_master(struct pty_pair *p, uint8_t *buf, uint32_t n) {
             return got;
         }
 
+        /* slave 全部关闭且 to_master 已空：master 看到 EOF，不能继续阻塞。 */
+        if (p->slave_refs == 0) return EIO;
+
         struct task *cur = get_current_task();
         if (!cur) return EINVAL;
         if (cur->pending_signals & ~cur->blocked_signals) return EINTR;
@@ -332,6 +336,7 @@ static int handle_alloc(struct task *t, struct pty_pair *p, int type) {
             t->pty_handles[i].type = type;
             t->pty_handles[i].pair = p;
             p->refcount++;
+            if (type == PTY_SLAVE) p->slave_refs++;
             return i;
         }
     }
@@ -343,10 +348,12 @@ static void handle_close(struct task *t, int h) {
     if (!t->pty_handles[h].used) return;
 
     struct pty_pair *p = t->pty_handles[h].pair;
+    int was_slave = (t->pty_handles[h].type == PTY_SLAVE);
     t->pty_handles[h].used = 0;
     t->pty_handles[h].pair = NULL;
 
     if (p) {
+        if (was_slave && p->slave_refs > 0) p->slave_refs--;
         wake_master(p);
         wake_slave(p);
         /* 唤醒等写的 */
@@ -507,10 +514,12 @@ int sys_pty_avail(int h) {
     struct pty_pair *p = cur->pty_handles[h].pair;
     if (!p) return EINVAL;
 
-    if (cur->pty_handles[h].type == PTY_MASTER)
-        return (int)buf_count(p->tm_head, p->tm_tail);
-    else
-        return (int)buf_count(p->ts_head, p->ts_tail);
+    if (cur->pty_handles[h].type == PTY_MASTER) {
+        int n = (int)buf_count(p->tm_head, p->tm_tail);
+        if (n == 0 && p->slave_refs == 0) return EIO;
+        return n;
+    }
+    return (int)buf_count(p->ts_head, p->ts_tail);
 }
 
 int sys_pty_set_winsize(int h, uint16_t cols, uint16_t rows) {

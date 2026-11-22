@@ -18,7 +18,7 @@ static unsigned int gfx_lerp(unsigned int a, unsigned int b, int t, int max) {
     return (r << 16) | (g << 8) | bl;
 }
 
-static void gfx_draw_text(unsigned int *pixels, int pw, int px, int py,
+static void gfx_draw_text(unsigned int *pixels, int pw, int ph, int px, int py,
                           const char *s, unsigned int fg, unsigned int bg) {
     int transparent = (bg == GFX_BG_TRANSPARENT);
 
@@ -36,7 +36,7 @@ static void gfx_draw_text(unsigned int *pixels, int pw, int px, int py,
         for (int r = 0; r < 16; r++) {
             for (int j = 0; j < gw; j++) {
                 int x = px + j, y = py + r;
-                if (x < 0 || x >= pw) continue;
+                if (x < 0 || x >= pw || y < 0 || y >= ph) continue;
                 int bit;
                 if (gw == 16) bit = g ? (g[r * 2 + (j >> 3)] & (0x80 >> (j & 7))) : 0;
                 else          bit = g ? (g[r] & (0x80 >> j)) : 0;

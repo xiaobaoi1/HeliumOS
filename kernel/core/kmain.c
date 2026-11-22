@@ -46,13 +46,6 @@
 #include <string.h>
 
 
-static const char *shell_env[] = {
-    "PATH=SYS:/",
-    "HOME=SYS:/",
-    "TERM=helium",
-    NULL,
-};
-
 /* ---------- 内部辅助：从一个 ELF 路径创建进程 ---------- */
 
 static struct task *create_task_from_elf(struct fat32_volume *vol,
@@ -98,6 +91,23 @@ static struct task *create_task_from_elf(struct fat32_volume *vol,
     }
 
     return task;
+}
+
+/* ---------- 创建用户态 /INIT（PID 1） ---------- */
+
+void create_init_task(struct fat32_volume *vol) {
+    struct fb_info *fb = fb_get();
+    char env_w[32], env_h[32];
+    snprintf(env_w, sizeof(env_w), "SCREEN_W=%u", fb ? fb->width : 1024);
+    snprintf(env_h, sizeof(env_h), "SCREEN_H=%u", fb ? fb->height : 768);
+    char *init_env[] = { env_w, env_h, NULL };
+
+    struct task *task = create_task_from_elf(vol, "/INIT", 2, init_env,
+                                             CLASS_KERNEL, CAP_ALL);
+    if (!task) {
+        panic("cannot create init task");
+    }
+    kprintf("[KERNEL] INIT task created (pid=%d)\n", task->pid);
 }
 
 /* ---------- 创建 IDLE 进程 ---------- */
@@ -153,6 +163,7 @@ void create_desktop_task(struct fat32_volume *vol) {
 
 
 void kmain(uint32_t magic, uint32_t addr) {
+    (void)magic;
     dev_init();
     irq_init();
     serial_init();
@@ -254,12 +265,9 @@ void kmain(uint32_t magic, uint32_t addr) {
 
     mouse_init();
 
+    /* PID 1 是用户态 init；WM/DESKTOP/DHCP/SHELL 由 init 启动。 */
+    create_init_task(sys_vol);
     create_idle_task(sys_vol);
-    create_wm_task(sys_vol);
-
-    create_dhcp_task(sys_vol);
-    
-    create_desktop_task(sys_vol);
 
     kprintf("[KERNEL] Processes created. Starting scheduler...\n");
 
