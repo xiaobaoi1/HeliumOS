@@ -1,4 +1,5 @@
 #include "syscall.h"
+#include "signal.h"
 #include "stdio.h"
 #include "string.h"
 #include "stdlib.h"
@@ -2739,15 +2740,6 @@ static void spawn_term_argv(int cw, int ch, int x, int y,
     if (pipe_named(ev_name, fds) < 0) return;
     pipe_close(fds[0]); pipe_close(fds[1]);
 
-    struct wm_request req;
-    memset(&req, 0, sizeof(req));
-    req.magic = WM_MAGIC; req.type = WM_REQ_CREATE; req.kind = WM_KIND_NORMAL;
-    req.x = x; req.y = y; req.w = cw; req.h = ch; req.owner_pid = proc_getpid();
-    strncpy(req.shm_name, shm_name, sizeof(req.shm_name) - 1);
-    strncpy(req.ev_name, ev_name, sizeof(req.ev_name) - 1);
-    strncpy(req.title, title ? title : "Terminal", sizeof(req.title) - 1);
-    if (pipe_write(g_inbox_w, &req, sizeof(req)) != sizeof(req)) return;
-
     char arg_w[8], arg_h[8];
     snprintf(arg_w, sizeof(arg_w), "%d", cw);
     snprintf(arg_h, sizeof(arg_h), "%d", ch);
@@ -2770,7 +2762,35 @@ static void spawn_term_argv(int cw, int ch, int x, int y,
         .in_pipe = -1, .out_pipe = -1, .err_pipe = -1, .in_pty = -1, .out_pty = -1, .err_pty = -1,
         .flags = 0, .envp = 0, .out_pid = 0, .child_class = CLASS_USER, .child_caps = 0,
     };
-    proc_spawn("TERM", argv, &sp);
+
+    /* 先 spawn TERM，拿到子进程 pid，再创建 WM 窗口。
+     * 否则窗口 owner 是 desktop；desktop 被关闭/重启时
+     * cleanup_dead_windows() 会把所有已打开的终端一起清掉。 */
+    int h = proc_spawn("TERM", argv, &sp);
+    if (h < 0) {
+        sys_shm_unlink(shm_name);
+        pipe_unlink(ev_name);
+        return;
+    }
+
+    struct wm_request req;
+    memset(&req, 0, sizeof(req));
+    req.magic = WM_MAGIC; req.type = WM_REQ_CREATE; req.kind = WM_KIND_NORMAL;
+    req.x = x; req.y = y; req.w = cw; req.h = ch;
+    req.owner_pid = sp.out_pid ? sp.out_pid : proc_getpid();
+    strncpy(req.shm_name, shm_name, sizeof(req.shm_name) - 1);
+    strncpy(req.ev_name, ev_name, sizeof(req.ev_name) - 1);
+    strncpy(req.title, title ? title : "Terminal", sizeof(req.title) - 1);
+    if (pipe_write(g_inbox_w, &req, sizeof(req)) != sizeof(req)) {
+        int ph = proc_open(sp.out_pid, PROC_TERMINATE);
+        if (ph >= 0) {
+            proc_kill(ph, SIGTERM);
+            proc_close(ph);
+        }
+        sys_shm_unlink(shm_name);
+        pipe_unlink(ev_name);
+        return;
+    }
     term_slot++;
 }
 

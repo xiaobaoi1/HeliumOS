@@ -233,6 +233,8 @@
 - [x] U18：任务栏窗口列表按 `tab_seq` 排序，修复 tab2/tab1/tab3 顺序错乱
 - [x] U19：关闭 tab 时仅在关闭当前 tab 后切换剩余 tab，避免误切换/整组消失
 - [x] U20：新建 tab 的 WM owner_pid 改为子 TERM pid，避免父 TERM 退出时 cleanup 误删后续 tab
+- [x] U21：桌面启动的 Terminal 窗口 owner_pid 改为 TERM pid；desktop 重启不再清掉已打开终端
+- [x] U22：进程退出只释放私有页，保留 shm/filemap 共享页；desktop 重启不再访问悬空页
 
 ### 后续批次
 
