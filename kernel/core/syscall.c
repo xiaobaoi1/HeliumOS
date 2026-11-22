@@ -592,21 +592,21 @@ static int sys_spawn(const char *path, char *const argv[], void *params_user) {
     struct resolved_path rp;
     int rr = resolve_path(path_buf, &rp);
     if (rr != OK) {
-        vmm_free_process_address_space(pgd_child);
+        vmm_free_process_address_space(pgd_child, NULL);
         ret = rr;
         goto cleanup;
     }
 
     struct fat32_volume *vol = (struct fat32_volume*)rp.vol->fs_private;
     if (!vol) {
-        vmm_free_process_address_space(pgd_child);
+        vmm_free_process_address_space(pgd_child, NULL);
         ret = ENOENT;
         goto cleanup;
     }
 
     uint32_t entry = load_elf_from_disk(vol, rp.path, pgd_child);
     if (!entry) {
-        vmm_free_process_address_space(pgd_child);
+        vmm_free_process_address_space(pgd_child, NULL);
         ret = ENOEXEC;
         goto cleanup;
     }
@@ -618,7 +618,7 @@ static int sys_spawn(const char *path, char *const argv[], void *params_user) {
                                      redir_in_pty, redir_out_pty, redir_err_pty,
                                      (uint8_t)child_class, child_caps);
     if (!child) {
-        vmm_free_process_address_space(pgd_child);
+        vmm_free_process_address_space(pgd_child, NULL);
         ret = ENOMEM;
         goto cleanup;
     }
