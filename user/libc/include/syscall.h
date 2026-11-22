@@ -130,6 +130,17 @@ struct proc_info {
 #define STREAM_STDOUT  1
 #define STREAM_STDERR  2
 
+
+/* 与 kernel/include/task.h 保持一致 */
+#define CAP_NONE         0x00
+#define CAP_KILL_OTHER   0x01
+#define CAP_DISPLAY      0x02
+#define CAP_MMIO         0x04
+#define CAP_SPAWN_SYS    0x08
+#define CAP_RAW_DEV      0x10
+#define CAP_ALL  (CAP_KILL_OTHER | CAP_DISPLAY | CAP_MMIO | \
+                  CAP_SPAWN_SYS | CAP_RAW_DEV)
+
 #define CLASS_USER     0
 #define CLASS_SERVICE  1
 #define CLASS_KERNEL   2

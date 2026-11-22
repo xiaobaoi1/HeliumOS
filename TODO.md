@@ -211,6 +211,8 @@
 
 ### 第一批：低风险正确性（`fix/low-risk-correctness`）
 
+> init：用户态 `/INIT` 已作为 PID 1 启动，负责拉起 WM/DESKTOP/DHCP/SHELL；内核不再直接创建这些服务。
+
 - [x] K4：`sys_mmap(MAP_FILE)` 拒绝非页对齐 offset 和越界 offset
 - [x] K5：旧版 `spawn_params` 缺省字段初始化为 INHERIT/-1
 - [x] U1：`term_resize` 用进程号生成唯一 shm 名
