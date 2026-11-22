@@ -198,6 +198,12 @@
 - ~~F5~~ RTC 已做
 - ~~F6~~ 关机 / 重启已做
 - ~~F9~~ FAT32 LFN 已实现
+- ~~H5~~ `vmm_map_user_page` 已有重复映射检查和旧映射保留
+- ~~H15~~ ACPI RSDT/XSDT/FADT checksum 已检查
+- ~~H16~~ XSDT 地址 > 4GB 已跳过
+- ~~F8~~ 内核 heap 大对象路径已支持，单对象上限 4MB
+- ~~H6~~ `sys_spawn` 失败路径已核对，当前清理路径一致
+- ~~H10~~ `wait_target == NULL` 通配语义已补注释
 
 ### 字段说明
 
