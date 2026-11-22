@@ -44,6 +44,13 @@ struct io_slot {
 
 #define TIME_SLICE_TICKS 10
 
+/* 内核栈大小。
+ * syscall 路径会嵌套 fs -> fat32 -> 目录/LFN 解析，4KB 栈在 rename
+ * 这类深调用下会越界并破坏相邻物理页。统一使用 16KB 内核栈。
+ * start.asm 中的 KERNEL_STACK_SIZE 必须与此保持一致。 */
+#define KERNEL_STACK_PAGES 4
+#define KERNEL_STACK_SIZE  (KERNEL_STACK_PAGES * 4096u)
+
 /* 传参 */
 #define ARGV_MAX  16
 #define ARG_MAX   256
