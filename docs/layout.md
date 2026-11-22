@@ -34,7 +34,8 @@ build/        构建产物（不提交）
 third_party/netsurf/
 third_party/bearssl/
 third_party/7zip/
-third_party/tcc/
+third_party/tinycc/     TinyCC 源码（TCC.ELF 由 tools/build_tcc.sh 构建）
+third_party/tcc/       旧版预编译产物（仅作引导备份，正常构建不使用）
 third_party/fonts/
 ```
 
@@ -46,5 +47,6 @@ third_party/fonts/
 make build/kernel.elf
 make build/shell.ELF build/desktop.ELF build/wm.ELF build/term.ELF
 make build/bearssl/libbearssl.a
+make tcc                 # 从 third_party/tinycc 源码构建 TCC.ELF
 make run-disk
 ```
