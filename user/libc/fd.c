@@ -35,10 +35,17 @@ static int fd_alloc(int kind, int handle) {
 }
 
 int open(const char *path, int flags, ...) {
-    int h = fs_open(path, flags); 
-    if (h < 0) return -1;
+    int h = fs_open(path, flags);
+    if (h < 0) {
+        errno = h;              /* fs_* 返回负错误码 */
+        return -1;
+    }
     int fd = fd_alloc(FD_KIND_FS, h);
-    if (fd < 0) { fs_close(h); return -1; }
+    if (fd < 0) {
+        fs_close(h);
+        errno = ENOMEM;         /* 本地 fd 表耗尽 */
+        return -1;
+    }
     return fd;
 }
 

@@ -3220,13 +3220,14 @@ LIBTCCAPI int tcc_output_file(TCCState *s, const char *filename)
 ST_FUNC ssize_t full_read(int fd, void *buf, size_t count) {
     char *cbuf = buf;
     size_t rnum = 0;
-    while (1) {
-        ssize_t num = read(fd, cbuf, count-rnum);
+    while (rnum < count) {
+        ssize_t num = read(fd, cbuf, count - rnum);
         if (num < 0) return num;
-        if (num == 0) return rnum;
+        if (num == 0) break;
         rnum += num;
         cbuf += num;
     }
+    return rnum;
 }
 
 ST_FUNC void *load_data(int fd, unsigned long file_offset, unsigned long size)
