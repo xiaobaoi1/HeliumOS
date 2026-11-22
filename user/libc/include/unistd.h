@@ -36,6 +36,8 @@ typedef int pid_t;
 #define X_OK 1
 #define F_OK 0
 
+extern char **environ;
+
 #ifndef AT_SYMLINK_NOFOLLOW
 #define AT_SYMLINK_NOFOLLOW 0x100
 #endif
