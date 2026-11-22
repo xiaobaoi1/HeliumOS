@@ -104,6 +104,24 @@ extern long double strtold (const char *__nptr, char **__endptr);
 # define O_BINARY 0
 #endif
 
+/* TCC is bootstrapped with the host gcc, whose fcntl.h uses the Linux
+ * O_* ABI.  The resulting binary runs on HeliumOS, so translate the
+ * few flags it passes to open() to HeliumOS' FS_O_* values. */
+#ifdef CONFIG_TCC_HELIUMOS
+# undef  O_RDONLY
+# undef  O_WRONLY
+# undef  O_RDWR
+# undef  O_CREAT
+# undef  O_TRUNC
+# undef  O_APPEND
+# define O_RDONLY 0x01
+# define O_WRONLY 0x02
+# define O_RDWR   0x03
+# define O_CREAT  0x04
+# define O_TRUNC  0x08
+# define O_APPEND 0x10
+#endif
+
 #ifndef offsetof
 #ifdef __clang__ // clang -fsanitize compains about: NULL+value
 #define offsetof(type, field) __builtin_offsetof(type, field)

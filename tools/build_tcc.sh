@@ -106,10 +106,25 @@ if [ $? -ne 0 ] || [ ! -f "$SRC/lib/libtcc1.a" ]; then
     tail -40 "$LOG" >&2
     exit 1
 fi
+cp "$SRC/lib/libtcc1.a" "$OUT/libtcc1.a"
+
+# The host tcc is built against host fcntl.h, but the same objects are
+# linked into TCC.ELF and therefore must pass HeliumOS FS_O_* values to
+# open().  Rebuild tcc.o/libtcc.a for the target with the flag compatibility
+# layer in tcc.h.  libtcc1.a was already built by the host tcc above.
+TCC_BASE_CFLAGS="$(sed -n 's/^CFLAGS=//p' "$SRC/config.mak")"
+echo "=== rebuild tcc/libtcc for HeliumOS ===" | tee -a "$LOG"
+make clean >>"$LOG" 2>&1 || true
+make -j"$(nproc)" tcc libtcc.a \
+    CFLAGS="$TCC_BASE_CFLAGS -DCONFIG_TCC_HELIUMOS" >>"$LOG" 2>&1
+if [ $? -ne 0 ]; then
+    echo "build_tcc: target tcc/libtcc build failed" >&2
+    tail -40 "$LOG" >&2
+    exit 1
+fi
 
 cp "$SRC/tcc.o" "$OUT/tcc.o"
 cp "$SRC/libtcc.a" "$OUT/libtcc.a"
-cp "$SRC/lib/libtcc1.a" "$OUT/libtcc1.a"
 
 echo "=== link HeliumOS TCC.ELF ===" | tee -a "$LOG"
 gcc -m32 -static -nostdlib \
