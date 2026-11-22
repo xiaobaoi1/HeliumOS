@@ -1,0 +1,55 @@
+#ifndef DISPLAY_H
+#define DISPLAY_H
+
+#include <stdint.h>
+
+#define DISP_MAX_COLS 200
+#define DISP_MAX_ROWS 64
+
+struct display_ops {
+    const char *name;
+    int cols;
+    int rows;
+    /* 只画字形，不处理光标 */
+    void (*draw_char)(int x, int y, char c, uint8_t attr);
+    void (*clear)(uint8_t attr);
+    void (*scroll)(uint8_t attr);
+    /* 画光标——不改字符缓冲。擦旧由 display_set_cursor 重绘字符完成。 */
+    void (*draw_cursor)(int x, int y);
+};
+
+void display_init(void);
+const struct display_ops *display_get(void);
+
+int display_cols(void);
+int display_rows(void);
+
+void display_register(const struct display_ops *ops);
+void display_switch(const struct display_ops *ops);
+
+/* 带影子缓冲的高级 API */
+void display_draw_char(int x, int y, char c, uint8_t attr);
+void display_clear(uint8_t attr);
+void display_scroll(uint8_t attr);
+void display_set_cursor(int x, int y);
+
+/* 后端注册 */
+void vga_text_register(void);
+const struct display_ops *fb_char_get_ops(void);
+
+/* 标记脏区（像素坐标，半开区间） */
+void display_dirty(int x0, int y0, int x1, int y1);
+
+/* 把 back 脏区刷到 framebuffer，然后重画鼠标。
+ * 无脏区时只重画鼠标（鼠标可能移动了）。 */
+void display_flush(void);
+
+/* framebuffer 归属。非 0 时内核停止刷屏。 */
+void     display_set_owner(uint32_t pid);
+uint32_t display_get_owner(void);
+
+/* Kernel-owned hardware cursor overlay (used while a display client owns FB). */
+void display_cursor_hide(void);
+void display_cursor_sync(void);
+
+#endif

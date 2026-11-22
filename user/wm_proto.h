@@ -1,0 +1,135 @@
+#ifndef USER_WM_PROTO_H
+#define USER_WM_PROTO_H
+
+#include <stdint.h>
+
+#define WM_MAGIC       0x574D5231
+#define WM_INBOX_NAME  "wm-inbox"
+
+/* 请求类型 */
+#define WM_REQ_CREATE       1
+#define WM_REQ_DESTROY      2
+#define WM_REQ_RESIZE       3
+#define WM_REQ_WIN_ACTION   4
+#define WM_REQ_SET_CURSOR   5
+#define WM_REQ_SET_ALPHA    6
+
+/* 窗口 kind */
+#define WM_KIND_NORMAL      0
+#define WM_KIND_DOCK        1
+#define WM_KIND_POPUP       2
+#define WM_KIND_WALLPAPER   3
+
+/* 事件类型（WM → client） */
+#define WM_EV_KEY           1   /* code = ASCII */
+#define WM_EV_MOUSE_DOWN    2   /* code = WM_BTN_*, x/y 客户区相对坐标 */
+#define WM_EV_MOUSE_UP      3
+#define WM_EV_MOUSE_MOVE    4   /* code = 当前按钮掩码 */
+#define WM_EV_MOUSE_ENTER   5
+#define WM_EV_MOUSE_LEAVE   6
+#define WM_EV_FOCUS_IN      7
+#define WM_EV_FOCUS_OUT     8
+#define WM_EV_RESIZE        9   /* code = new_w, extra = new_h */
+#define WM_EV_CLOSE_REQUEST 10
+#define WM_EV_CLOSE         11  /* WM 主动销毁时通知（POPUP） */
+#define WM_EV_WINDOW_LIST   12  /* 后接 n 个 wm_window_entry */
+#define WM_EV_WHEEL         13  /* code = 滚轮增量，x/y 客户区坐标 */
+#define WM_EV_DROP          14  /* 拖放释放到本窗口：x/y 客户区坐标 */
+#define WM_EV_NEW_TAB       15  /* 新建标签页请求 */
+
+#define WM_BTN_LEFT         1
+#define WM_BTN_RIGHT        2
+#define WM_BTN_MIDDLE       4
+
+/* 修饰键位（事件 extra 字段） */
+#define WM_MOD_SHIFT        0x01
+#define WM_MOD_CTRL         0x02
+#define WM_MOD_ALT          0x04
+#define WM_MOD_DROP_OUTSIDE 0x100   /* MOUSE_UP：释放点不在接收窗口内 */
+
+struct wm_event {
+    uint32_t type;
+    uint32_t code;
+    int32_t  x, y;
+    uint32_t extra;
+};
+
+/* 光标形状 */
+#define WM_CURSOR_ARROW     0
+#define WM_CURSOR_HAND      1
+#define WM_CURSOR_TEXT      2
+#define WM_CURSOR_RESIZE_H  3
+#define WM_CURSOR_RESIZE_V  4
+#define WM_CURSOR_MOVE      5
+
+/* 窗口动作 */
+#define WM_ACTION_MINIMIZE  1
+#define WM_ACTION_RESTORE   2
+#define WM_ACTION_RAISE     3
+#define WM_ACTION_MAXIMIZE  4
+#define WM_ACTION_CLOSE     5
+
+/* 窗口列表项（接在 WM_EV_WINDOW_LIST 事件之后） */
+struct wm_window_entry {
+    uint32_t id;
+    uint32_t minimized;
+    uint32_t cw, ch;          /* 客户区尺寸（缩略图缩放用） */
+    char     title[32];
+    char     shm_name[16];    /* 客户区像素共享内存名 */
+};
+
+/* 创建请求 */
+struct wm_request {
+    uint32_t magic;
+    uint32_t type;
+    uint32_t kind;
+    uint32_t x, y;
+    uint32_t w, h;
+    uint32_t min_w, min_h;   /* 0 = 无约束 */
+    uint32_t max_w, max_h;   /* 0 = 无约束 */
+    uint32_t owner_pid;
+    char     shm_name[16];
+    char     ev_name[16];
+    char     title[32];
+};
+
+struct wm_destroy_request {
+    uint32_t magic;
+    uint32_t type;
+    uint32_t owner_pid;
+    char     shm_name[16];
+};
+
+struct wm_resize_request {
+    uint32_t magic;
+    uint32_t type;
+    uint32_t owner_pid;
+    char     old_shm[16];
+    char     new_shm[16];
+    uint32_t new_w, new_h;
+};
+
+struct wm_action_request {
+    uint32_t magic;
+    uint32_t type;
+    uint32_t owner_pid;
+    uint32_t win_id;
+    uint32_t action;
+};
+
+struct wm_set_cursor_request {
+    uint32_t magic;
+    uint32_t type;
+    uint32_t owner_pid;
+    uint32_t cursor;
+};
+
+struct wm_set_alpha_request {
+    uint32_t magic;
+    uint32_t type;
+    uint32_t owner_pid;
+    uint32_t alpha;
+    char     shm_name[16];
+};
+
+#endif

@@ -1,0 +1,19 @@
+{
+    "name": "BearSSL",
+    "keywords": "crypto, cryptography, SSL, TLS, SHA, AES",
+    "description": "BearSSL crypto library with TLS support.",
+    "authors":
+    {
+        "name": "Thomas Pornin",
+        "url": "https://www.bearssl.org/"
+    },
+    "repository":
+    {
+        "type": "git",
+        "url": "https://github.com/medovarsky/BearSSL.git"
+    },
+    "license": "MIT",
+    "frameworks": "*",
+    "platforms": "*",
+    "include": "src"
+}

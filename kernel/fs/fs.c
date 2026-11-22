@@ -1,0 +1,378 @@
+#include <fs.h>
+#include <fat32.h>
+#include <task.h>
+#include <path.h>
+#include <errno.h>
+#include <printf.h>
+#include <string.h>
+#include <stddef.h>
+
+void fs_init(void) {
+    kprintf("[FS] Initialized\n");
+}
+
+/* ---------- 句柄分配 ---------- */
+static fd_t fs_alloc_handle(void) {
+    struct task *cur = get_current_task();
+    if (!cur) return FD_INVALID;
+    for (int i = 0; i < FS_MAX_HANDLES; i++) {
+        if (!cur->fs_handles[i].used) {
+            memset(&cur->fs_handles[i], 0, sizeof(struct fs_handle));
+            cur->fs_handles[i].used = 1;
+            return i;
+        }
+    }
+    return FD_INVALID;
+}
+
+static struct fs_handle *fs_get(fd_t fd) {
+    struct task *cur = get_current_task();
+    if (!cur || fd < 0 || fd >= FS_MAX_HANDLES) return NULL;
+    if (!cur->fs_handles[fd].used) return NULL;
+    return &cur->fs_handles[fd];
+}
+
+/* ---------- 打开文件 ---------- */
+fd_t fs_open(const char *path, int flags) {
+    struct resolved_path rp;
+    if (resolve_path(path, &rp) != OK) return FD_INVALID;
+
+    fd_t fd = fs_alloc_handle();
+    if (fd < 0) return FD_INVALID;
+
+    struct fs_handle *h = fs_get(fd);
+    h->vol = rp.vol;
+    h->fs_type = rp.vol->fs_type;
+    h->obj_type = FS_OBJ_FILE;
+    h->offset = 0;
+    h->open_flags = (uint8_t)(flags & (FS_O_RDONLY | FS_O_WRONLY | FS_O_RDWR | FS_O_APPEND));
+
+    switch (rp.vol->fs_type) {
+        case VOL_FS_FAT32: {
+            struct fat32_volume *fvol = (struct fat32_volume*)rp.vol->fs_private;
+            if (!fvol) { h->used = 0; return FD_INVALID; }
+
+            int r;
+            if (flags & FS_O_CREAT) {
+                r = fat32_create_file(fvol, rp.path, &h->u.fat32_file);
+            } else {
+                r = fat32_open_file(fvol, rp.path, &h->u.fat32_file);
+            }
+            if (r != OK) { h->used = 0; return r; }
+
+            /* 截断：只在 open 成功后执行。CREAT 和 TRUNC 可组合。 */
+            if (flags & FS_O_TRUNC) {
+                int tr = fat32_truncate(fvol, &h->u.fat32_file);
+                if (tr != OK) { h->used = 0; return tr; }
+            }
+            return fd;
+        }
+        default:
+            h->used = 0;
+            return FD_INVALID;
+    }
+}
+
+int fs_read(fd_t fd, void *buf, uint32_t n) {
+    struct fs_handle *h = fs_get(fd);
+    if (!h || h->obj_type != FS_OBJ_FILE) return EINVAL;
+
+    int mode = h->open_flags & 0x03;
+    if (mode != FS_O_RDONLY && mode != FS_O_RDWR) return EBADF;
+
+    if (!buf || n == 0) return EINVAL;
+
+    switch (h->fs_type) {
+        case VOL_FS_FAT32: {
+            struct fat32_volume *fvol = (struct fat32_volume*)h->vol->fs_private;
+            if (!fvol) return EINVAL;
+
+            /* 已经到文件末尾 */
+            if (h->offset >= h->u.fat32_file.file_size) {
+                return 0;    /* EOF */
+            }
+
+            /* 截断到剩余字节数 */
+            uint32_t remaining = h->u.fat32_file.file_size - h->offset;
+            if (n > remaining) n = remaining;
+
+            int r = fat32_read_file(fvol, &h->u.fat32_file, buf, h->offset, n);
+            if (r > 0) h->offset += r;
+            return r;
+        }
+        default: return ENOSYS;
+    }
+}
+
+int fs_seek(fd_t fd, uint32_t offset) {
+    struct fs_handle *h = fs_get(fd);
+    if (!h || h->obj_type != FS_OBJ_FILE) return EINVAL;
+    if (offset > h->u.fat32_file.file_size) return EINVAL;
+    h->offset = offset;
+    return OK;
+}
+
+int fs_close(fd_t fd) {
+    struct fs_handle *h = fs_get(fd);
+    if (!h) return EINVAL;
+    h->used = 0;
+    return OK;
+}
+
+int fs_write(fd_t fd, const void *buf, uint32_t n) {
+    struct fs_handle *h = fs_get(fd);
+    if (!h || h->obj_type != FS_OBJ_FILE) return EINVAL;
+
+    int mode = h->open_flags & 0x03;
+    if (mode != FS_O_WRONLY && mode != FS_O_RDWR) return EBADF;
+
+    if (!buf || n == 0) return EINVAL;
+
+    switch (h->fs_type) {
+        case VOL_FS_FAT32: {
+            struct fat32_volume *fvol = (struct fat32_volume*)h->vol->fs_private;
+            if (!fvol) return EINVAL;
+
+            /* O_APPEND：每次写前定位到文件末尾 */
+            if (h->open_flags & FS_O_APPEND) {
+                h->offset = h->u.fat32_file.file_size;
+            }
+
+            uint32_t old_fc = h->u.fat32_file.first_cluster;
+
+            int r = fat32_write_file(fvol, &h->u.fat32_file,
+                                     (const uint8_t*)buf, h->offset, n);
+            if (r > 0) h->offset += r;
+            return r;
+        }
+        default: return ENOSYS;
+    }
+}
+
+int fs_fstat(fd_t fd, struct fstat_buf *out) {
+    struct fs_handle *h = fs_get(fd);
+    if (!h || !out) return EINVAL;
+
+    memset(out, 0, sizeof(*out));
+
+    switch (h->fs_type) {
+        case VOL_FS_FAT32:
+            if (h->obj_type == FS_OBJ_FILE)
+                return fat32_fstat_file(&h->u.fat32_file, out);
+            if (h->obj_type == FS_OBJ_DIR) {
+                out->size = 0;
+                out->attributes = FS_ATTR_DIR;
+                return OK;
+            }
+            return EINVAL;
+        default:
+            return ENOSYS;
+    }
+}
+
+/* ---------- 目录 ---------- */
+fd_t fs_opendir(const char *path) {
+    struct resolved_path rp;
+    if (resolve_path(path, &rp) != OK) return FD_INVALID;
+
+    fd_t fd = fs_alloc_handle();
+    if (fd < 0) return FD_INVALID;
+
+    struct fs_handle *h = fs_get(fd);
+    h->vol = rp.vol;
+    h->fs_type = rp.vol->fs_type;
+    h->obj_type = FS_OBJ_DIR;
+    h->offset = 0;
+    h->open_flags = FS_O_RDONLY;   /* 目录只读 */
+
+    switch (rp.vol->fs_type) {
+        case VOL_FS_FAT32: {
+            struct fat32_volume *fvol = (struct fat32_volume*)rp.vol->fs_private;
+            if (!fvol) { h->used = 0; return FD_INVALID; }
+            if (fat32_opendir(fvol, rp.path, &h->u.fat32_dir) != OK) {
+                h->used = 0;
+                return FD_INVALID;
+            }
+            return fd;
+        }
+        default:
+            h->used = 0;
+            return FD_INVALID;
+    }
+}
+
+int fs_readdir(fd_t fd, struct dirent *out) {
+    struct fs_handle *h = fs_get(fd);
+    if (!h || h->obj_type != FS_OBJ_DIR) return EINVAL;
+
+    switch (h->fs_type) {
+        case VOL_FS_FAT32: {
+            struct fat32_volume *fvol = (struct fat32_volume*)h->vol->fs_private;
+            return fat32_readdir(fvol, &h->u.fat32_dir, out);
+        }
+        default: return ENOSYS;
+    }
+}
+
+int fs_closedir(fd_t fd) {
+    struct fs_handle *h = fs_get(fd);
+    if (!h || h->obj_type != FS_OBJ_DIR) return EINVAL;
+
+    switch (h->fs_type) {
+        case VOL_FS_FAT32: {
+            struct fat32_volume *fvol = (struct fat32_volume*)h->vol->fs_private;
+            fat32_closedir(fvol, &h->u.fat32_dir);
+            break;
+        }
+    }
+    h->used = 0;
+    return OK;
+}
+
+/* ---------- cwd ---------- */
+int fs_chdir(const char *path) {
+    struct resolved_path rp;
+    if (resolve_path(path, &rp) != OK) return ENOENT;
+
+    switch (rp.vol->fs_type) {
+        case VOL_FS_FAT32: {
+            struct fat32_volume *fvol = (struct fat32_volume*)rp.vol->fs_private;
+            if (!fat32_is_dir(fvol, rp.path)) return ENOTDIR;
+            break;
+        }
+        default: return ENOSYS;
+    }
+
+    struct task *cur = get_current_task();
+    if (!cur) return EINVAL;
+
+    strcpy(cur->cwd_volume, rp.vol->name);
+    strcpy(cur->cwd_path, rp.path);
+    return OK;
+}
+
+int fs_getcwd(char *buf, int size) {
+    struct task *cur = get_current_task();
+    if (!cur || !buf || size < 4) return EINVAL;
+
+    int len = 0;
+    for (int i = 0; cur->cwd_volume[i] && len < size - 2; i++)
+        buf[len++] = cur->cwd_volume[i];
+    if (len < size - 1) buf[len++] = ':';
+    for (int i = 0; cur->cwd_path[i] && len < size - 1; i++)
+        buf[len++] = cur->cwd_path[i];
+    buf[len] = '\0';
+    return len;
+}
+
+/* ---------- unlink / mkdir / rmdir / rename ---------- */
+
+int fs_unlink(const char *path) {
+    struct resolved_path rp;
+    if (resolve_path(path, &rp) != OK) return ENOENT;
+    switch (rp.vol->fs_type) {
+        case VOL_FS_FAT32: {
+            struct fat32_volume *fvol = (struct fat32_volume*)rp.vol->fs_private;
+            if (!fvol) return EINVAL;
+            return fat32_unlink(fvol, rp.path);
+        }
+        default: return ENOSYS;
+    }
+}
+
+int fs_mkdir(const char *path) {
+    struct resolved_path rp;
+    if (resolve_path(path, &rp) != OK) return ENOENT;
+    switch (rp.vol->fs_type) {
+        case VOL_FS_FAT32: {
+            struct fat32_volume *fvol = (struct fat32_volume*)rp.vol->fs_private;
+            if (!fvol) return EINVAL;
+            return fat32_mkdir(fvol, rp.path);
+        }
+        default: return ENOSYS;
+    }
+}
+
+int fs_rmdir(const char *path) {
+    struct resolved_path rp;
+    if (resolve_path(path, &rp) != OK) return ENOENT;
+    switch (rp.vol->fs_type) {
+        case VOL_FS_FAT32: {
+            struct fat32_volume *fvol = (struct fat32_volume*)rp.vol->fs_private;
+            if (!fvol) return EINVAL;
+            return fat32_rmdir(fvol, rp.path);
+        }
+        default: return ENOSYS;
+    }
+}
+
+int fs_rename(const char *old_path, const char *new_path) {
+    struct resolved_path old_rp, new_rp;
+    if (resolve_path(old_path, &old_rp) != OK) return ENOENT;
+    if (resolve_path(new_path, &new_rp) != OK) return ENOENT;
+    if (old_rp.vol != new_rp.vol) return EXDEV;   /* 跨卷不支持 */
+
+    switch (old_rp.vol->fs_type) {
+        case VOL_FS_FAT32: {
+            struct fat32_volume *fvol =
+                (struct fat32_volume*)old_rp.vol->fs_private;
+            if (!fvol) return EINVAL;
+            return fat32_rename(fvol, old_rp.path, new_rp.path);
+        }
+        default: return ENOSYS;
+    }
+}
+
+/* ---------- 释放所有句柄 ---------- */
+void fs_release_all(struct task *task) {
+    if (!task) return;
+    for (int i = 0; i < FS_MAX_HANDLES; i++) {
+        if (task->fs_handles[i].used) {
+            /* FAT32 打开文件没有额外资源需要释放。
+             * 将来若加有资源的文件系统（RAMFS / pipe），
+             * 在此处按 fs_type 分派到具体释放逻辑，
+             * 或在 fs_handle 里加 close 回调。 */
+            task->fs_handles[i].used = 0;
+        }
+    }
+}
+
+fd_t fs_dup_handle(struct task *src_task, fd_t src_fd, struct task *dst_task) {
+    if (!src_task || !dst_task) return FD_INVALID;
+    if (src_fd < 0 || src_fd >= FS_MAX_HANDLES) return FD_INVALID;
+    if (!src_task->fs_handles[src_fd].used) return FD_INVALID;
+
+    /* 在 dst_task 里找空闲槽 */
+    fd_t new_fd = FD_INVALID;
+    for (int i = 0; i < FS_MAX_HANDLES; i++) {
+        if (!dst_task->fs_handles[i].used) {
+            new_fd = i;
+            break;
+        }
+    }
+    if (new_fd == FD_INVALID) return FD_INVALID;
+
+    /* 前提：struct fs_handle 是纯数据（当前 FAT32 满足——全是值，
+     * 无指针、无引用计数）。
+     * 若将来引入带指针/引用计数的 FS（如 RAMFS 的 inode 引用），
+     * 此整块拷贝会破坏引用计数，必须改为 per-FS 的 dup 回调，
+     * 或只拷贝 {obj_type, fs_type, open_flags, offset, vol, fm}
+     * 并让新 FS 在 open 路径重建自己的 priv。 */
+    dst_task->fs_handles[new_fd] = src_task->fs_handles[src_fd];
+    return new_fd;
+}
+
+int fs_truncate(fd_t fd) {
+    struct fs_handle *h = fs_get(fd);
+    if (!h || h->obj_type != FS_OBJ_FILE) return EINVAL;
+    switch (h->fs_type) {
+        case VOL_FS_FAT32: {
+            struct fat32_volume *fvol = (struct fat32_volume*)h->vol->fs_private;
+            if (!fvol) return EINVAL;
+            int r = fat32_truncate(fvol, &h->u.fat32_file);
+            if (r == OK) h->offset = 0;
+            return r;
+        }
+        default: return ENOSYS;
+    }
+}

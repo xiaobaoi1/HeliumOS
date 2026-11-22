@@ -1,0 +1,86 @@
+#ifndef ATA_H
+#define ATA_H
+
+#include <stdint.h>
+
+/* 通道端口基址 */
+#define ATA_PRIMARY_IO_BASE    0x1F0
+#define ATA_PRIMARY_CTRL_BASE  0x3F6
+#define ATA_SECONDARY_IO_BASE  0x170
+#define ATA_SECONDARY_CTRL_BASE 0x376
+
+#define ATA_MAX_DEVICES 4
+
+/* 寄存器偏移 */
+#define ATA_REG_DATA         0
+#define ATA_REG_ERROR        1
+#define ATA_REG_FEATURES     1
+#define ATA_REG_SECTOR_COUNT 2
+#define ATA_REG_LBA_LOW      3
+#define ATA_REG_LBA_MID      4
+#define ATA_REG_LBA_HIGH     5
+#define ATA_REG_DRIVE        6
+#define ATA_REG_COMMAND      7
+#define ATA_REG_STATUS       7
+
+/* 命令 */
+#define ATA_CMD_READ_PIO     0x20
+#define ATA_CMD_WRITE_PIO    0x30
+#define ATA_CMD_FLUSH        0xE7
+
+/* 状态位 */
+#define ATA_SR_BSY           0x80
+#define ATA_SR_DRQ           0x08
+#define ATA_SR_ERR           0x01
+#define ATA_SR_DF            0x20
+#define ATA_SR_DRDY          0x40
+
+#define ATA_MODE_PIO    0
+#define ATA_MODE_BMIDE  1
+#define ATA_MODE_AHCI   2
+
+/* PRD 条目：8 字节，物理地址 bit 0 = EOT */
+struct ata_prd {
+    uint32_t phys;
+    uint16_t count;      /* 字节数 - 1，最大 65535（即 64KB） */
+    uint16_t flags;      /* bit 15 = 保留，写 0 */
+} __attribute__((packed));
+
+int  ata_get_mode(void);
+int  ata_bmide_init(void);
+int  ata_ahci_init(void);
+
+/* 一个 ATA 通道上的一个设备 */
+struct ata_device {
+    uint16_t io_base;
+    uint16_t ctrl_base;
+    uint8_t  drive;
+    uint8_t  present;
+    uint8_t  ahci_port;     /* 0-31 表示 AHCI 端口，0xFF = 走 PIO */
+    uint8_t  reserved;
+};
+
+/* 探测四个位置（主/从 × master/slave） */
+void ata_init(void);
+
+int                     ata_device_count(void);
+const struct ata_device *ata_get_device(int idx);
+
+/* LBA28 读写，每次一扇区 */
+int ata_read_sector(const struct ata_device *dev, uint32_t lba, uint8_t *buffer);
+/* 连续读 count 个扇区（LBA28 PIO）。count ∈ [1, 256]。
+ * 成功返回 0，失败返回 -1（buffer 清零）。 */
+int ata_read_sectors(const struct ata_device *dev, uint32_t lba,
+                     uint32_t count, uint8_t *buffer);
+int ata_write_sector(const struct ata_device *dev, uint32_t lba, const uint8_t *buffer);
+void ata_flush(const struct ata_device *dev);
+
+int ata_bmide_ready(void);
+
+int ata_bmide_read_sectors(const struct ata_device *dev, uint32_t lba,
+                           uint32_t count, uint8_t *buffer);
+int ata_bmide_write_sectors(const struct ata_device *dev, uint32_t lba,
+                            uint32_t count, const uint8_t *buffer);
+int ata_bmide_setup_device(const struct ata_device *dev);
+
+#endif

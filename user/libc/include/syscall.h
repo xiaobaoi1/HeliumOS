@@ -1,0 +1,643 @@
+#ifndef USER_SYSCALL_H
+#define USER_SYSCALL_H
+
+/* ========== 进程控制 (1~9) ========== */
+#define SYS_EXIT          1
+#define SYS_GETPID        2
+#define SYS_SPAWN         3
+#define SYS_GETPPID       4
+#define SYS_SLEEP         5
+#define SYS_WAIT          6
+#define SYS_KILL          7
+#define SYS_PROC_CLOSE    8
+#define SYS_PROC_LIST     9
+#define SYS_PROC_OPEN     10
+
+/* ========== 标准流 (11~12) ========== */
+#define SYS_READ                     11
+#define SYS_WRITE                    12
+
+/* ========== 内存管理 (21~29) ========== */
+#define SYS_BRK        21
+#define SYS_MMAP       22
+#define SYS_MUNMAP     23
+#define SYS_SHM_OPEN   24
+#define SYS_SHM_UNLINK 25
+
+/* ========== 文件系统 (31~49) ========== */
+#define SYS_FS_OPEN       31
+#define SYS_FS_READ       32
+#define SYS_FS_WRITE      33
+#define SYS_FS_SEEK       34
+#define SYS_FS_CLOSE      35
+#define SYS_FS_OPENDIR    36
+#define SYS_FS_READDIR    37
+#define SYS_FS_CLOSEDIR   38
+#define SYS_FS_UNLINK     39
+#define SYS_FS_MKDIR      40
+#define SYS_FS_RMDIR      41
+#define SYS_FS_RENAME     42
+#define SYS_FS_FSTAT      43
+#define SYS_FS_TRUNCATE   44
+
+/* ========== 设备 (51~59) ========== */
+#define SYS_DEV_OPEN      51
+#define SYS_DEV_READ      52
+#define SYS_DEV_WRITE     53
+#define SYS_DEV_IOCTL     54
+#define SYS_DEV_CLOSE     55
+
+/* ========== 进程环境 (61~69) ========== */
+#define SYS_GETCWD        61
+#define SYS_CHDIR         62
+#define SYS_UNAME         63
+
+/* ========== 信号 (71~79) ========== */
+#define SYS_SIGACTION     71
+#define SYS_SIGRETURN     72
+#define SYS_SIGPROCMASK   73
+
+/* ========== IPC (81~89) ========== */
+#define SYS_PIPE         81
+#define SYS_PIPE_READ    82
+#define SYS_PIPE_WRITE   83
+#define SYS_IPC_CLOSE    84
+#define SYS_PIPE_NAMED   85
+#define SYS_PIPE_OPEN    86
+#define SYS_PIPE_UNLINK  87
+#define SYS_PIPE_AVAIL  88
+
+/* ========== 系统控制 (91~99) ========== */
+#define SYS_RTC_GET_TIME  91
+#define SYS_REBOOT        92
+
+#define SYS_SOCKET      100
+#define SYS_BIND        101
+#define SYS_SENDTO      102
+#define SYS_RECVFROM    103
+#define SYS_SOCKCLOSE   104
+#define SYS_CONNECT     105
+#define SYS_LISTEN      106
+#define SYS_ACCEPT      107
+
+#define SYS_WM_CREATE    120
+#define SYS_WM_DESTROY   121
+#define SYS_WM_MOVE      122
+#define SYS_WM_RAISE     123
+#define SYS_WM_FLUSH     124
+
+#define SYS_INPUT_POLL    130
+#define SYS_INPUT_CLAIM   131
+#define SYS_FB_MAP        132
+#define SYS_FB_CLAIM      133
+#define SYS_FB_CURSOR_HIDE 134
+#define SYS_FB_CURSOR_SYNC 135
+
+#define SYS_PTY_OPEN    140
+#define SYS_PTY_READ    141
+#define SYS_PTY_WRITE   142
+#define SYS_PTY_CLOSE   143
+#define SYS_PTY_SET_FG  144
+#define SYS_PTY_AVAIL   145
+#define SYS_FD_AVAIL    146
+#define SYS_PTY_SET_WINSIZE 147
+#define SYS_TERM_SET_RAW    148
+#define SYS_TERM_GET_WINSIZE 149
+
+#define SYS_NET_SET_IF   150
+#define SYS_NET_GET_IF   151
+#define SYS_NET_SET_DNS  152
+#define SYS_NET_GET_DNS  153
+
+
+#define SYS_PROC_QUERY 154
+
+/* 音频：44.1kHz / 16-bit / stereo PCM */
+#define SYS_AUDIO_PLAY       155
+#define SYS_AUDIO_SET_VOLUME 156
+#define SYS_AUDIO_GET_VOLUME 157
+
+struct proc_info {
+    unsigned int pid;
+    unsigned int creator_pid;
+    unsigned int entry_point;
+    unsigned char state;
+    unsigned char class;
+    unsigned char reserved[2];
+    unsigned int caps;
+    char     image[32];
+};
+
+
+
+
+#define STREAM_STDIN   0
+#define STREAM_STDOUT  1
+#define STREAM_STDERR  2
+
+
+/* 与 kernel/include/task.h 保持一致 */
+#define CAP_NONE         0x00
+#define CAP_KILL_OTHER   0x01
+#define CAP_DISPLAY      0x02
+#define CAP_MMIO         0x04
+#define CAP_SPAWN_SYS    0x08
+#define CAP_RAW_DEV      0x10
+#define CAP_ALL  (CAP_KILL_OTHER | CAP_DISPLAY | CAP_MMIO | \
+                  CAP_SPAWN_SYS | CAP_RAW_DEV)
+
+#define CLASS_USER     0
+#define CLASS_SERVICE  1
+#define CLASS_KERNEL   2
+
+
+
+#define AF_INET     2
+#define SOCK_DGRAM  2
+
+
+#define PROT_READ   0x01
+#define PROT_WRITE  0x02
+#define PROT_EXEC   0x04
+
+#define MAP_PRIVATE    0x01
+#define MAP_SHARED     0x02
+#define MAP_ANONYMOUS  0x04
+#define MAP_FILE       0x08
+#define MAP_FIXED      0x10
+
+
+/* 进程 access 掩码。与内核 kernel/include/proc.h 一致。 */
+#define PROC_QUERY        0x01
+#define PROC_TERMINATE    0x02
+#define PROC_WAIT         0x04
+#define PROC_ALL          0x07
+
+struct uname_buf {
+    char sysname[16];
+    char release[16];
+    char machine[16];
+};
+
+struct fs_time {
+    unsigned short year;
+    unsigned char  month;
+    unsigned char  day;
+    unsigned char  hour;
+    unsigned char  minute;
+    unsigned char  second;
+    unsigned char  reserved;
+};
+
+struct fstat_buf {
+    unsigned int   size;
+    struct fs_time ctime;
+    struct fs_time mtime;
+    unsigned char  attributes;
+    unsigned char  reserved[3];
+};
+
+/* 传给 spawn 的重定向描述。
+ * size 字段必须填为 sizeof(struct spawn_params)。 */
+struct spawn_params {
+    unsigned int size;
+    int          in_fd;
+    int          out_fd;
+    int          err_fd;
+    int          in_pipe;
+    int          out_pipe;
+    int          err_pipe;
+    int          in_pty;
+    int          out_pty;
+    int          err_pty;
+    unsigned int flags;
+    unsigned int envp;
+    unsigned int out_pid;
+    unsigned int child_class;
+    unsigned int child_caps;
+};
+
+#define SPAWN_FD_INHERIT   (-1)
+#define SPAWN_FD_NULL      (-2)
+#define SPAWN_FD_TTY       (-3)
+
+#define IPC_PIPE_READ   1
+#define IPC_PIPE_WRITE  2
+
+/* ---------- 原始系统调用（内联汇编） ---------- */
+static inline int __syscall(int num, int a, int b, int c) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(num), "b"(a), "c"(b), "d"(c)
+        : "memory", "cc"
+    );
+    return ret;
+}
+
+static inline int __syscall5(int num, int a, int b, int c, int d, int e) {
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(num), "b"(a), "c"(b), "d"(c), "S"(d), "D"(e)
+        : "memory", "cc"
+    );
+    return ret;
+}
+
+static inline int __syscall6(int num, int a, int b, int c, int d, int e, int f) {
+    int ret;
+    __asm__ volatile (
+        "pushl %%ebp\n\t"
+        "movl %7, %%ebp\n\t"
+        "int $0x80\n\t"
+        "popl %%ebp\n\t"
+        : "=a"(ret)
+        : "a"(num), "b"(a), "c"(b), "d"(c), "S"(d), "D"(e), "g"(f)
+        : "memory", "cc"
+    );
+    return ret;
+}
+
+/* ---------- 打开标志 ---------- */
+#define FS_O_RDONLY   0x01
+#define FS_O_WRONLY   0x02
+#define FS_O_RDWR     0x03
+#define FS_O_CREAT    0x04
+#define FS_O_TRUNC    0x08
+#define FS_O_APPEND   0x10
+
+/* ---------- dirent（和内核一致） ---------- */
+#define DIRENT_NAME_MAX  256
+struct dirent {
+    char          name[DIRENT_NAME_MAX];
+    unsigned char attributes;
+    unsigned char reserved[3];
+    unsigned int  size;
+    unsigned short mod_date;
+    unsigned short mod_time;
+    unsigned int   pad;
+};
+
+/* 与内核 kernel/include/rtc.h 一致 */
+struct rtc_time {
+    unsigned short year;
+    unsigned char  month;
+    unsigned char  day;
+    unsigned char  hour;
+    unsigned char  minute;
+    unsigned char  second;
+    unsigned char  weekday;
+    unsigned char  reserved;
+};
+
+/* ---------- 标准 fd ---------- */
+#define STDIN_FILENO   0
+#define STDOUT_FILENO  1
+#define STDERR_FILENO  2
+
+/* 设备类型 */
+#define DEV_TYPE_KEYBOARD  1
+#define DEV_TYPE_SERIAL    2
+#define DEV_TYPE_VGA       3
+#define DEV_TYPE_ATA       4
+
+struct input_event {
+    unsigned int type;
+    unsigned int code;
+    int          x, y;
+    unsigned int mods;
+};
+
+#define INPUT_KEY        1
+#define INPUT_MOUSE_MOVE 2
+#define INPUT_MOUSE_BTN  3
+#define INPUT_WHEEL      4
+
+#define INPUT_MOD_SHIFT  0x01
+#define INPUT_MOD_CTRL   0x02
+#define INPUT_MOD_ALT    0x04
+
+
+
+struct fb_user_info {
+    unsigned int width;
+    unsigned int height;
+    unsigned int pitch;
+    unsigned int bpp;
+    unsigned int addr;
+};
+
+
+
+struct net_if_info {
+    unsigned int  ip;
+    unsigned int  mask;
+    unsigned int  gw;
+    unsigned int  broadcast;
+    unsigned char mac[6];
+    unsigned char reserved[2];
+};
+
+/* ---------- 便捷包装 ---------- */
+
+/* 进程控制 */
+static inline void proc_exit(int status) {
+    __syscall(SYS_EXIT, status, 0, 0);
+    for (;;) {}   /* 不会返回 */
+}
+
+static inline int proc_getpid(void) {
+    return __syscall(SYS_GETPID, 0, 0, 0);
+}
+
+/* 进程控制 */
+static inline int proc_spawn(const char *path, char *const argv[],
+                        struct spawn_params *redir) {
+    return __syscall(SYS_SPAWN, (int)path, (int)argv, (int)redir);
+}
+
+static inline int proc_wait(int handle, int *status, unsigned int timeout_ms) {
+    return __syscall(SYS_WAIT, handle, (int)status, (int)timeout_ms);
+}
+
+static inline int proc_kill(int handle, int status) {
+    return __syscall(SYS_KILL, handle, status, 0);
+}
+
+static inline int proc_close(int handle) {
+    return __syscall(SYS_PROC_CLOSE, handle, 0, 0);
+}
+
+static inline int proc_open(unsigned int pid, int access) {
+    return __syscall(SYS_PROC_OPEN, (int)pid, access, 0);
+}
+
+static inline void sys_sleep_ms(int ms) {
+    __syscall(SYS_SLEEP, ms, 0, 0);
+}
+
+static inline int pipe_create(int fds[2]) {
+    return __syscall(SYS_PIPE, (int)fds, 0, 0);
+}
+static inline int pipe_read(int h, void *buf, unsigned int n) {
+    return __syscall(SYS_PIPE_READ, h, (int)buf, (int)n);
+}
+static inline int pipe_write(int h, const void *buf, unsigned int n) {
+    return __syscall(SYS_PIPE_WRITE, h, (int)buf, (int)n);
+}
+static inline int pipe_close(int h) {
+    return __syscall(SYS_IPC_CLOSE, h, 0, 0);
+}
+static inline int pipe_named(const char *name, int fds[2]) {
+    return __syscall(SYS_PIPE_NAMED, (int)name, (int)fds, 0);
+}
+static inline int pipe_open(const char *name, int wr) {
+    return __syscall(SYS_PIPE_OPEN, (int)name, wr, 0);
+}
+static inline int pipe_unlink(const char *name) {
+    return __syscall(SYS_PIPE_UNLINK, (int)name, 0, 0);
+}
+static inline int pipe_avail(int h) {
+    return __syscall(SYS_PIPE_AVAIL, h, 0, 0);
+}
+
+/* 系统控制 */
+static inline int rtc_get_time(struct rtc_time *out) {
+    return __syscall(SYS_RTC_GET_TIME, (int)out, 0, 0);
+}
+
+static inline int sys_halt(void) {
+    return __syscall(SYS_REBOOT, 0, 0, 0);
+}
+
+static inline int sys_reboot(void) {
+    return __syscall(SYS_REBOOT, 1, 0, 0);
+}
+
+/* 控制台 I/O */
+static inline int sys_write(int stream, const void *buf, unsigned int n) {
+    return __syscall(SYS_WRITE, stream, (int)buf, (int)n);
+}
+
+static inline int sys_read(int stream, void *buf, unsigned int n) {
+    return __syscall(SYS_READ, stream, (int)buf, (int)n);
+}
+
+static inline int proc_getppid(void) {
+    return __syscall(SYS_GETPPID, 0, 0, 0);
+}
+
+static inline int proc_list(unsigned int *pids, int max) {
+    return __syscall(SYS_PROC_LIST, (int)pids, max, 0);
+}
+
+static inline int proc_query(unsigned int pid, struct proc_info *out) {
+    return __syscall(SYS_PROC_QUERY, (int)pid, (int)out, 0);
+}
+
+static inline int sys_uname(struct uname_buf *u) {
+    return __syscall(SYS_UNAME, (int)u, 0, 0);
+}
+
+static inline int fs_fstat(int fd, struct fstat_buf *st) {
+    return __syscall(SYS_FS_FSTAT, fd, (int)st, 0);
+}
+
+/* 内存 */
+static inline int sys_brk(int new_brk) {
+    return __syscall(SYS_BRK, new_brk, 0, 0);
+}
+
+static inline unsigned int sys_mmap(unsigned int addr, unsigned int length,
+                                int prot, int flags, int shm_idx, unsigned int offset) {
+    return (unsigned int)__syscall6(SYS_MMAP, (int)addr, (int)length,
+                                    prot, flags, shm_idx, (int)offset);
+}
+
+static inline int sys_munmap(unsigned int addr, unsigned int length) {
+    return __syscall(SYS_MUNMAP, (int)addr, (int)length, 0);
+}
+
+static inline int sys_shm_open(const char *name, unsigned int size_bytes,
+                           int flags) {
+    return __syscall(SYS_SHM_OPEN, (int)name, (int)size_bytes, flags);
+}
+
+static inline int sys_shm_unlink(const char *name) {
+    return __syscall(SYS_SHM_UNLINK, (int)name, 0, 0);
+}
+
+/* 文件系统 */
+static inline int fs_open(const char *path, int flags) {
+    return __syscall(SYS_FS_OPEN, (int)path, flags, 0);
+}
+
+static inline int fs_read(int fd, void *buf, unsigned int n) {
+    return __syscall(SYS_FS_READ, fd, (int)buf, (int)n);
+}
+
+static inline int fs_write(int fd, const void *buf, unsigned int n) {
+    return __syscall(SYS_FS_WRITE, fd, (int)buf, (int)n);
+}
+
+static inline int fs_seek(int fd, unsigned int offset) {
+    return __syscall(SYS_FS_SEEK, fd, (int)offset, 0);
+}
+
+static inline int fs_close(int fd) {
+    return __syscall(SYS_FS_CLOSE, fd, 0, 0);
+}
+
+static inline int fs_opendir(const char *path) {
+    return __syscall(SYS_FS_OPENDIR, (int)path, 0, 0);
+}
+
+static inline int fs_readdir(int fd, void *ent) {
+    return __syscall(SYS_FS_READDIR, fd, (int)ent, 0);
+}
+
+static inline int fs_closedir(int fd) {
+    return __syscall(SYS_FS_CLOSEDIR, fd, 0, 0);
+}
+
+static inline int fs_unlink(const char *path) {
+    return __syscall(SYS_FS_UNLINK, (int)path, 0, 0);
+}
+
+static inline int fs_mkdir(const char *path) {
+    return __syscall(SYS_FS_MKDIR, (int)path, 0, 0);
+}
+
+static inline int fs_rmdir(const char *path) {
+    return __syscall(SYS_FS_RMDIR, (int)path, 0, 0);
+}
+
+static inline int fs_rename(const char *old_path, const char *new_path) {
+    return __syscall(SYS_FS_RENAME, (int)old_path, (int)new_path, 0);
+}
+
+static inline int fs_truncate(int fd) {
+    return __syscall(SYS_FS_TRUNCATE, fd, 0, 0);
+}
+
+static inline int fs_getcwd(char *buf, int size) {
+    return __syscall(SYS_GETCWD, (int)buf, size, 0);
+}
+
+static inline int fs_chdir(const char *path) {
+    return __syscall(SYS_CHDIR, (int)path, 0, 0);
+}
+
+/* 设备 */
+static inline int dev_open(int type, void *arg) {
+    return __syscall(SYS_DEV_OPEN, type, (int)arg, 0);
+}
+
+static inline int dev_read(int dev, void *buf, unsigned int n) {
+    return __syscall(SYS_DEV_READ, dev, (int)buf, (int)n);
+}
+
+static inline int dev_write(int dev, const void *buf, unsigned int n) {
+    return __syscall(SYS_DEV_WRITE, dev, (int)buf, (int)n);
+}
+
+static inline int dev_close(int dev) {
+    return __syscall(SYS_DEV_CLOSE, dev, 0, 0);
+}
+
+
+
+
+
+
+
+static inline int input_poll(struct input_event *ev) {
+    return __syscall(SYS_INPUT_POLL, (int)ev, 0, 0);
+}
+
+static inline int input_claim(void) {
+    return __syscall(SYS_INPUT_CLAIM, 0, 0, 0);
+}
+
+
+static inline int fb_map(struct fb_user_info *info) {
+    return __syscall(SYS_FB_MAP, (int)info, 0, 0);
+}
+
+static inline int fb_claim(void) {
+    return __syscall(SYS_FB_CLAIM, 0, 0, 0);
+}
+
+static inline int fb_cursor_hide(void) {
+    return __syscall(SYS_FB_CURSOR_HIDE, 0, 0, 0);
+}
+
+static inline int fb_cursor_sync(void) {
+    return __syscall(SYS_FB_CURSOR_SYNC, 0, 0, 0);
+}
+
+
+
+static inline int pty_open(int fds[2]) {
+    return __syscall(SYS_PTY_OPEN, (int)fds, 0, 0);
+}
+static inline int pty_read(int h, void *buf, unsigned int n) {
+    return __syscall(SYS_PTY_READ, h, (int)buf, (int)n);
+}
+static inline int pty_write(int h, const void *buf, unsigned int n) {
+    return __syscall(SYS_PTY_WRITE, h, (int)buf, (int)n);
+}
+static inline int pty_close(int h) {
+    return __syscall(SYS_PTY_CLOSE, h, 0, 0);
+}
+static inline int pty_set_fg(int h, unsigned int pid) {
+    return __syscall(SYS_PTY_SET_FG, h, (int)pid, 0);
+}
+static inline int pty_avail(int h) {
+    return __syscall(SYS_PTY_AVAIL, h, 0, 0);
+}
+static inline int pty_set_winsize(int h, unsigned int cols, unsigned int rows) {
+    return __syscall(SYS_PTY_SET_WINSIZE, h, (int)cols, (int)rows);
+}
+static inline int sys_fd_avail(int fd) {
+    return __syscall(SYS_FD_AVAIL, fd, 0, 0);
+}
+
+
+static inline int net_set_if(unsigned int ip, unsigned int mask, unsigned int gw) {
+    return __syscall(SYS_NET_SET_IF, (int)ip, (int)mask, (int)gw);
+}
+
+static inline int net_get_if(struct net_if_info *out) {
+    return __syscall(SYS_NET_GET_IF, (int)out, 0, 0);
+}
+
+static inline int net_set_dns(unsigned int dns) {
+    return __syscall(SYS_NET_SET_DNS, (int)dns, 0, 0);
+}
+
+static inline unsigned int net_get_dns(void) {
+    return (unsigned int)__syscall(SYS_NET_GET_DNS, 0, 0, 0);
+}
+
+static inline int term_set_raw(int raw) {
+    return __syscall(SYS_TERM_SET_RAW, raw, 0, 0);
+}
+static inline int term_get_winsize(unsigned int *out) {
+    return __syscall(SYS_TERM_GET_WINSIZE, (int)out, 0, 0);
+}
+
+static inline int audio_play(const void *pcm, unsigned int len) {
+    return __syscall(SYS_AUDIO_PLAY, (int)pcm, (int)len, 0);
+}
+static inline int audio_set_volume(int percent) {
+    return __syscall(SYS_AUDIO_SET_VOLUME, percent, 0, 0);
+}
+static inline int audio_get_volume(void) {
+    return __syscall(SYS_AUDIO_GET_VOLUME, 0, 0, 0);
+}
+
+#endif

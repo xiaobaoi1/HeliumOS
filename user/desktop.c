@@ -1,0 +1,3683 @@
+#include "syscall.h"
+#include "signal.h"
+#include "stdio.h"
+#include "string.h"
+#include "stdlib.h"
+#include <stdint.h>
+#include "wm_proto.h"
+#include "wm_font.h"
+#include "shm_layout.h"
+#include "desktop_gfx.h"
+#include "desktop_icons.h"
+#include "desktop_wm.h"
+#include "desktop_fs.h"
+#include "methylui/mui_font.h"
+#include "methylui/mui_surface.h"
+#include "methylui/mui_clip.h"
+#include "methylui/mui_list.h"
+#include "methylui/mui_textbox.h"
+#include "methylui/mui_scroll.h"
+#include "methylui/mui_dialog.h"
+#include "ime.h"
+
+static inline uint64_t tsc_now(void) {
+    uint32_t lo, hi;
+    __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((uint64_t)hi << 32) | lo;
+}
+
+#define PANEL_H     28
+#define MENU_ITEM_H 24
+#define MENU_PAD    4
+#define MENU_W      160
+
+#define COL_PANEL      0x2A2A3E
+#define COL_PANEL_FG   0xCCCCCC
+#define COL_MENU_BG    0x2A2A3E
+#define COL_MENU_FG    0xFFFFFF
+#define COL_MENU_HL    0x3A6EA5
+
+#define WALL_TOP       0x303A3E
+#define WALL_BOTTOM    0x102140
+
+#define ROOT_PATH        "SYS:\\"
+#define MAX_DESK_FILES   256
+#define ICON_CELL_W      80
+#define ICON_CELL_H      80
+#define ICON_SIZE        48
+#define ICON_PAD_X       16
+#define ICON_PAD_Y       16
+
+static int g_W, g_H;
+int g_inbox_w = -1;
+static uint32_t g_tick = 0;
+
+static unsigned int *g_wall_pixels;
+static int g_wall_bmp_state = 0;
+static unsigned int *g_wall_bmp_cache = NULL;
+static struct shm_hdr *g_wall_hdr;
+static char g_wall_shm[16];
+static int g_wall_ev = -1;
+
+static unsigned int *g_panel_pixels;
+static struct shm_hdr *g_panel_hdr;
+static char g_panel_shm[16];
+static int g_panel_ev = -1;
+
+static unsigned int *g_menu_pixels;
+static struct shm_hdr *g_menu_hdr;
+static char g_menu_shm[16];
+static char g_menu_ev_name[24];
+static int g_menu_ev = -1;
+static int g_menu_w, g_menu_h, g_menu_visible;
+static int g_menu_gen = 0;
+static uint32_t g_task_win_id = 0;
+
+/* 任务栏缩略图（独立 popup，同一时刻只显示一个） */
+#define CLOCK_W   80
+#define VOL_W     76
+#define THUMB_W   200
+#define THUMB_H   140
+
+static unsigned int *g_thumb_pixels;
+static struct shm_hdr *g_thumb_hdr;
+static char g_thumb_shm[16];
+static char g_thumb_ev_name[24];
+static int g_thumb_ev = -1;
+static int g_thumb_gen = 0;
+static int g_thumb_idx = -1;
+static unsigned int *g_thumb_src;
+static uint32_t g_thumb_src_size;
+static uint32_t g_thumb_src_id;
+static int g_thumb_src_w, g_thumb_src_h;
+static uint32_t g_thumb_last_counter;
+
+static int g_panel_hover = -1;
+static int g_volume = 80;
+
+struct desktop_win {
+    uint32_t id;
+    uint32_t minimized;
+    uint32_t cw, ch;
+    char     title[32];
+    char     shm_name[16];
+};
+
+static struct desktop_win g_win_list[8];
+static int g_win_count = 0;
+
+#define WIN_ITEM_X0   64
+#define WIN_ITEM_W    100
+
+struct fm_win;
+
+static void spawn_term(int cw, int ch, int x, int y);
+static void spawn_term_argv(int cw, int ch, int x, int y,
+                            char *const extra[], const char *title);
+static void open_source_file(const char *path);
+static void open_photo_file(const char *path);
+static void open_audio_file(const char *path);
+static struct fm_win *open_folder_window(const char *path);
+static void desktop_refresh_icons(void);
+static void toggle_safeguard(void);
+static void close_menu_request(void);
+static void shm_publish(struct shm_hdr *h);
+static void shm_mark_rect(struct shm_hdr *h, int x0, int y0, int x1, int y1);
+static void open_context_menu(int x, int y);
+static void open_context_item_menu(int file_idx, int x, int y);
+static void draw_volume_region(void);
+
+static struct fs_entry_info g_files[MAX_DESK_FILES];
+static int g_file_count = 0;
+static int g_selected_file = -1;
+static uint8_t g_sel_mask[MAX_DESK_FILES];
+static int g_last_clicked_file = -1;
+static uint32_t g_click_tick = 0;
+static int g_desk_cols = 1;
+static struct mui_dialog g_desk_dialog;
+static struct ime_ctx g_desk_ime;
+static int g_desk_icon_file = -1;
+
+static int desk_sel_count(void) {
+    int n = 0;
+    for (int i = 0; i < g_file_count; i++)
+        if (g_sel_mask[i]) n++;
+    return n;
+}
+
+static int desk_is_selected(int idx) {
+    if (idx < 0 || idx >= g_file_count) return 0;
+    return g_sel_mask[idx] != 0;
+}
+
+static int desk_sel_first(void) {
+    for (int i = 0; i < g_file_count; i++)
+        if (g_sel_mask[i]) return i;
+    return -1;
+}
+
+static void desk_sel_clear(void) {
+    memset(g_sel_mask, 0, sizeof(g_sel_mask));
+    g_selected_file = -1;
+}
+
+static void desk_sel_only(int idx) {
+    memset(g_sel_mask, 0, sizeof(g_sel_mask));
+    if (idx < 0 || idx >= g_file_count) {
+        g_selected_file = -1;
+        return;
+    }
+    g_sel_mask[idx] = 1;
+    g_selected_file = idx;
+}
+
+static void desk_sel_toggle(int idx) {
+    if (idx < 0 || idx >= g_file_count) return;
+    g_sel_mask[idx] ^= 1;
+    if (g_sel_mask[idx])
+        g_selected_file = idx;
+    else if (g_selected_file == idx)
+        g_selected_file = desk_sel_first();
+    if (desk_sel_count() == 0) g_selected_file = -1;
+}
+
+static int desk_collect_paths(char paths[][256], int max) {
+    int n = 0;
+    for (int i = 0; i < g_file_count && n < max; i++) {
+        if (!g_sel_mask[i]) continue;
+        snprintf(paths[n], 256, "SYS:\\%s", g_files[i].name);
+        n++;
+    }
+    if (n == 0 && g_selected_file >= 0 && g_selected_file < g_file_count) {
+        snprintf(paths[0], 256, "SYS:\\%s", g_files[g_selected_file].name);
+        n = 1;
+    }
+    return n;
+}
+
+static void calc_desk_cols(void) {
+    g_desk_cols = (g_W - 2 * ICON_PAD_X) / ICON_CELL_W;
+    if (g_desk_cols < 1) g_desk_cols = 1;
+}
+
+static int is_c_source(const char *name) {
+    if (!name) return 0;
+    size_t len = strlen(name);
+    return len > 2 && name[len - 2] == '.' &&
+           (name[len - 1] == 'c' || name[len - 1] == 'C');
+}
+
+static int is_image_file(const char *name) {
+    if (!name) return 0;
+    size_t len = strlen(name);
+    if (len < 4) return 0;
+    const char *e = name + len - 4;
+    /* .jpg / .png / .gif / .bmp */
+    if (e[0] == '.' &&
+        (e[1] == 'j' || e[1] == 'J') && (e[2] == 'p' || e[2] == 'P') &&
+        (e[3] == 'g' || e[3] == 'G'))
+        return 1;
+    if (e[0] == '.' &&
+        (e[1] == 'p' || e[1] == 'P') && (e[2] == 'n' || e[2] == 'N') &&
+        (e[3] == 'g' || e[3] == 'G'))
+        return 1;
+    if (e[0] == '.' &&
+        (e[1] == 'g' || e[1] == 'G') && (e[2] == 'i' || e[2] == 'I') &&
+        (e[3] == 'f' || e[3] == 'F'))
+        return 1;
+    if (e[0] == '.' &&
+        (e[1] == 'b' || e[1] == 'B') && (e[2] == 'm' || e[2] == 'M') &&
+        (e[3] == 'p' || e[3] == 'P'))
+        return 1;
+    if (len >= 5 && e[-1] == '.' &&
+        (e[0] == 'j' || e[0] == 'J') && (e[1] == 'p' || e[1] == 'P') &&
+        (e[2] == 'e' || e[2] == 'E') && (e[3] == 'g' || e[3] == 'G'))
+        return 1;
+    return 0;
+}
+
+static int is_audio_file(const char *name) {
+    if (!name) return 0;
+    size_t len = strlen(name);
+    if (len < 5) return 0;
+    const char *e = name + len - 4;
+    return e[0] == '.' &&
+           (e[1] == 'w' || e[1] == 'W') &&
+           (e[2] == 'a' || e[2] == 'A') &&
+           (e[3] == 'v' || e[3] == 'V');
+}
+
+static inline unsigned int wall_bg_pixel(int x, int y) {
+    if (g_wall_bmp_state == 1 && g_wall_bmp_cache)
+        return g_wall_bmp_cache[(size_t)y * g_W + x];
+    return gfx_lerp(WALL_TOP, WALL_BOTTOM, y, g_H);
+}
+
+static void draw_file_icon(int idx) {
+    struct fs_entry_info *f = &g_files[idx];
+    int selected = desk_is_selected(idx);
+
+    int col = idx % g_desk_cols;
+    int row = idx / g_desk_cols;
+    int px = ICON_PAD_X + col * ICON_CELL_W;
+    int py = ICON_PAD_Y + row * ICON_CELL_H;
+
+    int ix = px + (ICON_CELL_W - ICON_SIZE) / 2;
+    int iy = py;
+
+    for (int j = 0; j < ICON_SIZE; j++) {
+        unsigned int *row_p = g_wall_pixels + (iy + j) * g_W + ix;
+        for (int i = 0; i < ICON_SIZE; i++)
+            row_p[i] = wall_bg_pixel(ix + i, iy + j);
+    }
+
+    char full_path[256];
+    snprintf(full_path, sizeof(full_path), "%s%s", ROOT_PATH, f->name);
+    int ci = custom_icon_lookup(full_path);
+
+    if (ci >= 0) {
+        custom_icon_draw(ci, g_wall_pixels, g_W, g_H, ix, iy, ICON_SIZE);
+    } else if (f->is_dir) {
+        icon_draw_folder_large(g_wall_pixels, g_W, g_H, ix, iy, ICON_SIZE);
+    } else if (f->is_exec) {
+        icon_draw_exec_large(g_wall_pixels, g_W, g_H, ix, iy, ICON_SIZE);
+    } else {
+        gfx_fill_rect(g_wall_pixels, g_W, g_H, ix, iy, ICON_SIZE, ICON_SIZE, 0xFFFFFF);
+        for (int j = 8; j < ICON_SIZE - 4; j += 8) {
+            gfx_fill_rect(g_wall_pixels, g_W, g_H, ix + 8, iy + j, ICON_SIZE - 16, 2, 0x9E9E9E);
+        }
+    }
+
+    if (selected) {
+        unsigned int edge = 0xFFFFFF;
+        gfx_fill_rect(g_wall_pixels, g_W, g_H, ix, iy, ICON_SIZE, 1, edge);
+        gfx_fill_rect(g_wall_pixels, g_W, g_H, ix, iy + ICON_SIZE - 1, ICON_SIZE, 1, edge);
+        gfx_fill_rect(g_wall_pixels, g_W, g_H, ix, iy, 1, ICON_SIZE, edge);
+        gfx_fill_rect(g_wall_pixels, g_W, g_H, ix + ICON_SIZE - 1, iy, 1, ICON_SIZE, edge);
+    }
+
+    char label[64];
+    int n = 0, tw = 0;
+    const unsigned char *np = (const unsigned char*)f->name;
+    while (*np && n < (int)sizeof(label) - 4) {
+        uint32_t cp;
+        int clen = ufont_utf8_decode(np, &cp);
+        int cw = wm_font_width((int)cp);
+        if (!cw) cw = 8;
+        if (tw + cw > ICON_CELL_W - 8) break;
+        memcpy(label + n, np, clen);
+        n += clen;
+        tw += cw;
+        np += clen;
+    }
+    label[n] = '\0';
+
+    int ly = iy + ICON_SIZE + 4;
+    int tx = px + (ICON_CELL_W - tw) / 2;
+    if (tx < px + 2) tx = px + 2;
+
+    if (tw > 0) {
+        for (int j = 0; j < 17; j++) {
+            int yy = ly + j;
+            if (yy < 0 || yy >= g_H) continue;
+            unsigned int *row = g_wall_pixels + yy * g_W;
+            for (int i = 0; i < tw + 1; i++) {
+                int xx = tx + i;
+                if (xx < 0 || xx >= g_W) continue;
+                row[xx] = wall_bg_pixel(xx, yy);
+            }
+        }
+    }
+
+    gfx_draw_text(g_wall_pixels, g_W, g_H, tx + 1, ly + 1, label,
+                  0x000000, GFX_BG_TRANSPARENT);
+    gfx_draw_text(g_wall_pixels, g_W, g_H, tx, ly, label,
+                  0xFFFFFF, GFX_BG_TRANSPARENT);
+}
+
+static void draw_all_files(void) {
+    for (int i = 0; i < g_file_count; i++) draw_file_icon(i);
+}
+
+static void redraw_selection_changed(const uint8_t *old_sel) {
+    int x0 = g_W, y0 = g_H, x1 = 0, y1 = 0;
+    int any = 0;
+
+    for (int idx = 0; idx < g_file_count; idx++) {
+        if (old_sel[idx] == g_sel_mask[idx]) continue;
+
+        draw_file_icon(idx);
+
+        int cx0 = ICON_PAD_X + (idx % g_desk_cols) * ICON_CELL_W;
+        int cy0 = ICON_PAD_Y + (idx / g_desk_cols) * ICON_CELL_H;
+        int cx1 = cx0 + ICON_CELL_W;
+        int cy1 = cy0 + ICON_SIZE + 24;
+        if (!any || cx0 < x0) x0 = cx0;
+        if (!any || cy0 < y0) y0 = cy0;
+        if (!any || cx1 > x1) x1 = cx1;
+        if (!any || cy1 > y1) y1 = cy1;
+        any = 1;
+    }
+    if (!any) return;
+
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > g_W) x1 = g_W;
+    if (y1 > g_H) y1 = g_H;
+
+    shm_mark_rect(g_wall_hdr, x0, y0, x1, y1);
+    shm_publish(g_wall_hdr);
+}
+
+#define MAX_FM_WINDOWS 4
+#define FM_TOP_BAR_H 24
+#define FM_ROW_H     24
+
+#define FM_MENU_W       152
+#define FM_MENU_ITEM_H  24
+#define FM_MENU_PAD     4
+#define FM_MENU_MAX_ITEMS 6
+
+#define FM_INPUT_NONE    0
+#define FM_INPUT_PATH    1
+#define FM_INPUT_NEWDIR  3
+#define FM_INPUT_NEWFILE 4
+
+#define FM_SCROLL_W      8
+
+struct fm_win {
+    int used;
+    char path[128];
+    unsigned int *pixels;
+    struct shm_hdr *hdr;
+    int ev;
+    char shm_name[16];
+    int cw, ch;
+    int map_size;
+
+    struct mui_surface surf;
+    struct mui_list  list;
+    struct mui_scroll scroll;
+    struct mui_textbox input_box;
+    struct mui_dialog dialog;
+    int scroll_dirty;
+
+    int last_click_idx;
+    uint32_t last_click_tick;
+
+    int  input_mode;
+    char input_prompt[24];
+    char status[64];
+
+    int menu_open;
+    int menu_target;
+    int menu_hover;
+    int menu_x, menu_y, menu_w, menu_h;
+    int icon_target;
+
+    int  esc_state;
+    int  esc_len;
+    char esc_buf[8];
+    int  esc_was_ui;
+
+    /* ========== 路径栏全选 / 选区编辑状态 ========== */
+    int  path_fresh;               /* 1 = 整段全选高亮 */
+    int  sel_active;               /* 1 = 有鼠标选中的子选区 */
+    int  sel_start;                /* 选区起始 UTF-8 字节偏移 */
+    int  sel_end;                  /* 选区结束 UTF-8 字节偏移 */
+    int  mouse_sel_dragging;       /* 1 = 鼠标正在拖动选择 */
+    int  mouse_sel_anchor;         /* 按下时的锚点（字节偏移） */
+    int  mouse_sel_start_x;        /* 按下时的鼠标 x 坐标 */
+    int  mouse_sel_fresh_enter;    /* 1 = 本次按下是从非编辑状态进入（首次点击） */
+    /* ================================================== */
+
+    int drag_candidate;
+    int drag_moved;
+    int drag_start_x, drag_start_y;
+    struct ime_ctx ime;
+};
+
+static struct fm_win g_fm_wins[MAX_FM_WINDOWS];
+static int g_fm_shm_gen = 0;
+
+static void fm_paint_icon(struct mui_surface *s, int x, int y, int icon) {
+    if (icon >= CI_ICON_BASE) {
+        custom_icon_draw(icon - CI_ICON_BASE, s->pixels, s->w, s->h, x, y, 16);
+    } else if (icon == MUI_LIST_ICON_DIR)
+        icon_draw_folder_small(s->pixels, s->w, s->h, x, y);
+    else if (icon == MUI_LIST_ICON_EXEC)
+        icon_draw_exec_small(s->pixels, s->w, s->h, x, y);
+    else
+        icon_draw_file_small(s->pixels, s->w, s->h, x, y);
+}
+
+static void draw_fm_menu(struct fm_win *w);
+
+static void fm_setup_surface(struct fm_win *w) {
+    w->surf.pixels = w->pixels;
+    w->surf.w = w->cw;
+    w->surf.h = w->ch;
+    w->surf.hdr = w->hdr;
+    w->surf.clip_on = 0;
+}
+
+static void shm_mark_rect(struct shm_hdr *h, int x0, int y0, int x1, int y1) {
+    if (!h || x1 <= x0 || y1 <= y0) return;
+    if (h->cur_x0 == SHM_DIRTY_EMPTY || h->cur_x1 <= h->cur_x0) {
+        h->cur_x0 = (uint32_t)x0;
+        h->cur_y0 = (uint32_t)y0;
+        h->cur_x1 = (uint32_t)x1;
+        h->cur_y1 = (uint32_t)y1;
+    } else {
+        if ((uint32_t)x0 < h->cur_x0) h->cur_x0 = (uint32_t)x0;
+        if ((uint32_t)y0 < h->cur_y0) h->cur_y0 = (uint32_t)y0;
+        if ((uint32_t)x1 > h->cur_x1) h->cur_x1 = (uint32_t)x1;
+        if ((uint32_t)y1 > h->cur_y1) h->cur_y1 = (uint32_t)y1;
+    }
+}
+
+static void shm_publish(struct shm_hdr *h) {
+    if (!h) return;
+    if (h->cur_x0 == SHM_DIRTY_EMPTY || h->cur_x1 <= h->cur_x0 ||
+        h->cur_y1 <= h->cur_y0)
+        return;
+
+    if (h->pub_x0 == SHM_DIRTY_EMPTY || h->pub_x1 <= h->pub_x0) {
+        h->pub_x0 = h->cur_x0;
+        h->pub_y0 = h->cur_y0;
+        h->pub_x1 = h->cur_x1;
+        h->pub_y1 = h->cur_y1;
+        h->counter++;
+        h->cur_x0 = SHM_DIRTY_EMPTY;
+        h->cur_y0 = 0;
+        h->cur_x1 = 0;
+        h->cur_y1 = 0;
+    }
+}
+
+static void fm_publish(struct fm_win *w) {
+    if (!w || !w->used || !w->hdr) return;
+    shm_publish(w->hdr);
+}
+
+
+/* 计算文本前 bytes 个字节对应的像素宽度 */
+static int fm_text_prefix_width(const char *txt, int bytes) {
+    int w = 0, n = 0;
+    while (*txt && n < bytes) {
+        uint32_t cp;
+        int clen = ufont_utf8_decode((const unsigned char *)txt, &cp);
+        int cw = wm_font_width((int)cp);
+        if (!cw) cw = MUI_FONT_W;
+        w += cw;
+        n += clen;
+        txt += clen;
+    }
+    return w;
+}
+
+/* 根据鼠标 x 坐标计算文本中的 UTF-8 字节偏移 */
+static int fm_char_index_at(int text_x0, int mx, const char *txt) {
+    int char_x = text_x0;
+    int byte_off = 0;
+    const unsigned char *p = (const unsigned char *)txt;
+    while (*p) {
+        uint32_t cp;
+        int n = ufont_utf8_decode(p, &cp);
+        int cw = wm_font_width((int)cp);
+        if (!cw) cw = MUI_FONT_W;
+        if (mx < char_x + cw / 2) break;
+        char_x += cw;
+        byte_off += n;
+        p += n;
+    }
+    return byte_off;
+}
+
+static void fm_textbox_set_cursor_byte(struct mui_textbox *tb, int target_bytes) {
+    mui_textbox_cursor_home(tb);
+    const char *txt = mui_textbox_get_text(tb);
+    int n = 0;
+    while (*txt && n < target_bytes) {
+        uint32_t cp;
+        int clen = ufont_utf8_decode((const unsigned char *)txt, &cp);
+        n += clen;
+        txt += clen;
+        mui_textbox_move_cursor(tb, 1);
+    }
+}
+
+static void fm_paint_topbar(struct fm_win *w) {
+    struct mui_surface *s = &w->surf;
+
+    mui_clip_set(s, 0, 0, w->cw, FM_TOP_BAR_H);
+    mui_fill(s, 0, 0, w->cw, FM_TOP_BAR_H, 0x2A2A3E);
+
+    if (w->status[0]) {
+        mui_text(s, 4, (FM_TOP_BAR_H - MUI_FONT_H) / 2,
+                 w->status, 0xFFC040, 0x2A2A3E);
+    } else if (w->input_mode != FM_INPUT_NONE) {
+        mui_text(s, 4, (FM_TOP_BAR_H - MUI_FONT_H) / 2,
+                 w->input_prompt, 0xFFFFFF, 0x2A2A3E);
+
+        int px = 4 + mui_text_width(w->input_prompt);
+        int tw = w->cw - px - 4;
+        if (tw >= MUI_FONT_W) {
+            w->input_box.base.w = tw;
+            w->input_box.base.h = FM_TOP_BAR_H;
+            w->input_box.base.focused = 1;
+            w->input_box.base.dirty = 1;
+
+            int has_sel = (w->path_fresh ||
+                           (w->sel_active && w->sel_start != w->sel_end));
+
+            if (has_sel) {
+                const char *txt = mui_textbox_get_text(&w->input_box);
+                int sel_a, sel_b;
+                if (w->path_fresh) {
+                    sel_a = 0;
+                    sel_b = (int)strlen(txt);
+                } else {
+                    sel_a = w->sel_start;
+                    sel_b = w->sel_end;
+                    if (sel_a > sel_b) { int t = sel_a; sel_a = sel_b; sel_b = t; }
+                }
+
+                int y0 = 3;
+                int y1 = FM_TOP_BAR_H - 3;
+
+                mui_fill(s, px, 0, tw, FM_TOP_BAR_H, 0x1A1A1E);
+                mui_text(s, px + 1, (FM_TOP_BAR_H - MUI_FONT_H) / 2,
+                         txt, 0xCCCCCC, 0x1A1A1E);
+
+                int char_x0 = px + 1 + fm_text_prefix_width(txt, sel_a);
+                int char_x1 = px + 1 + fm_text_prefix_width(txt, sel_b);
+                if (char_x1 > char_x0) {
+                    mui_fill(s, char_x0, y0, char_x1 - char_x0, y1 - y0,
+                             0x3A6EA5);
+                    mui_clip_set(s, char_x0, y0, char_x1, y1);
+                    mui_text(s, px + 1, (FM_TOP_BAR_H - MUI_FONT_H) / 2,
+                             txt, 0xFFFFFF, 0x3A6EA5);
+                    mui_clip_set(s, 0, 0, w->cw, FM_TOP_BAR_H);
+                }
+
+                /* ★ 选区/全选末尾绘制 2px 白色光标，避免"光标消失"的错觉 */
+                if (char_x1 + 2 < px + tw)
+                    mui_fill(s, char_x1, y0 + 1, 2, y1 - y0 - 2, 0xFFFFFF);
+            } else {
+                mui_widget_paint(&w->input_box.base, s, px, 0);
+            }
+        }
+    } else {
+        char bar[160];
+        snprintf(bar, sizeof(bar), "%s", w->path);
+        int max_chars = (w->cw - 8) / MUI_FONT_W;
+        const char *show = bar;
+        if (max_chars > 0) {
+            int blen = strlen(bar);
+            if (blen > max_chars) show = bar + (blen - max_chars);
+        }
+        mui_text(s, 4, (FM_TOP_BAR_H - MUI_FONT_H) / 2,
+                 show, 0xCCCCCC, 0x2A2A3E);
+    }
+    mui_clip_reset(s);
+}
+
+static void fm_sync_scroll_value(struct fm_win *w) {
+    int max = mui_scroll_max_value(&w->scroll);
+    if (w->list.top < 0) w->list.top = 0;
+    if (w->list.top > max) w->list.top = max;
+    w->scroll.value = w->list.top;
+    w->scroll.base.dirty = 1;
+}
+
+static void fm_sync_scroll(struct fm_win *w) {
+    w->list.base.w = w->cw - FM_SCROLL_W;
+    w->list.base.h = w->ch - FM_TOP_BAR_H;
+    w->scroll.base.x = w->cw - FM_SCROLL_W;
+    w->scroll.base.y = FM_TOP_BAR_H;
+    w->scroll.base.w = FM_SCROLL_W;
+    w->scroll.base.h = w->ch - FM_TOP_BAR_H;
+    if (w->scroll.base.h < 4) w->scroll.base.h = 4;
+
+    int visible = w->scroll.base.h / FM_ROW_H;
+    if (visible < 1) visible = 1;
+    mui_scroll_set_range(&w->scroll, w->list.count, visible);
+    fm_sync_scroll_value(w);
+}
+
+static void fm_scroll_on_change(struct mui_scroll *s) {
+    struct fm_win *w = (struct fm_win*)s->base.user;
+    if (!w) return;
+    w->list.top = s->value;
+    w->scroll_dirty = 1;
+}
+
+static void fm_paint_list(struct fm_win *w) {
+    w->list.base.w = w->cw - FM_SCROLL_W;
+    w->list.base.h = w->ch - FM_TOP_BAR_H;
+
+    mui_clip_set(&w->surf, 0, FM_TOP_BAR_H,
+                 w->cw - FM_SCROLL_W, w->ch - FM_TOP_BAR_H);
+    mui_list_paint(&w->list, &w->surf, 0, FM_TOP_BAR_H);
+    mui_clip_reset(&w->surf);
+}
+
+static void fm_paint_row(struct fm_win *w, int idx) {
+    w->list.base.w = w->cw - FM_SCROLL_W;
+    w->list.base.h = w->ch - FM_TOP_BAR_H;
+
+    mui_clip_set(&w->surf, 0, FM_TOP_BAR_H,
+                 w->cw - FM_SCROLL_W, w->ch - FM_TOP_BAR_H);
+    mui_list_paint_row(&w->list, &w->surf, 0, FM_TOP_BAR_H, idx);
+    mui_clip_reset(&w->surf);
+}
+
+static void fm_paint_scroll(struct fm_win *w) {
+    w->scroll.base.dirty = 1;
+    mui_clip_set(&w->surf, w->scroll.base.x, w->scroll.base.y,
+                 w->scroll.base.w, w->scroll.base.h);
+    mui_widget_paint(&w->scroll.base, &w->surf,
+                     w->scroll.base.x, w->scroll.base.y);
+    mui_clip_reset(&w->surf);
+}
+
+static void fm_paint_dialog(struct fm_win *w) {
+    if (w->dialog.active)
+        mui_dialog_paint(&w->dialog, &w->surf, w->cw, w->ch);
+}
+
+static void fm_redraw(struct fm_win *w) {
+    fm_setup_surface(w);
+    fm_paint_topbar(w);
+    fm_paint_list(w);
+    fm_paint_scroll(w);
+    if (w->menu_open) draw_fm_menu(w);
+    fm_paint_dialog(w);
+    fm_publish(w);
+}
+
+static void fm_redraw_topbar(struct fm_win *w) {
+    fm_setup_surface(w);
+    fm_paint_topbar(w);
+    fm_publish(w);
+}
+
+static void fm_redraw_hover(struct fm_win *w, int old_idx, int new_idx) {
+    fm_setup_surface(w);
+    if (old_idx >= 0) fm_paint_row(w, old_idx);
+    if (new_idx >= 0) fm_paint_row(w, new_idx);
+    fm_publish(w);
+}
+
+static void fm_redraw_menu(struct fm_win *w) {
+    fm_setup_surface(w);
+    draw_fm_menu(w);
+    fm_publish(w);
+}
+
+static void fm_redraw_scroll(struct fm_win *w) {
+    fm_setup_surface(w);
+    fm_paint_list(w);
+    fm_paint_scroll(w);
+    fm_publish(w);
+}
+
+static void exec_elf(const char *path) {
+    if (!path || !path[0]) return;
+
+    if (strstr(path, "shell") != NULL) {
+        spawn_term(600, 400, 200, 100);
+        return;
+    }
+
+    char *argv[] = { (char*)path, NULL };
+    struct spawn_params sp = {
+        .size = sizeof(sp),
+        .in_fd = SPAWN_FD_INHERIT,
+        .out_fd = SPAWN_FD_INHERIT,
+        .err_fd = SPAWN_FD_INHERIT,
+        .in_pipe = -1, .out_pipe = -1, .err_pipe = -1,
+        .in_pty = -1, .out_pty = -1, .err_pty = -1,
+        .flags = 0, .envp = 0, .out_pid = 0,
+        .child_class = CLASS_USER,
+        .child_caps = 0,
+    };
+    proc_spawn(path, argv, &sp);
+}
+
+static void fm_path_join(const char *dir, const char *name, char *out, int out_size) {
+    int len = strlen(dir);
+    if (len > 0 && dir[len - 1] == '\\')
+        snprintf(out, out_size, "%s%s", dir, name);
+    else
+        snprintf(out, out_size, "%s\\%s", dir, name);
+}
+
+static const char *fm_path_base(const char *path) {
+    const char *base = path;
+    for (const char *p = path; *p; p++) {
+        if (*p == '\\') base = p + 1;
+    }
+    return base;
+}
+
+static void fm_path_parent(const char *path, char *out, int out_size) {
+    int i = (int)strlen(path) - 1;
+    while (i > 0 && path[i] == '\\') i--;
+    while (i >= 0 && path[i] != '\\') i--;
+    if (i < 0) {
+        snprintf(out, out_size, "SYS:\\");
+        return;
+    }
+    int n = i + 1;
+    if (n >= out_size) n = out_size - 1;
+    memcpy(out, path, n);
+    out[n] = '\0';
+}
+
+static void fm_item_path(struct fm_win *w, int idx, char *out, int out_size) {
+    fm_path_join(w->path, w->list.items[idx].text, out, out_size);
+}
+
+static int fm_path_is_inside(const char *path, const char *dir) {
+    int n = strlen(dir);
+    if (n == 0) return 0;
+    if (strncmp(path, dir, n) != 0) return 0;
+    return path[n] == '\\';
+}
+
+static int fm_path_exists(const char *path) {
+    int fd = fs_open(path, FS_O_RDONLY);
+    if (fd >= 0) { fs_close(fd); return 1; }
+    int d = fs_opendir(path);
+    if (d >= 0) { fs_closedir(d); return 1; }
+    return 0;
+}
+
+static void fm_unique_path(const char *dir, const char *name, char *out, int out_size) {
+    fm_path_join(dir, name, out, out_size);
+    if (!fm_path_exists(out)) return;
+
+    const char *dot = NULL;
+    for (const char *p = name; *p; p++) {
+        if (*p == '.') dot = p;
+    }
+    int stem = dot ? (int)(dot - name) : (int)strlen(name);
+    if (stem > 48) stem = 48;
+    char base[64];
+    memcpy(base, name, stem);
+    base[stem] = '\0';
+
+    for (int n = 1; n < 1000; n++) {
+        char cand[96];
+        if (dot)
+            snprintf(cand, sizeof(cand), "%s_%d%s", base, n, dot);
+        else
+            snprintf(cand, sizeof(cand), "%s_%d", base, n);
+        fm_path_join(dir, cand, out, out_size);
+        if (!fm_path_exists(out)) return;
+    }
+}
+
+static int fm_remove_recursive(const char *path) {
+    int d = fs_opendir(path);
+    if (d < 0) return fs_unlink(path);
+    fs_closedir(d);
+
+    for (int guard = 0; guard < 4096; guard++) {
+        d = fs_opendir(path);
+        if (d < 0) break;
+
+        char child[256];
+        int found = 0;
+        struct dirent ent;
+        for (;;) {
+            memset(&ent, 0, sizeof(ent));
+            int rc = fs_readdir(d, &ent);
+            if (rc < 0 || ent.name[0] == '\0') break;
+            if (strcmp(ent.name, ".") == 0 || strcmp(ent.name, "..") == 0) continue;
+            fm_path_join(path, ent.name, child, sizeof(child));
+            found = 1;
+            break;
+        }
+        fs_closedir(d);
+        if (!found) break;
+        if (fm_remove_recursive(child) < 0) return -1;
+    }
+    return fs_rmdir(path);
+}
+
+static int fm_copy_file(const char *src, const char *dst) {
+    int in = fs_open(src, FS_O_RDONLY);
+    if (in < 0) return in;
+    int out = fs_open(dst, FS_O_WRONLY | FS_O_CREAT | FS_O_TRUNC);
+    if (out < 0) { fs_close(in); return out; }
+
+    char buf[256];
+    int ret = 0;
+    for (;;) {
+        int n = fs_read(in, buf, sizeof(buf));
+        if (n < 0) { ret = n; break; }
+        if (n == 0) break;
+        int wn = fs_write(out, buf, n);
+        if (wn != n) { ret = (wn < 0) ? wn : -1; break; }
+    }
+    fs_close(in);
+    fs_close(out);
+    return ret;
+}
+
+static int fm_copy_recursive(const char *src, const char *dst) {
+    int d = fs_opendir(src);
+    if (d < 0) return fm_copy_file(src, dst);
+
+    int r = fs_mkdir(dst);
+    if (r < 0) { fs_closedir(d); return r; }
+
+    struct dirent ent;
+    for (;;) {
+        memset(&ent, 0, sizeof(ent));
+        int rc = fs_readdir(d, &ent);
+        if (rc < 0 || ent.name[0] == '\0') break;
+        if (strcmp(ent.name, ".") == 0 || strcmp(ent.name, "..") == 0) continue;
+        char s[256], t[256];
+        fm_path_join(src, ent.name, s, sizeof(s));
+        fm_path_join(dst, ent.name, t, sizeof(t));
+        fm_copy_recursive(s, t);
+    }
+    fs_closedir(d);
+    return 0;
+}
+
+#define CLIP_MAX 32
+static char g_clip_paths[CLIP_MAX][256];
+static int  g_clip_count = 0;
+static int  g_clip_cut = 0;
+
+static int fm_collect_selection(struct fm_win *w, char paths[][256], int max) {
+    int n = 0;
+    for (int i = 0; i < w->list.count && n < max; i++) {
+        if (w->list.selected[i]) {
+            fm_path_join(w->path, w->list.items[i].text, paths[n], 256);
+            n++;
+        }
+    }
+    if (n == 0 && w->list.cursor >= 0 && w->list.cursor < w->list.count) {
+        fm_path_join(w->path, w->list.items[w->list.cursor].text, paths[0], 256);
+        n = 1;
+    }
+    return n;
+}
+
+static int fm_menu_count(struct fm_win *w) {
+    if (w->menu_target < 0) return 4;
+    if (mui_list_selected_count(&w->list) > 1) return 3;
+    int idx = w->menu_target;
+    if (idx >= 0 && idx < w->list.count &&
+        w->list.items[idx].icon != MUI_LIST_ICON_DIR &&
+        is_c_source(w->list.items[idx].text))
+        return 6;
+    return 5;
+}
+
+static const char *fm_menu_label(struct fm_win *w, int i) {
+    static const char *bg_labels[FM_MENU_MAX_ITEMS]   = { "\xE5\x88\xB7\xE6\x96\xB0", "\xE7\xB2\x98\xE8\xB4\xB4", "\xE6\x96\xB0\xE5\xBB\xBA\xE6\x96\x87\xE4\xBB\xB6\xE5\xA4\xB9", "\xE6\x96\xB0\xE5\xBB\xBA\x20\x43\x20\xE6\xBA\x90\xE6\x96\x87\xE4\xBB\xB6", NULL, NULL };
+    static const char *item_labels[FM_MENU_MAX_ITEMS] = { "\xE5\xA4\x8D\xE5\x88\xB6", "\xE5\x89\xAA\xE5\x88\x87", "\xE5\x88\xA0\xE9\x99\xA4", "\xE9\x87\x8D\xE5\x91\xBD\xE5\x90\x8D", "\xE6\x9B\xB4\xE6\x94\xB9\xE5\x9B\xBE\xE6\xA0\x87", "\xE7\xBC\x96\xE8\xAF\x91" };
+    return (w->menu_target >= 0) ? item_labels[i] : bg_labels[i];
+}
+
+static void draw_fm_menu(struct fm_win *w) {
+    struct mui_surface *s = &w->surf;
+    mui_clip_set(s, w->menu_x, w->menu_y, w->menu_w, w->menu_h);
+
+    mui_fill(s, w->menu_x, w->menu_y, w->menu_w, w->menu_h, 0x2A2A3E);
+    mui_border(s, w->menu_x, w->menu_y, w->menu_w, w->menu_h, 0x5A5A7E);
+
+    int count = fm_menu_count(w);
+    for (int i = 0; i < count; i++) {
+        int y = w->menu_y + FM_MENU_PAD + i * FM_MENU_ITEM_H;
+        unsigned int bg = (i == w->menu_hover) ? 0x3A6EA5 : 0x2A2A3E;
+        if (i == w->menu_hover)
+            mui_fill(s, w->menu_x + 1, y, w->menu_w - 2, FM_MENU_ITEM_H, bg);
+        mui_text(s, w->menu_x + 8, y + (FM_MENU_ITEM_H - MUI_FONT_H) / 2,
+                 fm_menu_label(w, i), 0xFFFFFF, bg);
+    }
+
+    mui_clip_reset(s);
+}
+
+static void fm_open_menu(struct fm_win *w, int target, int mx, int my) {
+    w->menu_open   = 1;
+    w->menu_target = target;
+    w->menu_hover  = -1;
+    w->menu_w      = FM_MENU_W;
+    w->menu_h      = fm_menu_count(w) * FM_MENU_ITEM_H + 2 * FM_MENU_PAD;
+
+    if (mx + w->menu_w > w->cw) mx = w->cw - w->menu_w;
+    if (my + w->menu_h > w->ch) my = w->ch - w->menu_h;
+    if (mx < 0) mx = 0;
+    if (my < 0) my = 0;
+    w->menu_x = mx;
+    w->menu_y = my;
+    fm_redraw(w);
+}
+
+static int fm_menu_hit(struct fm_win *w, int mx, int my) {
+    if (!w->menu_open) return -1;
+    if (mx < w->menu_x || mx >= w->menu_x + w->menu_w) return -1;
+    if (my < w->menu_y || my >= w->menu_y + w->menu_h) return -1;
+    int rel = my - w->menu_y - FM_MENU_PAD;
+    if (rel < 0) return -1;
+    int i = rel / FM_MENU_ITEM_H;
+    if (i < 0 || i >= fm_menu_count(w)) return -1;
+    return i;
+}
+
+static void fm_input_reset(struct fm_win *w) {
+    w->input_mode   = FM_INPUT_NONE;
+    w->input_prompt[0] = '\0';
+    w->input_box.base.focused = 0;
+    w->path_fresh = 0;
+    w->sel_active = 0;
+    w->mouse_sel_dragging = 0;
+    w->mouse_sel_fresh_enter = 0;
+}
+
+static struct fs_entry_info g_fm_tmp[128];
+
+static void fm_load_items(struct fm_win *w) {
+    int n = fs_read_dir(w->path, g_fm_tmp, 128);
+    mui_list_clear(&w->list);
+    for (int i = 0; i < n; i++) {
+        int icon = g_fm_tmp[i].is_dir ? MUI_LIST_ICON_DIR :
+                   (g_fm_tmp[i].is_exec ? MUI_LIST_ICON_EXEC : MUI_LIST_ICON_FILE);
+        char full[256];
+        fm_path_join(w->path, g_fm_tmp[i].name, full, sizeof(full));
+        int ci = custom_icon_lookup(full);
+        if (ci >= 0) icon = CI_ICON_BASE + ci;
+        mui_list_set_item(&w->list, i, g_fm_tmp[i].name, icon);
+    }
+    w->list.count = n;
+    fm_sync_scroll(w);
+}
+
+static void fm_refresh(struct fm_win *w) {
+    int top = w->list.top;
+    fm_load_items(w);
+    mui_list_clear_selection(&w->list);
+    w->list.cursor = -1;
+    w->list.hover = -1;
+    w->list.top = top;
+    mui_list_scroll(&w->list, 0);
+    fm_sync_scroll(w);
+}
+
+static void fm_select_name(struct fm_win *w, const char *name) {
+    w->list.cursor = -1;
+    mui_list_clear_selection(&w->list);
+    for (int i = 0; i < w->list.count; i++) {
+        if (strcmp(w->list.items[i].text, name) == 0) {
+            mui_list_select_only(&w->list, i);
+            fm_sync_scroll_value(w);
+            return;
+        }
+    }
+}
+
+static void fm_navigate(struct fm_win *w, const char *path) {
+    strncpy(w->path, path, sizeof(w->path) - 1);
+    w->path[sizeof(w->path) - 1] = '\0';
+    w->last_click_idx = -1;
+    w->status[0] = '\0';
+    w->menu_open = 0;
+    w->esc_state = 0;
+    w->drag_candidate = 0;
+    fm_input_reset(w);
+    fm_load_items(w);
+    mui_list_clear_selection(&w->list);
+    w->list.cursor = -1;
+    w->list.top = 0;
+    w->list.hover = -1;
+    fm_sync_scroll(w);
+    fm_redraw(w);
+}
+
+static void fm_go_parent(struct fm_win *w) {
+    char parent[128];
+    fm_path_parent(w->path, parent, sizeof(parent));
+    if (strcmp(parent, w->path) == 0) return;
+    fm_navigate(w, parent);
+}
+
+static void fm_input_begin(struct fm_win *w, int mode, const char *prompt) {
+    w->input_mode   = mode;
+    strncpy(w->input_prompt, prompt, sizeof(w->input_prompt) - 1);
+    w->input_prompt[sizeof(w->input_prompt) - 1] = '\0';
+    mui_textbox_set_text(&w->input_box, "");
+    w->input_box.base.focused = 1;
+    w->input_box.base.dirty = 1;
+    w->menu_open = 0;
+    w->status[0] = '\0';
+    w->path_fresh = 0;
+    w->sel_active = 0;
+    w->mouse_sel_dragging = 0;
+    w->mouse_sel_fresh_enter = 0;
+}
+
+static void fm_set_status(struct fm_win *w, const char *msg) {
+    strncpy(w->status, msg, sizeof(w->status) - 1);
+    w->status[sizeof(w->status) - 1] = '\0';
+}
+
+static void fm_input_commit(struct fm_win *w) {
+    char text[MUI_TEXTBOX_MAX_LEN + 1];
+    int mode = w->input_mode;
+
+    strncpy(text, mui_textbox_get_text(&w->input_box), sizeof(text) - 1);
+    text[sizeof(text) - 1] = '\0';
+
+    int start = 0;
+    while (text[start] == ' ') start++;
+    int end = (int)strlen(text);
+    while (end > start && text[end - 1] == ' ') end--;
+    char name[128];
+    int n = end - start;
+    if (n < 0) n = 0;
+    if (n > (int)sizeof(name) - 1) n = sizeof(name) - 1;
+    memcpy(name, text + start, n);
+    name[n] = '\0';
+
+    fm_input_reset(w);
+
+    if (mode == FM_INPUT_NONE || name[0] == '\0') {
+        fm_redraw_topbar(w);
+        return;
+    }
+
+    if (mode == FM_INPUT_PATH) {
+        if (strcmp(name, "..") == 0) { fm_go_parent(w); return; }
+        if (strcmp(name, ".") == 0)  { fm_redraw(w); return; }
+
+        for (char *p = name; *p; p++) {
+            if (*p == '/') *p = '\\';
+        }
+        char path[256];
+        if (strchr(name, ':'))
+            snprintf(path, sizeof(path), "%s", name);
+        else if (name[0] == '\\')
+            snprintf(path, sizeof(path), "SYS:%s", name);
+        else
+            fm_path_join(w->path, name, path, sizeof(path));
+
+        int d = fs_opendir(path);
+        if (d >= 0) {
+            fs_closedir(d);
+            fm_navigate(w, path);
+        } else {
+            fm_set_status(w, "No such directory");
+            fm_redraw_topbar(w);
+        }
+    } else if (mode == FM_INPUT_NEWDIR) {
+        char p[256];
+        fm_path_join(w->path, name, p, sizeof(p));
+        if (fm_path_exists(p)) {
+            fm_set_status(w, "Already exists");
+        } else if (fs_mkdir(p) < 0) {
+            fm_set_status(w, "mkdir failed");
+        } else {
+            fm_refresh(w);
+            fm_select_name(w, name);
+            desktop_refresh_icons();
+            fm_set_status(w, "Created");
+        }
+        fm_redraw(w);
+    } else if (mode == FM_INPUT_NEWFILE) {
+        char fname[96];
+        strncpy(fname, name, sizeof(fname) - 1);
+        fname[sizeof(fname) - 1] = '\0';
+        if (!is_c_source(fname)) {
+            int len = strlen(fname);
+            if (len < (int)sizeof(fname) - 3) {
+                fname[len]     = '.';
+                fname[len + 1] = 'c';
+                fname[len + 2] = '\0';
+            }
+        }
+        char p[256];
+        fm_path_join(w->path, fname, p, sizeof(p));
+        if (fm_path_exists(p)) {
+            fm_set_status(w, "Already exists");
+        } else {
+            int fd = fs_open(p, FS_O_WRONLY | FS_O_CREAT | FS_O_TRUNC);
+            if (fd < 0) {
+                fm_set_status(w, "Create failed");
+            } else {
+                fs_close(fd);
+                fm_refresh(w);
+                fm_select_name(w, fname);
+                desktop_refresh_icons();
+                fm_set_status(w, "Created");
+            }
+        }
+        fm_redraw(w);
+    }
+}
+
+static void fm_open_selected(struct fm_win *w, int new_window) {
+    int idx = w->list.cursor;
+    if (idx < 0 || idx >= w->list.count) {
+        if (mui_list_selected_count(&w->list) == 1) {
+            for (int i = 0; i < w->list.count; i++)
+                if (w->list.selected[i]) { idx = i; break; }
+        }
+    }
+    if (idx < 0 || idx >= w->list.count) return;
+
+    char path[256];
+    fm_item_path(w, idx, path, sizeof(path));
+    int icon = w->list.items[idx].icon;
+
+    if (icon == MUI_LIST_ICON_DIR) {
+        if (new_window) open_folder_window(path);
+        else            fm_navigate(w, path);
+    } else if (is_c_source(w->list.items[idx].text)) {
+        open_source_file(path);
+    } else if (is_image_file(w->list.items[idx].text)) {
+        open_photo_file(path);
+    } else if (is_audio_file(w->list.items[idx].text)) {
+        open_audio_file(path);
+    } else if (icon == MUI_LIST_ICON_EXEC) {
+        exec_elf(path);
+    } else {
+        fm_set_status(w, "Can't open this file");
+        fm_redraw(w);
+    }
+}
+
+static void fm_delete_selected(struct fm_win *w) {
+    char paths[CLIP_MAX][256];
+    int n = fm_collect_selection(w, paths, CLIP_MAX);
+    if (n == 0) return;
+
+    int ok = 0;
+    for (int i = 0; i < n; i++) {
+        if (fm_remove_recursive(paths[i]) >= 0) ok++;
+    }
+
+    fm_refresh(w);
+    desktop_refresh_icons();
+    fm_set_status(w, ok > 0 ? "Deleted" : "Delete failed");
+    fm_redraw(w);
+}
+
+static void fm_paste(struct fm_win *w) {
+    if (g_clip_count <= 0) {
+        fm_set_status(w, "Clipboard empty");
+        fm_redraw(w);
+        return;
+    }
+
+    int done = 0;
+    int cut = g_clip_cut;
+
+    for (int i = 0; i < g_clip_count; i++) {
+        const char *src = g_clip_paths[i];
+        const char *base = fm_path_base(src);
+        if (!base[0]) continue;
+        if (fm_path_is_inside(w->path, src)) continue;
+
+        char src_dir[256];
+        fm_path_parent(src, src_dir, sizeof(src_dir));
+        if (cut && strcmp(src_dir, w->path) == 0) continue;
+
+        char dst[256];
+        fm_unique_path(w->path, base, dst, sizeof(dst));
+
+        int r = cut ? fs_rename(src, dst) : fm_copy_recursive(src, dst);
+        if (r >= 0) done++;
+    }
+
+    if (cut && done > 0) g_clip_count = 0;
+    fm_refresh(w);
+    desktop_refresh_icons();
+    fm_set_status(w, done > 0 ? (cut ? "Moved" : "Pasted") : "Paste failed");
+    fm_redraw(w);
+}
+
+#define DRAG_MAX 32
+static char g_drag_paths[DRAG_MAX][256];
+static int  g_drag_count = 0;
+static int  g_drag_active = 0;
+static int  g_drag_armed = 0;
+static int  g_drag_src_fm = -1;
+
+static void drag_clear(void) {
+    g_drag_active = 0;
+    g_drag_armed = 0;
+    g_drag_count = 0;
+    g_drag_src_fm = -1;
+}
+
+static void fm_drag_begin(struct fm_win *w) {
+    int n = fm_collect_selection(w, g_drag_paths, DRAG_MAX);
+    if (n <= 0) return;
+    g_drag_count = n;
+    g_drag_active = 1;
+    g_drag_armed = 0;
+    g_drag_src_fm = (int)(w - g_fm_wins);
+}
+
+static int fm_move_into(const char *src, const char *dest_dir) {
+    if (strcmp(src, dest_dir) == 0) return -1;
+    if (fm_path_is_inside(dest_dir, src)) return -1;
+
+    char src_dir[256];
+    fm_path_parent(src, src_dir, sizeof(src_dir));
+    if (strcmp(src_dir, dest_dir) == 0) return -1;
+
+    const char *base = fm_path_base(src);
+    char dst[256];
+    fm_unique_path(dest_dir, base, dst, sizeof(dst));
+    return fs_rename(src, dst);
+}
+
+static void fm_drop_to_dir(struct fm_win *w, const char *dest_dir) {
+    if (!g_drag_active) return;
+    if (!g_drag_armed) {
+        drag_clear();
+        return;
+    }
+
+    int moved = 0;
+    int tried = 0;
+    for (int i = 0; i < g_drag_count; i++) {
+        char src_dir[256];
+        fm_path_parent(g_drag_paths[i], src_dir, sizeof(src_dir));
+        if (strcmp(src_dir, dest_dir) == 0) continue;
+        tried++;
+        if (fm_move_into(g_drag_paths[i], dest_dir) >= 0) moved++;
+    }
+
+    int src_idx = g_drag_src_fm;
+    drag_clear();
+
+    if (src_idx >= 0 && src_idx < MAX_FM_WINDOWS && g_fm_wins[src_idx].used) {
+        fm_refresh(&g_fm_wins[src_idx]);
+        if (&g_fm_wins[src_idx] != w)
+            fm_redraw(&g_fm_wins[src_idx]);
+    }
+
+    if (w) {
+        fm_refresh(w);
+        if (moved > 0)      fm_set_status(w, "Moved");
+        else if (tried > 0) fm_set_status(w, "Move failed");
+        fm_redraw(w);
+    }
+
+    desktop_refresh_icons();
+}
+
+static void fm_finish_drag(struct fm_win *w, int mx, int my) {
+    if (!g_drag_active || g_drag_src_fm != (int)(w - g_fm_wins)) return;
+    if (mx < 0 || my < 0 || mx >= w->cw || my >= w->ch) return;
+
+    int row = mui_list_hit(&w->list, mx, my - FM_TOP_BAR_H);
+    char dest[256];
+    if (row >= 0 && w->list.items[row].icon == MUI_LIST_ICON_DIR)
+        fm_path_join(w->path, w->list.items[row].text, dest, sizeof(dest));
+    else
+        snprintf(dest, sizeof(dest), "%s", w->path);
+
+    if (strcmp(dest, w->path) == 0) {
+        drag_clear();
+        fm_redraw(w);
+        return;
+    }
+    fm_drop_to_dir(w, dest);
+}
+
+static int compile_source_path(const char *src) {
+    if (!src || !is_c_source(src)) return 0;
+    char parent[256], stem[128], out[256];
+    strncpy(stem, fm_path_base(src), sizeof(stem) - 1);
+    stem[sizeof(stem) - 1] = '\0';
+    int len = (int)strlen(stem);
+    if (len > 2 && stem[len - 2] == '.' &&
+        (stem[len - 1] == 'c' || stem[len - 1] == 'C'))
+        stem[len - 2] = '\0';
+    fm_path_parent(src, parent, sizeof(parent));
+    fm_path_join(parent, stem, out, sizeof(out));
+
+    char *argv[] = { "TCC", "-xc", "-o", out, (char*)src, NULL };
+    struct spawn_params sp = {
+        .size = sizeof(sp),
+        .in_fd = SPAWN_FD_NULL, .out_fd = SPAWN_FD_NULL, .err_fd = SPAWN_FD_NULL,
+        .in_pipe = -1, .out_pipe = -1, .err_pipe = -1,
+        .in_pty = -1, .out_pty = -1, .err_pty = -1,
+        .flags = 0, .envp = 0, .out_pid = 0,
+        .child_class = CLASS_USER, .child_caps = 0,
+    };
+    int h = proc_spawn("TCC", argv, &sp);
+    if (h < 0) return 0;
+    int st = 0, wr = proc_wait(h, &st, 0);
+    proc_close(h);
+    return wr == 0 && st == 0;
+}
+
+static void fm_compile_selected(struct fm_win *w, int idx) {
+    if (!w || idx < 0 || idx >= w->list.count) return;
+    char src[256];
+    fm_item_path(w, idx, src, sizeof(src));
+    int ok = compile_source_path(src);
+    fm_refresh(w);
+    desktop_refresh_icons();
+    fm_set_status(w, ok ? "Compiled" : "Compile failed");
+    fm_redraw(w);
+}
+
+static void desk_compile_file(int idx) {
+    if (idx < 0 || idx >= g_file_count || g_files[idx].is_dir) return;
+    char src[256];
+    snprintf(src, sizeof(src), "SYS:\\%s", g_files[idx].name);
+    if (compile_source_path(src)) desktop_refresh_icons();
+}
+
+static void fm_menu_action(struct fm_win *w, int item) {
+    int target = w->menu_target;
+
+    if (target >= 0 && target < w->list.count) {
+        if (item == 0 || item == 1) {
+            int n = fm_collect_selection(w, g_clip_paths, CLIP_MAX);
+            if (n > 0) {
+                g_clip_count = n;
+                g_clip_cut = (item == 1);
+                fm_set_status(w, (item == 1) ? "Cut" : "Copied");
+            }
+            fm_redraw(w);
+        } else if (item == 2) {
+            fm_delete_selected(w);
+        } else if (item == 3) {
+            if (mui_list_selected_count(&w->list) <= 1) {
+                int idx = w->list.cursor;
+                if (idx < 0 || idx >= w->list.count || !w->list.selected[idx])
+                    idx = target;
+                if (idx >= 0 && idx < w->list.count) {
+                    mui_dialog_open_rename(&w->dialog, w->path,
+                                           w->list.items[idx].text);
+                    fm_redraw(w);
+                }
+            }
+        } else if (item == 4) {
+            int idx = w->list.cursor;
+            if (idx < 0 || idx >= w->list.count || !w->list.selected[idx])
+                idx = target;
+            if (idx >= 0 && idx < w->list.count) {
+                char key[256];
+                fm_item_path(w, idx, key, sizeof(key));
+                const char *cur = ci_map_path(key);
+                w->icon_target = idx;
+                mui_dialog_open_text(&w->dialog, "Custom Icon",
+                                     "BMP path, e.g. SYS:\\my.bmp",
+                                     cur ? cur : "");
+                fm_redraw(w);
+            }
+        } else if (item == 5) {
+            fm_compile_selected(w, target);
+        }
+        return;
+    }
+
+    if (item == 0) {
+        fm_refresh(w);
+        fm_redraw(w);
+    } else if (item == 1) {
+        fm_paste(w);
+    } else if (item == 2) {
+        fm_input_begin(w, FM_INPUT_NEWDIR, "New Dir: ");
+        fm_redraw(w);
+    } else if (item == 3) {
+        fm_input_begin(w, FM_INPUT_NEWFILE, "New C: ");
+        fm_redraw(w);
+    }
+}
+
+static void fm_move_cursor(struct fm_win *w, int delta, int extend) {
+    if (w->list.count <= 0) return;
+    int cur = w->list.cursor;
+    if (cur < 0) cur = (delta > 0) ? -1 : w->list.count;
+    cur += delta;
+    if (cur < 0) cur = 0;
+    if (cur >= w->list.count) cur = w->list.count - 1;
+
+    if (extend) {
+        w->list.cursor = cur;
+        w->list.selected[cur] = 1;
+        mui_list_ensure_visible(&w->list, cur);
+    } else {
+        mui_list_select_only(&w->list, cur);
+    }
+    fm_sync_scroll_value(w);
+    fm_redraw(w);
+}
+
+static void fm_handle_esc_seq(struct fm_win *w, const char *seq, unsigned int mods) {
+    if (strcmp(seq, "[A") == 0) {
+        /* 上方向键 */
+        if (w->input_mode != FM_INPUT_NONE) {
+            if (w->path_fresh || (w->sel_active && w->sel_start != w->sel_end)) {
+                w->path_fresh = 0;
+                w->sel_active = 0;
+                mui_textbox_cursor_home(&w->input_box);
+            } else {
+                mui_textbox_move_cursor(&w->input_box, -1);
+            }
+            fm_redraw_topbar(w);
+        } else {
+            fm_move_cursor(w, -1, (mods & WM_MOD_SHIFT) != 0);
+        }
+    } else if (strcmp(seq, "[B") == 0) {
+        /* 下方向键 */
+        if (w->input_mode != FM_INPUT_NONE) {
+            if (w->path_fresh || (w->sel_active && w->sel_start != w->sel_end)) {
+                w->path_fresh = 0;
+                w->sel_active = 0;
+                mui_textbox_cursor_end(&w->input_box);
+            } else {
+                mui_textbox_move_cursor(&w->input_box, 1);
+            }
+            fm_redraw_topbar(w);
+        } else {
+            fm_move_cursor(w, 1, (mods & WM_MOD_SHIFT) != 0);
+        }
+    } else if (strcmp(seq, "[5~") == 0) {
+        mui_scroll_page(&w->scroll, -1);
+        w->scroll_dirty = 0;
+        fm_sync_scroll_value(w);
+        fm_redraw(w);
+    } else if (strcmp(seq, "[6~") == 0) {
+        mui_scroll_page(&w->scroll, 1);
+        w->scroll_dirty = 0;
+        fm_sync_scroll_value(w);
+        fm_redraw(w);
+    } else if (strcmp(seq, "[3~") == 0) {
+        if (w->input_mode != FM_INPUT_NONE) {
+            if (w->path_fresh || (w->sel_active && w->sel_start != w->sel_end)) {
+                mui_textbox_set_text(&w->input_box, "");
+                w->path_fresh = 0;
+                w->sel_active = 0;
+                fm_redraw_topbar(w);
+            }
+        } else {
+            if (!w->esc_was_ui) fm_delete_selected(w);
+        }
+    } else if (strcmp(seq, "[C") == 0) {
+        /* 右方向键 */
+        if (w->input_mode != FM_INPUT_NONE) {
+            if (w->path_fresh || (w->sel_active && w->sel_start != w->sel_end)) {
+                w->path_fresh = 0;
+                w->sel_active = 0;
+                mui_textbox_cursor_end(&w->input_box);
+            } else {
+                mui_textbox_move_cursor(&w->input_box, 1);
+            }
+            fm_redraw_topbar(w);
+        }
+    } else if (strcmp(seq, "[D") == 0) {
+        /* 左方向键 */
+        if (w->input_mode != FM_INPUT_NONE) {
+            if (w->path_fresh || (w->sel_active && w->sel_start != w->sel_end)) {
+                w->path_fresh = 0;
+                w->sel_active = 0;
+                mui_textbox_cursor_home(&w->input_box);
+            } else {
+                mui_textbox_move_cursor(&w->input_box, -1);
+            }
+            fm_redraw_topbar(w);
+        }
+    } else if (strcmp(seq, "[H") == 0) {
+        if (w->input_mode != FM_INPUT_NONE) {
+            w->path_fresh = 0;
+            w->sel_active = 0;
+            mui_textbox_cursor_home(&w->input_box);
+            fm_redraw_topbar(w);
+        } else {
+            if (w->list.count > 0) mui_list_select_only(&w->list, 0);
+            fm_sync_scroll_value(w);
+            fm_redraw(w);
+        }
+    } else if (strcmp(seq, "[F") == 0) {
+        if (w->input_mode != FM_INPUT_NONE) {
+            w->path_fresh = 0;
+            w->sel_active = 0;
+            mui_textbox_cursor_end(&w->input_box);
+            fm_redraw_topbar(w);
+        } else {
+            if (w->list.count > 0) mui_list_select_only(&w->list, w->list.count - 1);
+            fm_sync_scroll_value(w);
+            fm_redraw(w);
+        }
+    }
+}
+
+static void fm_handle_key(struct fm_win *w, int key, unsigned int mods) {
+    struct mui_textbox *target = NULL;
+    if (w->dialog.active) 
+        target = &w->dialog.input;
+    else if (w->input_mode != FM_INPUT_NONE) 
+        target = &w->input_box;
+
+    if (target) {
+        if (ime_process_key(&w->ime, key, mods, target, NULL, NULL)) {
+            const char *hint = ime_get_hint(&w->ime);
+            if (w->dialog.active) {
+                strncpy(w->dialog.error, hint, sizeof(w->dialog.error) - 1);
+                w->dialog.error[sizeof(w->dialog.error) - 1] = '\0';
+                fm_redraw(w);
+            } else {
+                strncpy(w->status, hint, sizeof(w->status) - 1);
+                w->status[sizeof(w->status) - 1] = '\0';
+                fm_redraw_topbar(w);
+            }
+            return;
+        }
+    }
+
+    if (w->dialog.active) {
+        mui_dialog_key(&w->dialog, key, g_tick);
+        if (!w->dialog.active) {
+            if (w->dialog.result == 2) {
+                int idx = w->icon_target;
+                if (idx >= 0 && idx < w->list.count) {
+                    char keypath[256];
+                    fm_item_path(w, idx, keypath, sizeof(keypath));
+                    if (icons_set_custom(keypath, w->dialog.result_text) == 0) {
+                        fm_refresh(w);
+                        fm_set_status(w, "Icon updated");
+                        desktop_refresh_icons();
+                    } else {
+                        fm_set_status(w, "Set icon failed");
+                    }
+                }
+            } else if (w->dialog.result > 0) {
+                fm_refresh(w);
+                fm_set_status(w, "Renamed");
+                desktop_refresh_icons();
+            }
+            fm_redraw(w);
+        } else {
+            fm_redraw(w);
+        }
+        return;
+    }
+
+    if (key == 8 && (mods & WM_MOD_CTRL)) {
+        toggle_safeguard();
+        return;
+    }
+
+    if (w->esc_state) {
+        if (w->esc_state == 1) {
+            if (key == '[') {
+                w->esc_state = 2;
+                w->esc_len = 1;
+                w->esc_buf[0] = '[';
+                w->esc_buf[1] = '\0';
+                return;
+            }
+            w->esc_state = 0;
+        } else {
+            if (w->esc_len < (int)sizeof(w->esc_buf) - 1) {
+                w->esc_buf[w->esc_len++] = (char)key;
+                w->esc_buf[w->esc_len] = '\0';
+            }
+            if (key == '~' || (key >= 'A' && key <= 'Z')) {
+                w->esc_state = 0;
+                /* 注意：不在这里清零 path_fresh，交给 fm_handle_esc_seq 判断 */
+                fm_handle_esc_seq(w, w->esc_buf, mods);
+                return;
+            }
+            return;
+        }
+    }
+
+    if (key == 27) {
+        w->esc_state = 1;
+        w->esc_len = 0;
+        w->esc_buf[0] = '\0';
+        w->esc_was_ui = (w->input_mode != FM_INPUT_NONE || w->menu_open);
+        w->path_fresh = 0;
+        w->sel_active = 0;
+        if (w->input_mode != FM_INPUT_NONE) fm_input_reset(w);
+        else if (w->menu_open) { w->menu_open = 0; }
+        fm_redraw(w);
+        return;
+    }
+
+    w->status[0] = '\0';
+
+    if (key == '\r' || key == '\n') {
+        if (w->menu_open) { w->menu_open = 0; fm_redraw(w); return; }
+        if (w->input_mode != FM_INPUT_NONE) fm_input_commit(w);
+        else fm_open_selected(w, (mods & WM_MOD_CTRL) != 0);
+        return;
+    }
+
+    if (key == '\b' || key == 127) {
+        if (w->path_fresh) {
+            mui_textbox_set_text(&w->input_box, "");
+            w->path_fresh = 0;
+            w->sel_active = 0;
+            fm_redraw_topbar(w);
+            return;
+        }
+        if (w->sel_active && w->sel_start != w->sel_end) {
+            mui_textbox_set_text(&w->input_box, "");
+            w->sel_active = 0;
+            fm_redraw_topbar(w);
+            return;
+        }
+        if (w->input_mode != FM_INPUT_NONE &&
+            mui_textbox_get_text(&w->input_box)[0] != '\0') {
+            if (w->input_box.base.on_key)
+                w->input_box.base.on_key(&w->input_box.base, key);
+            fm_redraw_topbar(w);
+            return;
+        }
+        fm_input_reset(w);
+        fm_go_parent(w);
+        return;
+    }
+
+    if (key >= 32 && key < 127) {
+        int was_input = (w->input_mode != FM_INPUT_NONE);
+        if (!was_input) {
+            w->menu_open = 0;
+            mui_list_clear_selection(&w->list);
+            w->list.cursor = -1;
+            fm_input_begin(w, FM_INPUT_PATH, "");
+        } else if (w->path_fresh) {
+            mui_textbox_set_text(&w->input_box, "");
+            w->path_fresh = 0;
+            w->sel_active = 0;
+        } else if (w->sel_active && w->sel_start != w->sel_end) {
+            /* 有选区时输入，清空整段（简化处理） */
+            mui_textbox_set_text(&w->input_box, "");
+            w->sel_active = 0;
+        }
+        if (w->input_box.base.on_key)
+            w->input_box.base.on_key(&w->input_box.base, key);
+
+        if (was_input) fm_redraw_topbar(w);
+        else           fm_redraw(w);
+    }
+}
+
+static struct fm_win *open_folder_window(const char *path) {
+    struct fm_win *w = NULL;
+
+    for (int i = 0; i < MAX_FM_WINDOWS; i++) {
+        if (!g_fm_wins[i].used) { w = &g_fm_wins[i]; break; }
+    }
+    if (!w) w = &g_fm_wins[0];
+
+    if (!w->used) {
+        memset(w, 0, sizeof(*w));
+        w->cw = 400; w->ch = 300;
+        w->last_click_idx = -1;
+        w->menu_target = -1;
+        snprintf(w->shm_name, sizeof(w->shm_name), "fm-%d-%d",
+                 (int)(w - g_fm_wins), ++g_fm_shm_gen);
+        char ev_name[24];
+        snprintf(ev_name, sizeof(ev_name), "fm-ev-%d", (int)(w - g_fm_wins));
+
+        char title[32];
+        const char *base = fm_path_base(path);
+        if (base && base[0]) snprintf(title, sizeof(title), "Files - %s", base);
+        else                 snprintf(title, sizeof(title), "Files");
+
+        if (wm_create_window(title, WM_KIND_NORMAL, 0, 0, w->cw, w->ch,
+                             &w->pixels, &w->hdr, w->shm_name, ev_name, &w->ev) < 0) {
+            return NULL;
+        }
+        w->used = 1;
+        w->map_size = shm_total_size(w->cw, w->ch);
+
+        mui_list_init(&w->list, 0, FM_TOP_BAR_H,
+                      w->cw - FM_SCROLL_W, w->ch - FM_TOP_BAR_H, FM_ROW_H);
+        w->list.scrollbar_w = 0;
+        w->list.paint_icon = fm_paint_icon;
+
+        mui_scroll_init(&w->scroll, w->cw - FM_SCROLL_W, FM_TOP_BAR_H,
+                        FM_SCROLL_W, w->ch - FM_TOP_BAR_H);
+        w->scroll.base.user = w;
+        w->scroll.on_change = fm_scroll_on_change;
+
+        mui_textbox_init(&w->input_box, 0, 0, w->cw - 8);
+        w->input_box.base.focused = 0;
+
+        mui_dialog_init(&w->dialog);
+        ime_init(&w->ime);
+    }
+
+    fm_navigate(w, path);
+    return w;
+}
+
+static void close_fm_window(struct fm_win *w) {
+    if (!w->used) return;
+    struct wm_destroy_request dr;
+    memset(&dr, 0, sizeof(dr));
+    dr.magic = WM_MAGIC; dr.type = WM_REQ_DESTROY;
+    dr.owner_pid = proc_getpid();
+    strncpy(dr.shm_name, w->shm_name, sizeof(dr.shm_name) - 1);
+    pipe_write(g_inbox_w, &dr, sizeof(dr));
+
+    sys_munmap((unsigned int)w->hdr,
+           w->map_size ? w->map_size : shm_total_size(w->cw, w->ch));
+    if (w->ev >= 0) pipe_close(w->ev);
+    if (g_drag_src_fm == (int)(w - g_fm_wins)) drag_clear();
+    w->ev = -1;
+    w->hdr = NULL;
+    w->pixels = NULL;
+    w->used = 0;
+}
+
+static void fm_resize_window(struct fm_win *w, int new_cw, int new_ch) {
+    if (new_cw <= 0 || new_ch <= 0) return;
+    if (new_cw > 2048 || new_ch > 1536) return;
+    if (new_cw == w->cw && new_ch == w->ch) return;
+
+    char new_shm[16];
+    snprintf(new_shm, sizeof(new_shm), "fm-%d-%d",
+             (int)(w - g_fm_wins), ++g_fm_shm_gen);
+
+    int shm_size = shm_total_size(new_cw, new_ch);
+    int shm_id = sys_shm_open(new_shm, shm_size, 0);
+    if (shm_id < 0) return;
+
+    unsigned int addr = sys_mmap(0, shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_id, 0);
+    if ((int)addr <= 0) return;
+
+    struct shm_hdr *new_hdr = (struct shm_hdr*)addr;
+    unsigned int *new_pixels = (unsigned int*)(addr + SHM_HDR_SIZE);
+    for (int i = 0; i < new_cw * new_ch; i++) new_pixels[i] = 0x1A1A1E;
+    new_hdr->counter = 0;
+    new_hdr->cur_x0 = SHM_DIRTY_EMPTY; new_hdr->cur_y0 = 0;
+    new_hdr->cur_x1 = 0; new_hdr->cur_y1 = 0;
+    new_hdr->pub_x0 = SHM_DIRTY_EMPTY; new_hdr->pub_y0 = 0;
+    new_hdr->pub_x1 = 0; new_hdr->pub_y1 = 0;
+
+    struct wm_resize_request req;
+    memset(&req, 0, sizeof(req));
+    req.magic = WM_MAGIC;
+    req.type = WM_REQ_RESIZE;
+    req.owner_pid = proc_getpid();
+    strncpy(req.old_shm, w->shm_name, sizeof(req.old_shm) - 1);
+    strncpy(req.new_shm, new_shm, sizeof(req.new_shm) - 1);
+    req.new_w = new_cw;
+    req.new_h = new_ch;
+    pipe_write(g_inbox_w, &req, sizeof(req));
+
+    sys_munmap((unsigned int)w->hdr,
+           w->map_size ? w->map_size : shm_total_size(w->cw, w->ch));
+
+    w->cw = new_cw;
+    w->ch = new_ch;
+    w->map_size = shm_size;
+    w->pixels = new_pixels;
+    w->hdr = new_hdr;
+    strncpy(w->shm_name, new_shm, sizeof(w->shm_name) - 1);
+
+    w->list.base.w = new_cw - FM_SCROLL_W;
+    w->list.base.h = new_ch - FM_TOP_BAR_H;
+    mui_list_scroll(&w->list, 0);
+    fm_sync_scroll(w);
+    w->menu_open = 0;
+    fm_redraw(w);
+    shm_mark_rect(w->hdr, 0, 0, w->cw, w->ch);
+    shm_publish(w->hdr);
+}
+
+static void handle_fm_event(struct fm_win *w, struct wm_event *ev) {
+    if (ev->type == WM_EV_CLOSE_REQUEST) {
+        close_fm_window(w);
+        return;
+    }
+    if (ev->type == WM_EV_NEW_TAB) {
+        open_folder_window(w->path);
+        return;
+    }
+
+    if (ev->type == WM_EV_RESIZE) {
+        fm_resize_window(w, (int)ev->code, (int)ev->extra);
+        return;
+    }
+
+    if (ev->type == WM_EV_FOCUS_OUT) {
+        if (w->dialog.active) {
+            mui_dialog_close(&w->dialog);
+            fm_redraw(w);
+        }
+        if (w->menu_open) {
+            w->menu_open = 0;
+            fm_redraw(w);
+        }
+        return;
+    }
+
+    if (ev->type == WM_EV_KEY) {
+        fm_handle_key(w, (int)ev->code, ev->extra);
+        return;
+    }
+
+    if (w->dialog.active &&
+        (ev->type == WM_EV_MOUSE_DOWN || ev->type == WM_EV_MOUSE_UP ||
+         ev->type == WM_EV_MOUSE_MOVE || ev->type == WM_EV_MOUSE_LEAVE ||
+         ev->type == WM_EV_WHEEL || ev->type == WM_EV_DROP)) {
+        return;
+    }
+
+    if (ev->type == WM_EV_WHEEL) {
+        if (!w->menu_open) {
+            mui_scroll_by(&w->scroll, (int)ev->code);
+            w->scroll_dirty = 0;
+            fm_sync_scroll_value(w);
+            w->list.hover = mui_list_hit(&w->list, ev->x, ev->y - FM_TOP_BAR_H);
+            fm_redraw_scroll(w);
+        }
+        return;
+    }
+
+    if (ev->type == WM_EV_DROP) {
+        fm_drop_to_dir(w, w->path);
+        return;
+    }
+
+    if (ev->type == WM_EV_MOUSE_MOVE) {
+        /* 路径栏拖动选择 */
+        if (w->mouse_sel_dragging && w->input_mode == FM_INPUT_PATH) {
+            int dx = ev->x - w->mouse_sel_start_x;
+            if (dx < 0) dx = -dx;
+            if (dx < 4) return;
+
+            w->path_fresh = 0;
+            const char *txt = mui_textbox_get_text(&w->input_box);
+            int prompt_w = 4 + mui_text_width(w->input_prompt);
+            int px = prompt_w + 1;
+            int idx = fm_char_index_at(px, ev->x, txt);
+
+            w->sel_start = w->mouse_sel_anchor;
+            w->sel_end = idx;
+            w->sel_active = (w->sel_start != w->sel_end);
+            fm_redraw_topbar(w);
+            return;
+        }
+
+        if (w->menu_open) {
+            int h = fm_menu_hit(w, ev->x, ev->y);
+            if (h != w->menu_hover) {
+                w->menu_hover = h;
+                fm_redraw_menu(w);
+            }
+            return;
+        }
+
+        int over_scroll = (ev->x >= w->cw - FM_SCROLL_W &&
+                           ev->y >= FM_TOP_BAR_H);
+        if (over_scroll || w->scroll.dragging) {
+            if (over_scroll && !w->scroll.base.hover) {
+                w->scroll.base.hover = 1;
+                fm_setup_surface(w);
+                fm_paint_scroll(w);
+                fm_publish(w);
+            }
+
+            if (w->scroll.base.on_mouse_move)
+                w->scroll.base.on_mouse_move(&w->scroll.base,
+                                             ev->x - w->scroll.base.x,
+                                             ev->y - w->scroll.base.y);
+
+            if (w->scroll_dirty) {
+                w->scroll_dirty = 0;
+                fm_sync_scroll_value(w);
+                fm_redraw_scroll(w);
+            }
+
+            if (w->list.hover >= 0) {
+                int old = w->list.hover;
+                w->list.hover = -1;
+                fm_setup_surface(w);
+                fm_paint_row(w, old);
+                fm_publish(w);
+            }
+            return;
+        }
+
+        if (w->scroll.base.hover) {
+            w->scroll.base.hover = 0;
+            fm_setup_surface(w);
+            fm_paint_scroll(w);
+            fm_publish(w);
+        }
+
+        if (w->drag_candidate && (ev->code & WM_BTN_LEFT) && !w->drag_moved) {
+            int dx = ev->x - w->drag_start_x;
+            int dy = ev->y - w->drag_start_y;
+            if (dx * dx + dy * dy >= 36) {
+                w->drag_moved = 1;
+                g_drag_armed = 1;
+            }
+        }
+
+        int hit = mui_list_hit(&w->list, ev->x, ev->y - FM_TOP_BAR_H);
+        if (hit != w->list.hover) {
+            int old = w->list.hover;
+            w->list.hover = hit;
+            fm_redraw_hover(w, old, hit);
+        }
+        return;
+    }
+
+    if (ev->type == WM_EV_MOUSE_LEAVE) {
+        fm_setup_surface(w);
+        int old = w->list.hover;
+        w->list.hover = -1;
+        if (old >= 0) fm_paint_row(w, old);
+
+        if (w->scroll.base.hover && !w->scroll.dragging) {
+            w->scroll.base.hover = 0;
+            fm_paint_scroll(w);
+        }
+        if (w->menu_open) {
+            w->menu_hover = -1;
+            draw_fm_menu(w);
+        }
+        fm_publish(w);
+        return;
+    }
+
+    if (ev->type == WM_EV_MOUSE_UP && (ev->code & WM_BTN_LEFT)) {
+        if (w->mouse_sel_dragging) {
+            w->mouse_sel_dragging = 0;
+            if (!w->sel_active) {
+                if (w->mouse_sel_fresh_enter) {
+                    w->path_fresh = 1;
+                } else {
+                    w->path_fresh = 0;
+                    fm_textbox_set_cursor_byte(&w->input_box,
+                                               w->mouse_sel_anchor);
+                }
+                fm_redraw_topbar(w);
+            }
+            w->mouse_sel_fresh_enter = 0;
+            return;
+        }
+
+        if (w->scroll.dragging) {
+            if (w->scroll.base.on_mouse_up)
+                w->scroll.base.on_mouse_up(&w->scroll.base,
+                                           ev->x - w->scroll.base.x,
+                                           ev->y - w->scroll.base.y, 1);
+            w->scroll_dirty = 0;
+            fm_setup_surface(w);
+            fm_paint_scroll(w);
+            fm_publish(w);
+            w->drag_candidate = 0;
+            return;
+        }
+
+        w->drag_candidate = 0;
+        if (g_drag_active && g_drag_src_fm == (int)(w - g_fm_wins)) {
+            if (ev->extra & WM_MOD_DROP_OUTSIDE) {
+                /* 等 WM 把 WM_EV_DROP 发给目标窗口 */
+            } else if (!w->drag_moved) {
+                drag_clear();
+            } else if (ev->x >= 0 && ev->y >= 0 &&
+                       ev->x < w->cw && ev->y < w->ch) {
+                fm_finish_drag(w, ev->x, ev->y);
+            } else {
+                drag_clear();
+            }
+        }
+        return;
+    }
+
+    if (ev->type != WM_EV_MOUSE_DOWN) return;
+
+    if (g_drag_active) drag_clear();
+    w->status[0] = '\0';
+
+    unsigned int mods = ev->extra;
+    int right = (ev->code & WM_BTN_RIGHT) != 0;
+    int left  = (ev->code & WM_BTN_LEFT) != 0;
+
+    /* ============================================================
+     * ★ 关键修复①：任何位置的鼠标右键按下，只要处于"全选"状态，
+     *   一律取消全选，保留路径编辑模式，光标回归可见。
+     *   - 点在路径栏：光标定位到点击处
+     *   - 点在文件列表：光标停在末尾（或保持原位）
+     *   此后打字为"插入"，绝不清空整段地址。
+     * ============================================================ */
+    if (right && w->path_fresh && w->input_mode == FM_INPUT_PATH) {
+        w->path_fresh = 0;
+        w->sel_active = 0;
+        w->mouse_sel_dragging = 0;
+        if (ev->y < FM_TOP_BAR_H) {
+            const char *txt = mui_textbox_get_text(&w->input_box);
+            int prompt_w = 4 + mui_text_width(w->input_prompt);
+            int px = prompt_w + 1;
+            int idx = fm_char_index_at(px, ev->x, txt);
+            fm_textbox_set_cursor_byte(&w->input_box, idx);
+        } else {
+            mui_textbox_cursor_end(&w->input_box);
+        }
+        fm_redraw_topbar(w);
+        /* 不 return：继续走右键菜单等后续逻辑 */
+    }
+
+    if (w->menu_open) {
+        int item = fm_menu_hit(w, ev->x, ev->y);
+        w->menu_open = 0;
+        if (left && item >= 0) fm_menu_action(w, item);
+        else                   fm_redraw(w);
+        return;
+    }
+
+    /* 顶部路径栏左键：进入编辑 / 记录拖动锚点 */
+    if (ev->y < FM_TOP_BAR_H) {
+        if (left) {
+            int was_editing = (w->input_mode == FM_INPUT_PATH);
+
+            if (!was_editing) {
+                if (w->input_mode != FM_INPUT_NONE) {
+                    fm_input_reset(w);
+                    w->status[0] = '\0';
+                }
+                fm_input_begin(w, FM_INPUT_PATH, "");
+                mui_textbox_set_text(&w->input_box, w->path);
+                mui_textbox_cursor_end(&w->input_box);
+                w->path_fresh = 1;
+                w->sel_active = 0;
+                w->mouse_sel_anchor = 0;
+                w->mouse_sel_fresh_enter = 1;
+            } else {
+                const char *txt = mui_textbox_get_text(&w->input_box);
+                int prompt_w = 4 + mui_text_width(w->input_prompt);
+                int px = prompt_w + 1;
+                int idx = fm_char_index_at(px, ev->x, txt);
+                w->mouse_sel_anchor = idx;
+                w->sel_start = idx;
+                w->sel_end = idx;
+                w->mouse_sel_fresh_enter = 0;
+            }
+            w->mouse_sel_dragging = 1;
+            w->mouse_sel_start_x = ev->x;
+            w->drag_candidate = 0;
+            fm_redraw_topbar(w);
+        }
+        return;
+    }
+
+    /* ============================================================
+     * ★ 关键修复②：左键点击文件列表时退出路径编辑；
+     *   右键点击文件列表时保留编辑模式（只清全选），
+     *   这样关闭右键菜单后仍可继续编辑地址，不会"从头输入"。
+     * ============================================================ */
+    if (w->input_mode != FM_INPUT_NONE) {
+        if (right && w->input_mode == FM_INPUT_PATH) {
+            /* 保留 input_mode，path_fresh 已在上方清除 */
+        } else {
+            fm_input_reset(w);
+            w->status[0] = '\0';
+            fm_redraw(w);
+        }
+    }
+
+    if (ev->x >= w->cw - FM_SCROLL_W) {
+        if (left) {
+            w->scroll.base.hover = 1;
+            if (w->scroll.base.on_mouse_down)
+                w->scroll.base.on_mouse_down(&w->scroll.base,
+                                             ev->x - w->scroll.base.x,
+                                             ev->y - w->scroll.base.y, 1);
+            if (w->scroll_dirty) {
+                w->scroll_dirty = 0;
+                fm_sync_scroll_value(w);
+                fm_redraw_scroll(w);
+            } else {
+                fm_setup_surface(w);
+                fm_paint_scroll(w);
+                fm_publish(w);
+            }
+            w->drag_candidate = 0;
+        }
+        return;
+    }
+
+    int idx = mui_list_hit(&w->list, ev->x, ev->y - FM_TOP_BAR_H);
+
+    if (right) {
+        if (idx >= 0) {
+            if (!mui_list_is_selected(&w->list, idx))
+                mui_list_select_only(&w->list, idx);
+            w->list.cursor = idx;
+            fm_sync_scroll_value(w);
+            fm_open_menu(w, idx, ev->x, ev->y);
+        } else {
+            mui_list_clear_selection(&w->list);
+            w->list.cursor = -1;
+            fm_sync_scroll_value(w);
+            fm_open_menu(w, -1, ev->x, ev->y);
+        }
+        w->last_click_idx = -1;
+        w->drag_candidate = 0;
+        return;
+    }
+
+    if (!left) return;
+
+    if (idx >= 0) {
+        int shift = (mods & WM_MOD_SHIFT) != 0;
+        if (shift) {
+            mui_list_toggle(&w->list, idx);
+        } else if (mui_list_is_selected(&w->list, idx) &&
+                   mui_list_selected_count(&w->list) > 1) {
+            w->list.cursor = idx;
+        } else {
+            mui_list_select_only(&w->list, idx);
+        }
+        fm_sync_scroll_value(w);
+
+        if (!shift && idx == w->last_click_idx &&
+            g_tick - w->last_click_tick < 400) {
+            w->last_click_idx = -1;
+            fm_open_selected(w, (mods & WM_MOD_CTRL) != 0);
+            return;
+        }
+
+        w->last_click_idx = idx;
+        w->last_click_tick = g_tick;
+        w->drag_candidate = 1;
+        w->drag_moved = 0;
+        w->drag_start_x = ev->x;
+        w->drag_start_y = ev->y;
+        fm_drag_begin(w);
+        fm_redraw(w);
+    } else {
+        mui_list_clear_selection(&w->list);
+        w->list.cursor = -1;
+        w->last_click_idx = -1;
+        w->drag_candidate = 0;
+        fm_sync_scroll_value(w);
+        fm_redraw(w);
+    }
+}
+
+#define BMP_MAX_DIM  4096
+
+struct bmp_file_hdr {
+    uint16_t magic;
+    uint32_t file_size;
+    uint16_t reserved1;
+    uint16_t reserved2;
+    uint32_t data_offset;
+} __attribute__((packed));
+
+struct bmp_dib_hdr {
+    uint32_t header_size;
+    int32_t  width;
+    int32_t  height;
+    uint16_t planes;
+    uint16_t bpp;
+    uint32_t compression;
+    uint32_t image_size;
+    int32_t  x_ppm;
+    int32_t  y_ppm;
+    uint32_t colors_used;
+    uint32_t colors_important;
+} __attribute__((packed));
+
+static int decode_bmp_to_fullscreen(const char *path, unsigned int **out) {
+    *out = NULL;
+
+    int fd = fs_open(path, FS_O_RDONLY);
+    if (fd < 0) return -1;
+
+    struct bmp_file_hdr fh;
+    struct bmp_dib_hdr dh;
+    uint8_t *src = NULL;
+
+    if (fs_read(fd, &fh, sizeof(fh)) != sizeof(fh)) goto fail;
+    if (fh.magic != 0x4D42) goto fail;
+    if (fs_read(fd, &dh, sizeof(dh)) != sizeof(dh)) goto fail;
+    if (dh.header_size < 40) goto fail;
+    if (dh.compression != 0) goto fail;
+    if (dh.bpp != 24 && dh.bpp != 32) goto fail;
+
+    int src_w = dh.width;
+    int src_h = dh.height < 0 ? -dh.height : dh.height;
+    int bottom_up = dh.height > 0;
+    if (src_w <= 0 || src_h <= 0 ||
+        src_w > BMP_MAX_DIM || src_h > BMP_MAX_DIM) goto fail;
+
+    int src_stride = ((src_w * dh.bpp + 31) / 32) * 4;
+    size_t src_size = (size_t)src_stride * src_h;
+
+    src = (uint8_t*)malloc(src_size);
+    if (!src) goto fail;
+
+    if (fs_seek(fd, fh.data_offset) < 0) goto fail;
+    if (fs_read(fd, src, src_size) != (int)src_size) goto fail;
+
+    unsigned int *dst = (unsigned int*)malloc((size_t)g_W * g_H * 4);
+    if (!dst) goto fail;
+
+    int bpp_bytes = dh.bpp / 8;
+    for (int dy = 0; dy < g_H; dy++) {
+        int sy = dy * src_h / g_H;
+        if (bottom_up) sy = src_h - 1 - sy;
+        uint8_t *row = src + (size_t)sy * src_stride;
+        unsigned int *drow = dst + dy * g_W;
+
+        for (int dx = 0; dx < g_W; dx++) {
+            int sx = dx * src_w / g_W;
+            uint8_t *p = row + sx * bpp_bytes;
+            unsigned int b = p[0];
+            unsigned int g = p[1];
+            unsigned int r = p[2];
+            drow[dx] = (r << 16) | (g << 8) | b;
+        }
+    }
+
+    free(src);
+    fs_close(fd);
+    *out = dst;
+    return 0;
+
+fail:
+    if (src) free(src);
+    fs_close(fd);
+    return -1;
+}
+
+static void ensure_wall_bmp(void) {
+    if (g_wall_bmp_state != 0) return;
+
+    if (decode_bmp_to_fullscreen("SYS:/background.bmp",
+                                 &g_wall_bmp_cache) == 0) {
+        g_wall_bmp_state = 1;
+        dprintf(2, "desktop: wallpaper loaded from BMP\n");
+    } else {
+        g_wall_bmp_state = 2;
+        dprintf(2, "desktop: no BMP, using gradient\n");
+    }
+}
+
+static void draw_wallpaper_pixels(void) {
+    ensure_wall_bmp();
+
+    if (g_wall_bmp_state == 1 && g_wall_bmp_cache) {
+        memcpy(g_wall_pixels, g_wall_bmp_cache, (size_t)g_W * g_H * 4);
+        return;
+    }
+
+    for (int y = 0; y < g_H; y++) {
+        unsigned int c = gfx_lerp(WALL_TOP, WALL_BOTTOM, y, g_H);
+        unsigned int *row = g_wall_pixels + y * g_W;
+        for (int x = 0; x < g_W; x++) row[x] = c;
+    }
+}
+
+static void draw_wallpaper(void) {
+    draw_wallpaper_pixels();
+
+    draw_all_files();
+
+    if (g_desk_dialog.active) {
+        struct mui_surface ws;
+        memset(&ws, 0, sizeof(ws));
+        ws.pixels = g_wall_pixels;
+        ws.w = g_W;
+        ws.h = g_H;
+        ws.hdr = g_wall_hdr;
+        mui_dialog_paint(&g_desk_dialog, &ws, g_W, g_H);
+    }
+
+    shm_mark_rect(g_wall_hdr, 0, 0, g_W, g_H);
+    shm_publish(g_wall_hdr);
+}
+
+static void desk_dialog_redraw(void) {
+    if (!g_desk_dialog.active) {
+        draw_wallpaper();
+        return;
+    }
+
+    struct mui_surface ws;
+    memset(&ws, 0, sizeof(ws));
+    ws.pixels = g_wall_pixels;
+    ws.w = g_W;
+    ws.h = g_H;
+    ws.hdr = g_wall_hdr;
+    mui_dialog_paint(&g_desk_dialog, &ws, g_W, g_H);
+    shm_publish(g_wall_hdr);
+}
+
+/* ============================================================
+ *             Safeguard：桌面上隐藏编译产物（Ctrl+H 切换）
+ * ============================================================ */
+
+static int g_show_artifacts = 0;
+
+static int name_ci_equal(const char *a, const char *b) {
+    while (*a && *b) {
+        char ca = *a, cb = *b;
+        if (ca >= 'a' && ca <= 'z') ca -= 32;
+        if (cb >= 'a' && cb <= 'z') cb -= 32;
+        if (ca != cb) return 0;
+        a++; b++;
+    }
+    return *a == '\0' && *b == '\0';
+}
+
+static int name_has_ext_ci(const char *name, const char *ext) {
+    int n = (int)strlen(name);
+    int m = (int)strlen(ext);
+    if (n < m) return 0;
+    return name_ci_equal(name + n - m, ext);
+}
+
+static int is_build_artifact(const struct fs_entry_info *f) {
+    if (f->is_exec) return 1;
+    if (f->is_dir) {
+        return name_ci_equal(f->name, "BOOT") ||
+               name_ci_equal(f->name, "BUILD");
+    }
+    static const char *exts[] = { ".SO", ".HEX", ".BMP", ".O", ".ELF", ".ISO", ".IMG", ".MAP" };
+    for (int i = 0; i < (int)(sizeof(exts) / sizeof(exts[0])); i++) {
+        if (name_has_ext_ci(f->name, exts[i])) return 1;
+    }
+    return 0;
+}
+
+static void desk_load_files(void) {
+    static struct fs_entry_info all[MAX_DESK_FILES];
+    int n = fs_read_dir(ROOT_PATH, all, MAX_DESK_FILES);
+
+    g_file_count = 0;
+    for (int i = 0; i < n; i++) {
+        if (!g_show_artifacts && is_build_artifact(&all[i])) continue;
+        g_files[g_file_count++] = all[i];
+    }
+    calc_desk_cols();
+    desk_sel_clear();
+    g_last_clicked_file = -1;
+}
+
+static void toggle_safeguard(void) {
+    if (g_menu_visible) close_menu_request();
+    g_show_artifacts = !g_show_artifacts;
+    desk_sel_clear();
+    g_last_clicked_file = -1;
+    desktop_refresh_icons();
+}
+
+static void desktop_refresh_icons(void) {
+    desk_load_files();
+    desk_sel_clear();
+    g_last_clicked_file = -1;
+    draw_wallpaper();
+}
+
+static void wall_open_selected(void) {
+    int idx = g_selected_file;
+    if (idx < 0 || idx >= g_file_count) idx = desk_sel_first();
+    if (idx < 0 || idx >= g_file_count) return;
+
+    char path[256];
+    snprintf(path, sizeof(path), "SYS:\\%s", g_files[idx].name);
+
+    if (g_files[idx].is_dir) {
+        open_folder_window(path);
+    } else if (is_c_source(g_files[idx].name)) {
+        open_source_file(path);
+    } else if (is_image_file(g_files[idx].name)) {
+        open_photo_file(path);
+    } else if (is_audio_file(g_files[idx].name)) {
+        open_audio_file(path);
+    } else if (g_files[idx].is_exec) {
+        exec_elf(path);
+    }
+}
+
+static void wall_delete_selected(void) {
+    if (desk_sel_count() == 0) return;
+
+    for (int i = 0; i < g_file_count; i++) {
+        if (!g_sel_mask[i]) continue;
+        char path[256];
+        snprintf(path, sizeof(path), "SYS:\\%s", g_files[i].name);
+        fm_remove_recursive(path);
+    }
+
+    desk_sel_clear();
+    g_last_clicked_file = -1;
+    desktop_refresh_icons();
+}
+
+static int g_wall_esc_state = 0;
+static int g_wall_esc_digit = 0;
+
+static int g_wall_drag_candidate = 0;
+static int g_wall_drag_moved = 0;
+static int g_wall_drag_x = 0, g_wall_drag_y = 0;
+
+static int wall_hit_icon(int mx, int my) {
+    if (mx < ICON_PAD_X || my < ICON_PAD_Y) return -1;
+
+    int col = (mx - ICON_PAD_X) / ICON_CELL_W;
+    int row = (my - ICON_PAD_Y) / ICON_CELL_H;
+    if (col >= g_desk_cols) return -1;
+
+    int idx = row * g_desk_cols + col;
+    if (idx < 0 || idx >= g_file_count) return -1;
+
+    int px = ICON_PAD_X + col * ICON_CELL_W;
+    int py = ICON_PAD_Y + row * ICON_CELL_H;
+    int ix = px + (ICON_CELL_W - ICON_SIZE) / 2;
+    int iy = py;
+
+    if ((mx >= ix && mx < ix + ICON_SIZE && my >= iy && my < iy + ICON_SIZE) ||
+        (mx >= px && mx < px + ICON_CELL_W &&
+         my >= iy + ICON_SIZE + 4 && my < iy + ICON_SIZE + 20)) {
+        return idx;
+    }
+    return -1;
+}
+
+static void wall_drag_begin(void) {
+    int n = desk_collect_paths(g_drag_paths, DRAG_MAX);
+    if (n <= 0) return;
+    g_drag_count = n;
+    g_drag_active = 1;
+    g_drag_armed = 0;
+    g_drag_src_fm = -1;
+}
+
+static void handle_wall_event(struct wm_event *ev) {
+    if (ev->type == WM_EV_KEY) {
+        int key = (int)ev->code;
+
+        if (g_desk_dialog.active) {
+            /* 优先处理桌面重命名对话框的输入法 */
+            if (ime_process_key(&g_desk_ime, key, ev->extra, &g_desk_dialog.input, NULL, NULL)) {
+                const char *hint = ime_get_hint(&g_desk_ime);
+                strncpy(g_desk_dialog.error, hint, sizeof(g_desk_dialog.error) - 1);
+                g_desk_dialog.error[sizeof(g_desk_dialog.error) - 1] = '\0';
+                desk_dialog_redraw();
+                return;
+            }
+            /* 正常文本框/对话框按键逻辑 */
+            mui_dialog_key(&g_desk_dialog, key, g_tick);
+            if (!g_desk_dialog.active) {
+                if (g_desk_dialog.result == 2) {
+                    int idx = g_desk_icon_file;
+                    if (idx >= 0 && idx < g_file_count) {
+                        char keypath[256];
+                        snprintf(keypath, sizeof(keypath), "%s%s", ROOT_PATH,
+                                 g_files[idx].name);
+                        icons_set_custom(keypath, g_desk_dialog.result_text);
+                    }
+                    desktop_refresh_icons();
+                } else if (g_desk_dialog.result > 0) {
+                    desktop_refresh_icons();
+                } else {
+                    draw_wallpaper();
+                }
+            } else {
+                desk_dialog_redraw();
+            }
+            return;
+        }
+
+        if (key == 8 && (ev->extra & WM_MOD_CTRL)) {
+            toggle_safeguard();
+            return;
+        }
+
+        if (g_wall_esc_state) {
+            if (g_wall_esc_state == 1) {
+                if (key == '[') { g_wall_esc_state = 2; return; }
+                g_wall_esc_state = 0;
+            } else if (g_wall_esc_state == 2) {
+                if (key >= '0' && key <= '9') {
+                    g_wall_esc_digit = key;
+                    g_wall_esc_state = 3;
+                } else {
+                    g_wall_esc_state = 0;
+                }
+                return;
+            } else {
+                g_wall_esc_state = 0;
+                if (key == '~' && g_wall_esc_digit == '3') wall_delete_selected();
+                return;
+            }
+        }
+        if (key == 27) { g_wall_esc_state = 1; return; }
+        if (key == '\r' || key == '\n') wall_open_selected();
+        return;
+    }
+
+    if (g_desk_dialog.active &&
+        (ev->type == WM_EV_MOUSE_DOWN || ev->type == WM_EV_MOUSE_MOVE ||
+         ev->type == WM_EV_MOUSE_UP || ev->type == WM_EV_MOUSE_LEAVE ||
+         ev->type == WM_EV_WHEEL || ev->type == WM_EV_DROP)) {
+        return;
+    }
+
+    if (ev->type == WM_EV_DROP) {
+        if (g_drag_active) fm_drop_to_dir(NULL, ROOT_PATH);
+        return;
+    }
+
+    if (ev->type == WM_EV_MOUSE_MOVE) {
+        if (g_wall_drag_candidate && (ev->code & WM_BTN_LEFT) && !g_wall_drag_moved) {
+            int dx = ev->x - g_wall_drag_x;
+            int dy = ev->y - g_wall_drag_y;
+            if (dx * dx + dy * dy >= 36) {
+                g_wall_drag_moved = 1;
+                g_drag_armed = 1;
+            }
+        }
+        return;
+    }
+
+    if (ev->type == WM_EV_MOUSE_UP && (ev->code & WM_BTN_LEFT)) {
+        g_wall_drag_candidate = 0;
+        if (g_drag_active && g_drag_src_fm < 0) {
+            if (!(ev->extra & WM_MOD_DROP_OUTSIDE)) {
+                drag_clear();
+            }
+        }
+        g_wall_drag_moved = 0;
+        return;
+    }
+
+    if (ev->type == WM_EV_MOUSE_DOWN && (ev->code & WM_BTN_RIGHT)) {
+        if (g_drag_active) drag_clear();
+        if (g_menu_visible) return;
+
+        int idx = wall_hit_icon(ev->x, ev->y);
+        uint8_t old[MAX_DESK_FILES];
+        memcpy(old, g_sel_mask, sizeof(old));
+
+        if (idx >= 0) {
+            if (!desk_is_selected(idx)) desk_sel_only(idx);
+            else                        g_selected_file = idx;
+        } else {
+            desk_sel_clear();
+        }
+        redraw_selection_changed(old);
+        g_last_clicked_file = -1;
+
+        if (idx >= 0) open_context_item_menu(idx, ev->x, ev->y);
+        else          open_context_menu(ev->x, ev->y);
+        return;
+    }
+
+    if (ev->type != WM_EV_MOUSE_DOWN || ev->code != 1) return;
+    if (g_drag_active) drag_clear();
+
+    int hit = wall_hit_icon(ev->x, ev->y);
+    int shift = (ev->extra & WM_MOD_SHIFT) != 0;
+    int ctrl  = (ev->extra & WM_MOD_CTRL) != 0;
+    int toggle = shift || ctrl;
+    uint8_t old[MAX_DESK_FILES];
+    memcpy(old, g_sel_mask, sizeof(old));
+
+    if (hit >= 0) {
+        if (toggle) {
+            desk_sel_toggle(hit);
+            g_last_clicked_file = -1;
+        } else if (!desk_is_selected(hit)) {
+            desk_sel_only(hit);
+        } else if (desk_sel_count() <= 1) {
+            desk_sel_only(hit);
+        } else {
+            g_selected_file = hit;
+        }
+    } else {
+        desk_sel_clear();
+    }
+    redraw_selection_changed(old);
+
+    if (hit >= 0 && desk_is_selected(hit)) {
+        g_wall_drag_candidate = 1;
+        g_wall_drag_moved = 0;
+        g_wall_drag_x = ev->x;
+        g_wall_drag_y = ev->y;
+        wall_drag_begin();
+
+        if (!toggle && hit == g_last_clicked_file &&
+            g_tick - g_click_tick < 400) {
+            char path[256];
+            snprintf(path, sizeof(path), "SYS:\\%s", g_files[hit].name);
+
+            if (g_files[hit].is_dir) {
+                open_folder_window(path);
+            } else if (is_c_source(g_files[hit].name)) {
+                open_source_file(path);
+            } else if (is_image_file(g_files[hit].name)) {
+                open_photo_file(path);
+            } else if (is_audio_file(g_files[hit].name)) {
+                open_audio_file(path);
+            } else if (g_files[hit].is_exec) {
+                exec_elf(path);
+            }
+
+            uint8_t cur[MAX_DESK_FILES];
+            memcpy(cur, g_sel_mask, sizeof(cur));
+            desk_sel_clear();
+            redraw_selection_changed(cur);
+            g_last_clicked_file = -1;
+            g_wall_drag_candidate = 0;
+        } else {
+            g_last_clicked_file = toggle ? -1 : hit;
+            g_click_tick = g_tick;
+        }
+    } else {
+        g_wall_drag_candidate = 0;
+        g_last_clicked_file = -1;
+    }
+}
+
+static void draw_window_items(void) {
+    int x = WIN_ITEM_X0;
+    for (int i = 0; i < g_win_count; i++) {
+        if (x + WIN_ITEM_W > g_W - CLOCK_W - VOL_W) break;
+        unsigned int bg = g_win_list[i].minimized ? 0x1A1A2E : 0x3A4A5E;
+        gfx_fill_rect(g_panel_pixels, g_W, PANEL_H, x, 0, WIN_ITEM_W - 4, PANEL_H, bg);
+
+        int ix = x + 4;
+        int iy = (PANEL_H - 16) / 2;
+        
+        if (strstr(g_win_list[i].title, "Files") != NULL) {
+            icon_draw_folder_small(g_panel_pixels, g_W, PANEL_H, ix, iy);
+        } else {
+            icon_draw_exec_small(g_panel_pixels, g_W, PANEL_H, ix, iy);
+        }
+
+        char label[64];
+        int k = 0, used = 0;
+        const unsigned char *tp = (const unsigned char*)g_win_list[i].title;
+        
+        int text_x = ix + 16 + 4;
+        int max_text_w = WIN_ITEM_W - (text_x - x) - 8;
+
+        while (*tp && k < (int)sizeof(label) - 4) {
+            uint32_t cp;
+            int clen = ufont_utf8_decode(tp, &cp);
+            int cw = wm_font_width((int)cp);
+            if (!cw) cw = 8;
+            if (used + cw > max_text_w) break;
+            memcpy(label + k, tp, clen);
+            k += clen; used += cw; tp += clen;
+        }
+        label[k] = '\0';
+        
+        gfx_draw_text(g_panel_pixels, g_W, PANEL_H, text_x, (PANEL_H - 16) / 2, label, COL_PANEL_FG, bg);
+        
+        x += WIN_ITEM_W;
+    }
+}
+
+static void draw_clock_region(void) {
+    int x0 = g_W - 80; if (x0 < 0) x0 = 0;
+    gfx_fill_rect(g_panel_pixels, g_W, PANEL_H, x0, 0, g_W - x0, PANEL_H, COL_PANEL);
+
+    struct rtc_time t;
+    if (rtc_get_time(&t) == 0) {
+        char buf[16];
+        snprintf(buf, sizeof(buf), "%02d:%02d:%02d", t.hour, t.minute, t.second);
+        gfx_draw_text(g_panel_pixels, g_W, PANEL_H, x0 + 4, (PANEL_H - 16) / 2, buf, COL_PANEL_FG, COL_PANEL);
+    }
+}
+
+static void draw_panel(void) {
+    gfx_fill_rect(g_panel_pixels, g_W, PANEL_H, 0, 0, g_W, PANEL_H, COL_PANEL);
+    gfx_draw_text(g_panel_pixels, g_W, PANEL_H, 8, (PANEL_H - 16) / 2, "\xE5\xBC\x80\xE5\xA7\x8B", COL_PANEL_FG, COL_PANEL);
+    draw_window_items();
+    draw_volume_region();
+    draw_clock_region();
+    shm_mark_rect(g_panel_hdr, 0, 0, g_W, PANEL_H);
+    shm_publish(g_panel_hdr);
+}
+
+static void update_clock(void) {
+    draw_clock_region();
+    int x0 = g_W - 80; if (x0 < 0) x0 = 0;
+    shm_mark_rect(g_panel_hdr, x0, 0, g_W, PANEL_H);
+    shm_publish(g_panel_hdr);
+}
+
+#define MENU_STATE_MAIN    0
+#define MENU_STATE_POWER   1
+#define MENU_STATE_CONTEXT 2
+#define MENU_STATE_CONTEXT_ITEM 3
+#define MENU_STATE_CONTEXT_MULTI 4
+#define MENU_STATE_VOLUME  5
+#define MENU_STATE_TASK    6
+static int g_menu_state = MENU_STATE_MAIN;
+
+#define MAIN_MENU_ITEMS 4
+static const char *g_main_labels[MAIN_MENU_ITEMS] = { "\xE7\x94\xB5\xE6\xBA\x90\xE9\x80\x89\xE9\xA1\xB9", "\xE7\xBB\x88\xE7\xAB\xAF", "\xE6\xB5\x8F\xE8\xA7\x88\xE5\x99\xA8", "\xE5\x85\xB3\xE4\xBA\x8E" };
+#define POWER_MENU_ITEMS 2
+static const char *g_power_labels[POWER_MENU_ITEMS] = { "\xE9\x87\x8D\xE5\x90\xAF", "\xE5\x85\xB3\xE6\x9C\xBA" };
+#define CONTEXT_MENU_ITEMS 4
+#define CONTEXT_ITEM_MAX_ITEMS 6
+static const char *g_context_labels[CONTEXT_MENU_ITEMS] =
+    { "\xE5\x88\xB7\xE6\x96\xB0", "\xE7\xB2\x98\xE8\xB4\xB4", "\xE6\x96\xB0\xE5\xBB\xBA\xE6\x96\x87\xE4\xBB\xB6\xE5\xA4\xB9", "\xE6\x96\xB0\xE5\xBB\xBA\x20\x43\x20\xE6\xBA\x90\xE6\x96\x87\xE4\xBB\xB6" };
+static const char *g_context_item_labels[CONTEXT_ITEM_MAX_ITEMS] =
+    { "\xE5\xA4\x8D\xE5\x88\xB6", "\xE5\x89\xAA\xE5\x88\x87", "\xE5\x88\xA0\xE9\x99\xA4", "\xE9\x87\x8D\xE5\x91\xBD\xE5\x90\x8D", "\xE6\x9B\xB4\xE6\x94\xB9\xE5\x9B\xBE\xE6\xA0\x87", "\xE7\xBC\x96\xE8\xAF\x91" };
+
+static int g_context_file = -1;
+
+static int context_item_count(void) {
+    int idx = g_context_file;
+    if (idx >= 0 && idx < g_file_count && !g_files[idx].is_dir &&
+        is_c_source(g_files[idx].name))
+        return CONTEXT_ITEM_MAX_ITEMS;
+    return 5;
+}
+#define CONTEXT_MULTI_ITEMS 3
+static const char *g_context_multi_labels[CONTEXT_MULTI_ITEMS] =
+    { "\xE5\xA4\x8D\xE5\x88\xB6", "\xE5\x89\xAA\xE5\x88\x87", "\xE5\x88\xA0\xE9\x99\xA4" };
+
+static void draw_menu(int hover) {
+    gfx_fill_rect(g_menu_pixels, g_menu_w, g_menu_h, 0, 0, g_menu_w, g_menu_h, COL_MENU_BG);
+
+    if (g_menu_state == MENU_STATE_VOLUME) {
+        char buf[40];
+        snprintf(buf, sizeof(buf), "Volume: %d%%", g_volume);
+        gfx_draw_text(g_menu_pixels, g_menu_w, g_menu_h, 8, 6, buf,
+                      COL_MENU_FG, COL_MENU_BG);
+
+        int tx = 8, ty = 38, tw = g_menu_w - 16, th = 8;
+        gfx_fill_rect(g_menu_pixels, g_menu_w, g_menu_h, tx, ty, tw, th, 0x3A3A4E);
+        int fill = tw * g_volume / 100;
+        if (fill > 0)
+            gfx_fill_rect(g_menu_pixels, g_menu_w, g_menu_h, tx, ty, fill, th,
+                          0x3A6EA5);
+        int hx = tx + fill - 2;
+        if (hx < tx) hx = tx;
+        if (hx > tx + tw - 4) hx = tx + tw - 4;
+        gfx_fill_rect(g_menu_pixels, g_menu_w, g_menu_h, hx, ty - 3, 4, th + 6,
+                      0xFFFFFF);
+        gfx_draw_text(g_menu_pixels, g_menu_w, g_menu_h, 8, g_menu_h - 18,
+                      "Drag / click to set", 0x8888AA, COL_MENU_BG);
+
+        shm_mark_rect(g_menu_hdr, 0, 0, g_menu_w, g_menu_h);
+        shm_publish(g_menu_hdr);
+        return;
+    }
+
+    int count;
+    const char **labels;
+    if (g_menu_state == MENU_STATE_CONTEXT) {
+        count = CONTEXT_MENU_ITEMS;
+        labels = g_context_labels;
+    } else if (g_menu_state == MENU_STATE_CONTEXT_ITEM) {
+        count = context_item_count();
+        labels = g_context_item_labels;
+    } else if (g_menu_state == MENU_STATE_CONTEXT_MULTI) {
+        count = CONTEXT_MULTI_ITEMS;
+        labels = g_context_multi_labels;
+    } else if (g_menu_state == MENU_STATE_MAIN) {
+        count = MAIN_MENU_ITEMS;
+        labels = g_main_labels;
+    } else if (g_menu_state == MENU_STATE_TASK) {
+        static const char *task_labels[1] =
+            { "\xE5\x85\xB3\xE9\x97\xAD\xE7\xAA\x97\xE5\x8F\xA3" };
+        count = 1;
+        labels = task_labels;
+    } else {
+        count = POWER_MENU_ITEMS;
+        labels = g_power_labels;
+    }
+
+    for (int i = 0; i < count; i++) {
+        int y = MENU_PAD + i * MENU_ITEM_H;
+        unsigned int bg = (i == hover) ? COL_MENU_HL : COL_MENU_BG;
+        if (i == hover) gfx_fill_rect(g_menu_pixels, g_menu_w, g_menu_h, 0, y, g_menu_w, MENU_ITEM_H, bg);
+        gfx_draw_text(g_menu_pixels, g_menu_w, g_menu_h, 8, y + (MENU_ITEM_H - 16) / 2, labels[i], COL_MENU_FG, bg);
+    }
+    shm_mark_rect(g_menu_hdr, 0, 0, g_menu_w, g_menu_h);
+    shm_publish(g_menu_hdr);
+}
+
+static void spawn_term_argv(int cw, int ch, int x, int y,
+                            char *const extra[], const char *title) {
+    static int term_slot = 0;
+    char shm_name[16], ev_name[24];
+    snprintf(shm_name, sizeof(shm_name), "term-%d", term_slot);
+    snprintf(ev_name, sizeof(ev_name), "wm-term-%d", term_slot);
+
+    int shm_size = shm_total_size(cw, ch);
+    int shm_id = sys_shm_open(shm_name, shm_size, 0);
+    if (shm_id < 0) return;
+
+    pipe_unlink(ev_name);
+    int fds[2];
+    if (pipe_named(ev_name, fds) < 0) return;
+    pipe_close(fds[0]); pipe_close(fds[1]);
+
+    char arg_w[8], arg_h[8];
+    snprintf(arg_w, sizeof(arg_w), "%d", cw);
+    snprintf(arg_h, sizeof(arg_h), "%d", ch);
+
+    char *argv[8];
+    int n = 0;
+    argv[n++] = "TERM";
+    argv[n++] = shm_name;
+    argv[n++] = arg_w;
+    argv[n++] = arg_h;
+    argv[n++] = ev_name;
+    if (extra) {
+        for (int i = 0; extra[i] && n < (int)(sizeof(argv) / sizeof(argv[0])) - 1; i++)
+            argv[n++] = extra[i];
+    }
+    argv[n] = NULL;
+
+    struct spawn_params sp = {
+        .size = sizeof(sp), .in_fd = SPAWN_FD_INHERIT, .out_fd = SPAWN_FD_INHERIT, .err_fd = SPAWN_FD_INHERIT,
+        .in_pipe = -1, .out_pipe = -1, .err_pipe = -1, .in_pty = -1, .out_pty = -1, .err_pty = -1,
+        .flags = 0, .envp = 0, .out_pid = 0, .child_class = CLASS_USER, .child_caps = 0,
+    };
+
+    /* 先 spawn TERM，拿到子进程 pid，再创建 WM 窗口。
+     * 否则窗口 owner 是 desktop；desktop 被关闭/重启时
+     * cleanup_dead_windows() 会把所有已打开的终端一起清掉。 */
+    int h = proc_spawn("TERM", argv, &sp);
+    if (h < 0) {
+        sys_shm_unlink(shm_name);
+        pipe_unlink(ev_name);
+        return;
+    }
+
+    struct wm_request req;
+    memset(&req, 0, sizeof(req));
+    req.magic = WM_MAGIC; req.type = WM_REQ_CREATE; req.kind = WM_KIND_NORMAL;
+    req.x = x; req.y = y; req.w = cw; req.h = ch;
+    req.owner_pid = sp.out_pid ? sp.out_pid : proc_getpid();
+    strncpy(req.shm_name, shm_name, sizeof(req.shm_name) - 1);
+    strncpy(req.ev_name, ev_name, sizeof(req.ev_name) - 1);
+    strncpy(req.title, title ? title : "Terminal", sizeof(req.title) - 1);
+    if (pipe_write(g_inbox_w, &req, sizeof(req)) != sizeof(req)) {
+        int ph = proc_open(sp.out_pid, PROC_TERMINATE);
+        if (ph >= 0) {
+            proc_kill(ph, SIGTERM);
+            proc_close(ph);
+        }
+        sys_shm_unlink(shm_name);
+        pipe_unlink(ev_name);
+        return;
+    }
+    term_slot++;
+}
+
+static void spawn_term(int cw, int ch, int x, int y) {
+    spawn_term_argv(cw, ch, x, y, NULL, "Terminal");
+}
+
+static void spawn_netsurf(void) {
+    char *argv[] = { "NETSURF", NULL };
+    struct spawn_params sp = {
+        .size = sizeof(sp), .in_fd = SPAWN_FD_INHERIT,
+        .out_fd = SPAWN_FD_INHERIT, .err_fd = SPAWN_FD_INHERIT,
+        .in_pipe = -1, .out_pipe = -1, .err_pipe = -1,
+        .in_pty = -1, .out_pty = -1, .err_pty = -1,
+        .flags = 0, .envp = 0, .out_pid = 0,
+        .child_class = CLASS_USER, .child_caps = 0,
+    };
+    proc_spawn("NETSURF", argv, &sp);
+}
+
+static void spawn_about(void) {
+    char *argv[] = { "ABOUT", NULL };
+    struct spawn_params sp = {
+        .size = sizeof(sp),
+        .in_fd = SPAWN_FD_INHERIT,
+        .out_fd = SPAWN_FD_INHERIT,
+        .err_fd = SPAWN_FD_INHERIT,
+        .in_pipe = -1, .out_pipe = -1, .err_pipe = -1,
+        .in_pty = -1, .out_pty = -1, .err_pty = -1,
+        .flags = 0, .envp = 0, .out_pid = 0,
+        .child_class = CLASS_USER, .child_caps = 0,
+    };
+    proc_spawn("ABOUT", argv, &sp);
+}
+
+static void open_photo_file(const char *path) {
+    if (!path || !path[0]) return;
+    char *argv[] = { "PHOTOS", (char*)path, NULL };
+    struct spawn_params sp = {
+        .size = sizeof(sp), .in_fd = SPAWN_FD_INHERIT, .out_fd = SPAWN_FD_INHERIT,
+        .err_fd = SPAWN_FD_INHERIT, .in_pipe = -1, .out_pipe = -1, .err_pipe = -1,
+        .in_pty = -1, .out_pty = -1, .err_pty = -1, .flags = 0, .envp = 0,
+        .out_pid = 0, .child_class = CLASS_USER, .child_caps = 0,
+    };
+    proc_spawn("PHOTOS", argv, &sp);
+}
+
+static void open_audio_file(const char *path) {
+    if (!path || !path[0]) return;
+    const char *base = fm_path_base(path);
+    char title[32];
+    snprintf(title, sizeof(title), "Media - %s", base);
+    char *extra[] = { "MEDIA", (char*)path, NULL };
+    spawn_term_argv(640, 360, 180, 120, extra, title);
+}
+
+static void open_source_file(const char *path) {
+    if (!path || !path[0]) return;
+
+    const char *base = path;
+    for (const char *p = path; *p; p++) {
+        if (*p == '\\') base = p + 1;
+    }
+    char title[32];
+    snprintf(title, sizeof(title), "Kilo - %s", base);
+
+    char *extra[] = { "KILO", (char*)path, NULL };
+    spawn_term_argv(640, 480, 160, 80, extra, title);
+}
+
+static void desk_copy_selection(int cut) {
+    int n = desk_collect_paths(g_clip_paths, CLIP_MAX);
+    if (n <= 0) return;
+    g_clip_count = n;
+    g_clip_cut = cut;
+}
+
+static void desktop_paste(void) {
+    if (g_clip_count <= 0) return;
+
+    int cut = g_clip_cut;
+    int done = 0;
+
+    for (int i = 0; i < g_clip_count; i++) {
+        const char *src = g_clip_paths[i];
+        const char *base = fm_path_base(src);
+        if (!base[0]) continue;
+        if (fm_path_is_inside(ROOT_PATH, src)) continue;
+
+        char src_dir[256];
+        fm_path_parent(src, src_dir, sizeof(src_dir));
+        if (cut && strcmp(src_dir, ROOT_PATH) == 0) continue;
+
+        char dst[256];
+        fm_unique_path(ROOT_PATH, base, dst, sizeof(dst));
+
+        int r = cut ? fs_rename(src, dst) : fm_copy_recursive(src, dst);
+        if (r >= 0) done++;
+    }
+
+    if (cut && done > 0) g_clip_count = 0;
+    desktop_refresh_icons();
+}
+
+static void desktop_open_fm_input(int mode) {
+    struct fm_win *w = open_folder_window(ROOT_PATH);
+    if (!w) return;
+
+    fm_input_begin(w, mode, (mode == FM_INPUT_NEWDIR) ? "New Dir: " : "New C: ");
+    fm_redraw(w);
+}
+
+static void menu_local_release(void) {
+    if (g_menu_hdr) {
+        sys_munmap((unsigned int)g_menu_hdr, shm_total_size(g_menu_w, g_menu_h));
+        g_menu_hdr = NULL;
+        g_menu_pixels = NULL;
+    }
+    if (g_menu_shm[0]) sys_shm_unlink(g_menu_shm);
+    if (g_menu_ev_name[0]) pipe_unlink(g_menu_ev_name);
+    if (g_menu_ev >= 0) { pipe_close(g_menu_ev); g_menu_ev = -1; }
+    g_menu_visible = 0;
+}
+
+static int menu_create(int x, int y, int w, int h) {
+    char shm[16], ev[24];
+    g_menu_gen++;
+    snprintf(shm, sizeof(shm), "menu-%d", g_menu_gen);
+    snprintf(ev, sizeof(ev), "menu-ev-%d", g_menu_gen);
+
+    g_menu_w = w;
+    g_menu_h = h;
+    if (wm_create_window("", WM_KIND_POPUP, x, y, w, h,
+                         &g_menu_pixels, &g_menu_hdr, shm, ev, &g_menu_ev) < 0) {
+        g_menu_visible = 0;
+        return -1;
+    }
+    strncpy(g_menu_shm, shm, sizeof(g_menu_shm) - 1);
+    strncpy(g_menu_ev_name, ev, sizeof(g_menu_ev_name) - 1);
+    g_menu_visible = 1;
+    return 0;
+}
+
+static void menu_force_close(void) {
+    if (g_menu_visible) close_menu_request();
+    menu_local_release();
+}
+
+static void open_start_menu(void) {
+    if (g_menu_visible) return;
+    g_menu_state = MENU_STATE_MAIN;
+    if (menu_create(4, g_H - PANEL_H - (MAIN_MENU_ITEMS * MENU_ITEM_H + MENU_PAD * 2),
+                    MENU_W, MAIN_MENU_ITEMS * MENU_ITEM_H + MENU_PAD * 2) < 0)
+        return;
+    draw_menu(-1);
+}
+
+static void open_context_menu(int x, int y) {
+    if (g_menu_visible) return;
+    g_menu_state = MENU_STATE_CONTEXT;
+    g_context_file = -1;
+    int w = MENU_W;
+    int h = CONTEXT_MENU_ITEMS * MENU_ITEM_H + MENU_PAD * 2;
+
+    if (x + w > g_W) x = g_W - w;
+    if (y + h > g_H) y = g_H - h;
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
+
+    if (menu_create(x, y, w, h) < 0) return;
+    draw_menu(-1);
+}
+
+static void open_context_item_menu(int file_idx, int x, int y) {
+    if (g_menu_visible) return;
+
+    int multi = desk_sel_count() > 1;
+    g_menu_state = multi ? MENU_STATE_CONTEXT_MULTI : MENU_STATE_CONTEXT_ITEM;
+    g_context_file = file_idx;
+    int w = MENU_W;
+    int items = multi ? CONTEXT_MULTI_ITEMS :
+                ((file_idx >= 0 && file_idx < g_file_count &&
+                  !g_files[file_idx].is_dir && is_c_source(g_files[file_idx].name))
+                 ? CONTEXT_ITEM_MAX_ITEMS : 5);
+    int h = items * MENU_ITEM_H + MENU_PAD * 2;
+
+    if (x + w > g_W) x = g_W - w;
+    if (y + h > g_H) y = g_H - h;
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
+
+    if (menu_create(x, y, w, h) < 0) return;
+    draw_menu(-1);
+}
+
+static void open_task_menu(int x, int y) {
+    menu_force_close();
+    g_menu_state = MENU_STATE_TASK;
+    int w = 150;
+    int h = MENU_ITEM_H + MENU_PAD * 2;
+    if (x + w > g_W) x = g_W - w;
+    if (x < 0) x = 0;
+    if (y + h > g_H) y = g_H - h;
+    if (y < 0) y = 0;
+    if (menu_create(x, y, w, h) < 0) return;
+    draw_menu(-1);
+}
+
+static void draw_volume_region(void) {
+    int x0 = g_W - CLOCK_W - VOL_W;
+    if (x0 < 0) x0 = 0;
+    gfx_fill_rect(g_panel_pixels, g_W, PANEL_H, x0, 0,
+                  (g_W - CLOCK_W) - x0, PANEL_H, COL_PANEL);
+    char buf[24];
+    snprintf(buf, sizeof(buf), "VOL %d%%", g_volume);
+    gfx_draw_text(g_panel_pixels, g_W, PANEL_H, x0 + 4,
+                  (PANEL_H - 16) / 2, buf, COL_PANEL_FG, COL_PANEL);
+}
+
+static void update_volume_display(void) {
+    if (!g_panel_hdr) return;
+    draw_volume_region();
+    int x0 = g_W - CLOCK_W - VOL_W;
+    if (x0 < 0) x0 = 0;
+    shm_mark_rect(g_panel_hdr, x0, 0, g_W - CLOCK_W, PANEL_H);
+    shm_publish(g_panel_hdr);
+}
+
+static void open_volume_menu(void) {
+    menu_force_close();
+    g_menu_state = MENU_STATE_VOLUME;
+    int w = 180, h = 78;
+    int x = g_W - CLOCK_W - VOL_W - 40;
+    int y = g_H - PANEL_H - h - 2;
+    if (x < 0) x = 0;
+    if (x + w > g_W) x = g_W - w;
+    if (menu_create(x, y, w, h) < 0) return;
+    draw_menu(-1);
+}
+
+static void close_menu_request(void) {
+    if (!g_menu_visible) return;
+    struct wm_destroy_request dr;
+    memset(&dr, 0, sizeof(dr));
+    dr.magic = WM_MAGIC; dr.type = WM_REQ_DESTROY; dr.owner_pid = proc_getpid();
+    strncpy(dr.shm_name, g_menu_shm, sizeof(dr.shm_name) - 1);
+    pipe_write(g_inbox_w, &dr, sizeof(dr));
+}
+
+static int menu_item_count(void) {
+    if (g_menu_state == MENU_STATE_CONTEXT) return CONTEXT_MENU_ITEMS;
+    if (g_menu_state == MENU_STATE_CONTEXT_ITEM) return context_item_count();
+    if (g_menu_state == MENU_STATE_CONTEXT_MULTI) return CONTEXT_MULTI_ITEMS;
+    if (g_menu_state == MENU_STATE_MAIN)    return MAIN_MENU_ITEMS;
+    if (g_menu_state == MENU_STATE_TASK)    return 1;
+    if (g_menu_state == MENU_STATE_VOLUME)  return 0;
+    return POWER_MENU_ITEMS;
+}
+
+static void volume_set_from_x(int x) {
+    int tw = g_menu_w - 16;
+    if (tw < 1) tw = 1;
+    int v = (x - 8) * 100 / tw;
+    if (v < 0) v = 0;
+    if (v > 100) v = 100;
+    g_volume = v;
+    audio_set_volume(v);
+    update_volume_display();
+    draw_menu(-1);
+}
+
+static void handle_menu_event(struct wm_event *ev) {
+    if (ev->type == WM_EV_CLOSE) {
+        if (g_menu_hdr) {
+            sys_munmap((unsigned int)g_menu_hdr,
+                       shm_total_size(g_menu_w, g_menu_h));
+            g_menu_hdr = NULL;
+            g_menu_pixels = NULL;
+        }
+        sys_shm_unlink(g_menu_shm);
+        pipe_unlink(g_menu_ev_name);
+        if (g_menu_ev >= 0) { pipe_close(g_menu_ev); g_menu_ev = -1; }
+        g_menu_visible = 0;
+        return;
+    }
+    if (ev->type == WM_EV_MOUSE_MOVE) {
+        if (g_menu_state == MENU_STATE_VOLUME) {
+            if (ev->code & WM_BTN_LEFT) volume_set_from_x(ev->x);
+            return;
+        }
+        int rel = ev->y - MENU_PAD;
+        int item = (rel >= 0) ? rel / MENU_ITEM_H : -1;
+        int count = menu_item_count();
+        draw_menu((item >= 0 && item < count) ? item : -1);
+        return;
+    }
+    if (ev->type == WM_EV_MOUSE_DOWN && (ev->code & WM_BTN_LEFT)) {
+        if (g_menu_state == MENU_STATE_VOLUME) {
+            volume_set_from_x(ev->x);
+            return;
+        }
+        int rel = ev->y - MENU_PAD;
+        int item = (rel >= 0) ? rel / MENU_ITEM_H : -1;
+        int count = menu_item_count();
+
+        if (item >= 0 && item < count) {
+            if (g_menu_state == MENU_STATE_TASK) {
+                if (item == 0 && g_task_win_id) {
+                    struct wm_action_request req;
+                    memset(&req, 0, sizeof(req));
+                    req.magic = WM_MAGIC;
+                    req.type = WM_REQ_WIN_ACTION;
+                    req.owner_pid = proc_getpid();
+                    req.win_id = g_task_win_id;
+                    req.action = WM_ACTION_CLOSE;
+                    pipe_write(g_inbox_w, &req, sizeof(req));
+                }
+            } else if (g_menu_state == MENU_STATE_CONTEXT) {
+                if (item == 0) {
+                    desk_sel_clear();
+                    g_last_clicked_file = -1;
+                    desktop_refresh_icons();
+                } else if (item == 1) {
+                    desktop_paste();
+                } else if (item == 2) {
+                    desktop_open_fm_input(FM_INPUT_NEWDIR);
+                } else if (item == 3) {
+                    desktop_open_fm_input(FM_INPUT_NEWFILE);
+                }
+            } else if (g_menu_state == MENU_STATE_CONTEXT_MULTI) {
+                if (item == 0)      desk_copy_selection(0);
+                else if (item == 1) desk_copy_selection(1);
+                else if (item == 2) wall_delete_selected();
+            } else if (g_menu_state == MENU_STATE_CONTEXT_ITEM) {
+                int idx = g_context_file;
+                if (item == 0 || item == 1) {
+                    desk_copy_selection(item == 1);
+                } else if (item == 2) {
+                    wall_delete_selected();
+                } else if (item == 3 && idx >= 0 && idx < g_file_count) {
+                    mui_dialog_open_rename(&g_desk_dialog, ROOT_PATH,
+                                           g_files[idx].name);
+                    draw_wallpaper();
+                } else if (item == 4 && idx >= 0 && idx < g_file_count) {
+                    char key[256];
+                    snprintf(key, sizeof(key), "%s%s", ROOT_PATH,
+                             g_files[idx].name);
+                    const char *cur = ci_map_path(key);
+                    g_desk_icon_file = idx;
+                    mui_dialog_open_text(&g_desk_dialog, "Custom Icon",
+                                         "BMP path, e.g. SYS:\\my.bmp",
+                                         cur ? cur : "");
+                    draw_wallpaper();
+                } else if (item == 5) {
+                    desk_compile_file(idx);
+                }
+            } else if (g_menu_state == MENU_STATE_MAIN) {
+                if (item == 0) { g_menu_state = MENU_STATE_POWER; draw_menu(-1); return; }
+                else if (item == 1) spawn_term(600, 400, 200, 100);
+                else if (item == 2) spawn_netsurf();
+                else if (item == 3) spawn_about();
+            } else {
+                if (item == 0) sys_reboot();
+                else if (item == 1) sys_halt();
+            }
+        }
+        close_menu_request();
+    }
+}
+
+/* ============================================================
+ *        任务栏窗口缩略图 / 右键关闭菜单 / 音量
+ * ============================================================ */
+
+static void thumb_release_local(void) {
+    if (g_thumb_hdr) {
+        sys_munmap((unsigned int)g_thumb_hdr,
+                   shm_total_size(THUMB_W, THUMB_H));
+        g_thumb_hdr = NULL;
+        g_thumb_pixels = NULL;
+    }
+    if (g_thumb_shm[0]) sys_shm_unlink(g_thumb_shm);
+    if (g_thumb_ev_name[0]) pipe_unlink(g_thumb_ev_name);
+    if (g_thumb_ev >= 0) { pipe_close(g_thumb_ev); g_thumb_ev = -1; }
+    if (g_thumb_src) {
+        sys_munmap((unsigned int)g_thumb_src, g_thumb_src_size);
+        g_thumb_src = NULL;
+        g_thumb_src_size = 0;
+    }
+    g_thumb_idx = -1;
+    g_thumb_src_w = g_thumb_src_h = 0;
+    g_thumb_src_id = 0;
+}
+
+static void thumb_close(void) {
+    if (g_thumb_shm[0]) {
+        struct wm_destroy_request dr;
+        memset(&dr, 0, sizeof(dr));
+        dr.magic = WM_MAGIC;
+        dr.type = WM_REQ_DESTROY;
+        dr.owner_pid = proc_getpid();
+        strncpy(dr.shm_name, g_thumb_shm, sizeof(dr.shm_name) - 1);
+        pipe_write(g_inbox_w, &dr, sizeof(dr));
+    }
+    thumb_release_local();
+}
+
+static void thumb_render(void) {
+    if (!g_thumb_pixels || !g_thumb_hdr) return;
+    if (!g_thumb_src || g_thumb_src_w <= 0 || g_thumb_src_h <= 0) return;
+
+    gfx_fill_rect(g_thumb_pixels, THUMB_W, THUMB_H, 0, 0, THUMB_W, THUMB_H,
+                  0x1E1E2E);
+    gfx_fill_rect(g_thumb_pixels, THUMB_W, THUMB_H, 0, 0, THUMB_W, 20,
+                  0x1A1A2E);
+    gfx_fill_rect(g_thumb_pixels, THUMB_W, THUMB_H, 0, 0, THUMB_W, 1,
+                  0x5A5A7E);
+    gfx_fill_rect(g_thumb_pixels, THUMB_W, THUMB_H, 0, THUMB_H - 1, THUMB_W, 1,
+                  0x5A5A7E);
+
+    const char *title = (g_thumb_idx >= 0 && g_thumb_idx < g_win_count)
+                            ? g_win_list[g_thumb_idx].title : "";
+    char label[40];
+    int k = 0, used = 0;
+    const unsigned char *tp = (const unsigned char*)title;
+    while (*tp && k < (int)sizeof(label) - 4) {
+        uint32_t cp;
+        int clen = ufont_utf8_decode(tp, &cp);
+        int cw = wm_font_width((int)cp);
+        if (!cw) cw = 8;
+        if (used + cw > THUMB_W - 12) break;
+        memcpy(label + k, tp, clen);
+        k += clen;
+        used += cw;
+        tp += clen;
+    }
+    label[k] = '\0';
+    gfx_draw_text(g_thumb_pixels, THUMB_W, THUMB_H, 6, 2, label,
+                  0xCCCCCC, GFX_BG_TRANSPARENT);
+
+    int iw = THUMB_W - 8;
+    int ih = THUMB_H - 26;
+    int dw = g_thumb_src_w, dh = g_thumb_src_h;
+    if (dw > iw) { dh = g_thumb_src_h * iw / g_thumb_src_w; dw = iw; }
+    if (dh > ih) { dw = g_thumb_src_w * ih / g_thumb_src_h; dh = ih; }
+    if (dw < 1) dw = 1;
+    if (dh < 1) dh = 1;
+    int ox = (THUMB_W - dw) / 2;
+    int oy = 22 + (ih - dh) / 2;
+
+    gfx_fill_rect(g_thumb_pixels, THUMB_W, THUMB_H, 4, 22, iw, ih, 0x000000);
+
+    unsigned int *src = (unsigned int*)((char*)g_thumb_src + SHM_HDR_SIZE);
+    for (int y = 0; y < dh; y++) {
+        int sy = y * g_thumb_src_h / dh;
+        if (sy >= g_thumb_src_h) sy = g_thumb_src_h - 1;
+        unsigned int *dst_row = g_thumb_pixels + (oy + y) * THUMB_W + ox;
+        unsigned int *src_row = src + (size_t)sy * g_thumb_src_w;
+        for (int x = 0; x < dw; x++) {
+            int sx = x * g_thumb_src_w / dw;
+            if (sx >= g_thumb_src_w) sx = g_thumb_src_w - 1;
+            dst_row[x] = src_row[sx];
+        }
+    }
+
+    shm_mark_rect(g_thumb_hdr, 0, 0, THUMB_W, THUMB_H);
+    shm_publish(g_thumb_hdr);
+}
+
+static void thumb_open(int idx) {
+    if (idx < 0 || idx >= g_win_count) return;
+    struct desktop_win *w = &g_win_list[idx];
+    if (!w->shm_name[0] || w->cw == 0 || w->ch == 0) return;
+
+    uint32_t size = shm_total_size((int)w->cw, (int)w->ch);
+    int shm_id = sys_shm_open(w->shm_name, size, 0);
+    if (shm_id < 0) return;
+    unsigned int addr = sys_mmap(0, size, PROT_READ, MAP_SHARED, shm_id, 0);
+    if ((int)addr <= 0) return;
+
+    g_thumb_src = (unsigned int*)addr;    g_thumb_src_size = size;
+    g_thumb_src_w = (int)w->cw;
+    g_thumb_src_h = (int)w->ch;
+    g_thumb_src_id = w->id;
+    g_thumb_last_counter = ((struct shm_hdr*)addr)->counter;
+
+    g_thumb_gen++;
+    snprintf(g_thumb_shm, sizeof(g_thumb_shm), "thumb-%d", g_thumb_gen);
+    snprintf(g_thumb_ev_name, sizeof(g_thumb_ev_name), "thumb-ev-%d",
+             g_thumb_gen);
+
+    int x = WIN_ITEM_X0 + idx * WIN_ITEM_W + WIN_ITEM_W / 2 - THUMB_W / 2;
+    int y = g_H - PANEL_H - THUMB_H - 2;
+    if (x < 0) x = 0;
+    if (x + THUMB_W > g_W) x = g_W - THUMB_W;
+    if (y < 0) y = 0;
+
+    if (wm_create_window("", WM_KIND_POPUP, x, y, THUMB_W, THUMB_H,
+                         &g_thumb_pixels, &g_thumb_hdr,
+                         g_thumb_shm, g_thumb_ev_name, &g_thumb_ev) < 0) {
+        thumb_release_local();
+        return;
+    }
+    g_thumb_idx = idx;
+    thumb_render();
+}
+
+static void thumb_check_alive(void) {
+    if (g_thumb_idx < 0) return;
+    int found = -1;
+    for (int i = 0; i < g_win_count; i++) {
+        if (g_win_list[i].id == g_thumb_src_id) { found = i; break; }
+    }
+    if (found < 0) {
+        thumb_close();
+    } else {
+        g_thumb_idx = found;
+    }
+}
+
+static void handle_thumb_event(struct wm_event *ev) {
+    if (ev->type == WM_EV_CLOSE) {
+        if (g_thumb_hdr) {
+            sys_munmap((unsigned int)g_thumb_hdr,
+                       shm_total_size(THUMB_W, THUMB_H));
+            g_thumb_hdr = NULL;
+            g_thumb_pixels = NULL;
+        }
+        sys_shm_unlink(g_thumb_shm);
+        pipe_unlink(g_thumb_ev_name);
+        if (g_thumb_ev >= 0) { pipe_close(g_thumb_ev); g_thumb_ev = -1; }
+        g_thumb_idx = -1;
+        if (g_thumb_src) {
+            sys_munmap((unsigned int)g_thumb_src, g_thumb_src_size);
+            g_thumb_src = NULL;
+            g_thumb_src_size = 0;
+        }
+        g_panel_hover = -1;
+    }
+}
+
+static void panel_hover_update(int mx) {
+    if (g_menu_visible) {
+        if (g_panel_hover != -1) {
+            g_panel_hover = -1;
+            thumb_close();
+        }
+        return;
+    }
+    int idx = -1;
+    if (g_win_count > 0 && mx >= WIN_ITEM_X0 &&
+        mx < WIN_ITEM_X0 + WIN_ITEM_W * g_win_count) {
+        idx = (mx - WIN_ITEM_X0) / WIN_ITEM_W;
+        if (idx >= g_win_count) idx = -1;
+    }
+    if (idx == g_panel_hover) return;
+
+    g_panel_hover = idx;
+    thumb_close();
+    if (idx >= 0) thumb_open(idx);
+}
+
+static void handle_panel_event(struct wm_event *ev) {
+    if (ev->type == WM_EV_WINDOW_LIST) {
+        int n = (int)ev->code; if (n > 8) n = 8;
+        g_win_count = n;
+        for (int i = 0; i < n; i++) {
+            struct wm_window_entry e;
+            if (pipe_read(g_panel_ev, &e, sizeof(e)) != sizeof(e)) { g_win_count = i; break; }
+            g_win_list[i].id = e.id;
+            g_win_list[i].minimized = e.minimized;
+            g_win_list[i].cw = e.cw;
+            g_win_list[i].ch = e.ch;
+            memcpy(g_win_list[i].title, e.title, 32);
+            g_win_list[i].title[31] = '\0';
+            memcpy(g_win_list[i].shm_name, e.shm_name, 16);
+            g_win_list[i].shm_name[15] = '\0';
+        }
+        thumb_check_alive();
+        draw_panel();
+        return;
+    }
+
+    if (ev->type == WM_EV_MOUSE_MOVE) {
+        panel_hover_update(ev->x);
+        return;
+    }
+
+    if (ev->type == WM_EV_MOUSE_LEAVE) {
+        g_panel_hover = -1;
+        thumb_close();
+        return;
+    }
+
+    if (ev->type == WM_EV_MOUSE_DOWN && (ev->code & WM_BTN_RIGHT)) {
+        if (ev->x >= WIN_ITEM_X0 &&
+            ev->x < WIN_ITEM_X0 + WIN_ITEM_W * g_win_count) {
+            int idx = (ev->x - WIN_ITEM_X0) / WIN_ITEM_W;
+            if (idx >= 0 && idx < g_win_count) {
+                g_panel_hover = -1;
+                thumb_close();
+                g_task_win_id = g_win_list[idx].id;
+                open_task_menu(ev->x, g_H - PANEL_H - 36);
+            }
+        }
+        return;
+    }
+
+    if (ev->type == WM_EV_MOUSE_DOWN && (ev->code & WM_BTN_LEFT)) {
+        int vol_x0 = g_W - CLOCK_W - VOL_W;
+        if (vol_x0 < 0) vol_x0 = 0;
+        if (ev->x >= vol_x0 && ev->x < g_W - CLOCK_W) {
+            g_panel_hover = -1;
+            thumb_close();
+            open_volume_menu();
+            return;
+        }
+        if (ev->x < WIN_ITEM_X0) {
+            g_panel_hover = -1;
+            thumb_close();
+            open_start_menu();
+            return;
+        }
+        if (ev->x >= WIN_ITEM_X0 && ev->x < WIN_ITEM_X0 + WIN_ITEM_W * g_win_count) {
+            int idx = (ev->x - WIN_ITEM_X0) / WIN_ITEM_W;
+            if (idx >= 0 && idx < g_win_count) {
+                struct wm_action_request req;
+                memset(&req, 0, sizeof(req));
+                req.magic = WM_MAGIC; req.type = WM_REQ_WIN_ACTION; req.owner_pid = proc_getpid();
+                req.win_id = g_win_list[idx].id;
+                req.action = g_win_list[idx].minimized ? WM_ACTION_RESTORE : WM_ACTION_MINIMIZE;
+                pipe_write(g_inbox_w, &req, sizeof(req));
+                g_panel_hover = -1;
+                thumb_close();
+            }
+        }
+    }
+}
+
+/* ============================================================
+ *                          main
+ * ============================================================ */
+
+int main(int argc, char **argv) {
+    (void)argc; (void)argv;
+    uint64_t t0 = tsc_now();
+
+    const char *sw = getenv("SCREEN_W");
+    const char *sh = getenv("SCREEN_H");
+    g_W = sw ? atoi(sw) : 1024; g_H = sh ? atoi(sh) : 768;
+
+    for (int i = 0; i < 1000; i++) {
+        g_inbox_w = pipe_open(WM_INBOX_NAME, 1);
+        if (g_inbox_w >= 0) break;
+        sys_sleep_ms(10);
+    }
+    if (g_inbox_w < 0) { printf("desktop: wm-inbox open failed\n"); return 1; }
+    dprintf(2, "[MARK] desk_inbox: %llu\n", tsc_now() - t0);
+
+    wm_font_load();
+    mui_font_load();
+    mui_dialog_init(&g_desk_dialog);
+    ime_init(&g_desk_ime);
+    calc_desk_cols();
+    dprintf(2, "[MARK] desk_font: %llu\n", tsc_now() - t0);
+
+    icons_load();
+    icons_config_load();
+    g_volume = audio_get_volume();
+    if (g_volume < 0) g_volume = 80;
+    dprintf(2, "[MARK] desk_icons: %llu\n", tsc_now() - t0);
+
+    strcpy(g_wall_shm, "wall-shm");
+    char ev_wall[24]; strcpy(ev_wall, "wall-ev");
+    if (wm_create_window("", WM_KIND_WALLPAPER, 0, 0, g_W, g_H,
+                         &g_wall_pixels, &g_wall_hdr, g_wall_shm, ev_wall, &g_wall_ev) < 0) {
+        printf("desktop: wallpaper create failed\n"); return 1;
+    }
+    dprintf(2, "[MARK] desk_wall_create: %llu\n", tsc_now() - t0);
+
+    desk_load_files();
+    draw_wallpaper();
+    dprintf(2, "[MARK] desk_wall_draw: %llu\n", tsc_now() - t0);
+
+    strcpy(g_panel_shm, "panel-shm");
+    char ev_panel[24]; strcpy(ev_panel, "panel-ev");
+    if (wm_create_window("", WM_KIND_DOCK, 0, g_H - PANEL_H, g_W, PANEL_H,
+                         &g_panel_pixels, &g_panel_hdr, g_panel_shm, ev_panel, &g_panel_ev) < 0) {
+        printf("desktop: panel create failed\n"); return 1;
+    }
+    draw_panel(); update_clock();
+    dprintf(2, "[MARK] desk_panel: %llu\n", tsc_now() - t0);
+
+    int clock_tick = 0;
+    dprintf(2, "[MARK] desk_loop_enter: %llu\n", tsc_now() - t0);
+    for (;;) {
+        struct wm_event ev;
+        while (g_menu_ev >= 0 && pipe_avail(g_menu_ev) >= (int)sizeof(ev)) {
+            if (pipe_read(g_menu_ev, &ev, sizeof(ev)) != sizeof(ev)) break;
+            handle_menu_event(&ev);
+        }
+        while (g_thumb_ev >= 0 && pipe_avail(g_thumb_ev) >= (int)sizeof(ev)) {
+            if (pipe_read(g_thumb_ev, &ev, sizeof(ev)) != sizeof(ev)) break;
+            handle_thumb_event(&ev);
+        }
+        while (g_panel_ev >= 0 && pipe_avail(g_panel_ev) >= (int)sizeof(ev)) {
+            if (pipe_read(g_panel_ev, &ev, sizeof(ev)) != sizeof(ev)) break;
+            handle_panel_event(&ev);
+        }
+        while (g_wall_ev >= 0 && pipe_avail(g_wall_ev) >= (int)sizeof(ev)) {
+            if (pipe_read(g_wall_ev, &ev, sizeof(ev)) != sizeof(ev)) break;
+            handle_wall_event(&ev);
+        }
+        if (g_desk_dialog.active &&
+            mui_dialog_tick(&g_desk_dialog, g_tick)) {
+            draw_wallpaper();
+        }
+        for (int i = 0; i < MAX_FM_WINDOWS; i++) {
+            struct fm_win *w = &g_fm_wins[i];
+            if (!w->used) continue;
+            while (w->ev >= 0 && pipe_avail(w->ev) >= (int)sizeof(ev)) {
+                if (pipe_read(w->ev, &ev, sizeof(ev)) != sizeof(ev)) break;
+                handle_fm_event(w, &ev);
+            }
+            if (w->used && w->dialog.active &&
+                mui_dialog_tick(&w->dialog, g_tick)) {
+                fm_redraw(w);
+            }
+            if (w->used) fm_publish(w);
+        }
+
+        if (g_thumb_idx >= 0 && g_thumb_src && (g_tick % 200) == 0) {
+            uint32_t counter = ((struct shm_hdr*)g_thumb_src)->counter;
+            if (counter != g_thumb_last_counter) {
+                g_thumb_last_counter = counter;
+                thumb_render();
+            }
+        }
+
+        shm_publish(g_wall_hdr);
+        shm_publish(g_panel_hdr);
+        shm_publish(g_menu_hdr);
+        shm_publish(g_thumb_hdr);
+
+        if (++clock_tick >= 500) {
+            clock_tick = 0;
+            update_clock();
+            int v = audio_get_volume();
+            if (v >= 0 && v != g_volume) {
+                g_volume = v;
+                update_volume_display();
+            }
+        }
+        g_tick++;
+        sys_sleep_ms(1);
+    }
+    return 0;
+}

@@ -1,0 +1,287 @@
+#include <screen.h>
+#include <serial.h>
+#include <pmm.h>
+#include <vmm.h>
+#include <gdt.h>
+#include <tss.h>
+#include <idt.h>
+#include <task.h>
+#include <ata.h>
+#include <audio.h>
+#include <fat32.h>
+#include <elf.h>
+#include <printf.h>
+#include <stdint.h>
+#include <stddef.h>
+#include <heap.h>
+#include <path.h>
+#include <errno.h>
+#include <device.h>
+#include <keyboard.h>
+#include <ipc.h>
+#include <rtc.h>
+#include <acpi.h>
+#include <pci.h>
+#include <partition.h>
+#include <panic.h>
+#include <irq.h>
+#include <vma.h>
+#include <shm.h>
+#include <net.h>
+#include <rtl8139.h>
+#include "graphic/graphic.h"
+#include <net_proto.h>
+#include <io.h>
+#include <net_sock.h>
+#include <tcp.h>
+#include <kmap.h>
+#include <fb.h>
+#include <mouse.h>
+#include <input.h>
+#include <pty.h>
+#include <e1000.h>
+#include <tty.h>
+#include <file_map.h>
+#include <font.h>
+#include <string.h>
+
+
+/* ---------- 内部辅助：从一个 ELF 路径创建进程 ---------- */
+
+static struct task *create_task_from_elf(struct fat32_volume *vol,
+                                          const char *path,
+                                          int envc, char *const envp[],
+                                          uint8_t class_, uint32_t caps) {
+    /* 1. 创建页目录 */
+    uint32_t *pgd = vmm_create_process_page_directory();
+    if (!pgd) {
+        kprintf("[KERNEL] Failed to create page directory for %s\n", path);
+        return NULL;
+    }
+
+    /* 2. 加载 ELF */
+    uint32_t entry = load_elf_from_disk(vol, path, pgd);
+    if (!entry) {
+        kprintf("[KERNEL] Failed to load %s\n", path);
+        /* 释放页目录？这里简化处理，暂不释放 */
+        return NULL;
+    }
+
+    /* 3. 创建 PCB */
+    struct task *task = task_create(entry, pgd, 0, NULL,
+                                    envc, envp,
+                                    SPAWN_FD_INHERIT,
+                                    SPAWN_FD_INHERIT,
+                                    SPAWN_FD_INHERIT,
+                                    -1, -1, -1,
+                                    -1, -1, -1,
+                                    class_, caps);
+
+    if (!task) {
+        kprintf("[KERNEL] Failed to create task for %s\n", path);
+        return NULL;
+    }
+
+    if (task) {
+        const char *img = path;
+        for (const char *p = path; *p; p++)
+            if (*p == '\\' || *p == '/') img = p + 1;
+        strncpy(task->image, img, sizeof(task->image) - 1);
+        task->image[sizeof(task->image) - 1] = '\0';
+    }
+
+    return task;
+}
+
+/* ---------- 创建用户态 /INIT（PID 1） ---------- */
+
+void create_init_task(struct fat32_volume *vol) {
+    struct fb_info *fb = fb_get();
+    char env_w[32], env_h[32];
+    snprintf(env_w, sizeof(env_w), "SCREEN_W=%u", fb ? fb->width : 1024);
+    snprintf(env_h, sizeof(env_h), "SCREEN_H=%u", fb ? fb->height : 768);
+    char *init_env[] = { env_w, env_h, NULL };
+
+    struct task *task = create_task_from_elf(vol, "/INIT", 2, init_env,
+                                             CLASS_KERNEL, CAP_ALL);
+    if (!task) {
+        panic("cannot create init task");
+    }
+    kprintf("[KERNEL] INIT task created (pid=%d)\n", task->pid);
+}
+
+/* ---------- 创建 IDLE 进程 ---------- */
+
+void create_idle_task(struct fat32_volume *vol) {
+    struct task *task = create_task_from_elf(vol, "/IDLE", 0, NULL, CLASS_KERNEL, 0);
+    if (!task) {
+        panic("cannot create idle task");
+    }
+
+    /* IDLE 的任务：尽量少占 CPU
+     * - time_slice 设为 1，让它很快被抢占
+     * - 用户程序内部用 pause 指令空转
+     */
+    task->time_slice = 1;
+
+    kprintf("[KERNEL] IDLE task created (pid=%d)\n", task->pid);
+}
+
+void create_wm_task(struct fat32_volume *vol) {
+    struct task *task = create_task_from_elf(vol, "/WM", 0, NULL, CLASS_KERNEL, CAP_ALL);
+    if (!task) {
+        panic("cannot create wm task");
+    }
+    kprintf("[KERNEL] WM task created (pid=%d)\n", task->pid);
+}
+
+void create_dhcp_task(struct fat32_volume *vol) {
+    struct task *dhcp_task = create_task_from_elf(
+        vol, "/DHCPCLIENT", 0, NULL, CLASS_USER, 0);
+    if (dhcp_task) {
+        kprintf("[DHCP] client task created (pid=%d)\n", dhcp_task->pid);
+    } else {
+        kprintf("[DHCP] failed to create client task\n");
+    }
+}
+
+void create_desktop_task(struct fat32_volume *vol) {
+    struct fb_info *fb = fb_get();
+    char env_w[32], env_h[32];
+    snprintf(env_w, sizeof(env_w), "SCREEN_W=%u", fb ? fb->width : 1024);
+    snprintf(env_h, sizeof(env_h), "SCREEN_H=%u", fb ? fb->height : 768);
+    char *desk_env[] = { env_w, env_h, NULL };
+    struct task *desk = create_task_from_elf(
+        vol, "/DESKTOP", 2, desk_env, CLASS_USER, 0);
+    if (desk) {
+        kprintf("[DESKTOP] task created (pid=%d)\n", desk->pid);
+    } else {
+        kprintf("[DESKTOP] failed to create\n");
+    }
+}
+
+
+
+void kmain(uint32_t magic, uint32_t addr) {
+    (void)magic;
+    dev_init();
+    irq_init();
+    serial_init();
+    screen_init();
+    tty_init();
+    ipc_init();
+    input_init();
+    pty_init();
+
+    kprintf("========================================\n");
+    kprintf(" HeliumOS Kernel Started (1GB/3GB)\n");
+    kprintf("========================================\n");
+
+    pmm_init(addr);
+    heap_init();
+    vma_init();
+    shm_init();
+    file_map_init();
+    gdt_init();
+    tss_init();
+    vmm_init();
+    kmap_init();
+    idt_init();
+    rtc_init();
+    acpi_init(addr);
+    fb_init(addr);
+
+    volume_init();
+    fs_init();
+
+    keyboard_init();
+    serial_register_dev();
+
+    pci_init();
+    graphic_init();
+    audio_init();
+    ata_init();
+    net_init();
+
+    /* 优先 e1000（VMware / 现代 QEMU），失败再试 rtl8139（QEMU 默认） */
+    e1000_init();
+    if (!net_get("eth0")) {
+        rtl8139_init();
+    }
+
+    net_proto_init();
+    net_sock_init();
+    tcp_init();
+
+    /* 遍历所有 ATA 设备的所有 MBR 主分区，尝试挂载 FAT32。
+     * 第一个成功的是 SYS，其余按 A/B/C... 编号。 */
+    struct fat32_volume *sys_vol = NULL;
+    int mounted = 0;
+
+    for (int d = 0; d < ata_device_count(); d++) {
+        const struct ata_device *dev = ata_get_device(d);
+        if (!dev) continue;
+
+        struct mbr_partition parts[MBR_MAX_PRIMARY];
+        int np = mbr_parse(dev, parts, MBR_MAX_PRIMARY);
+        if (np == 0) {
+            kprintf("[KERNEL] Device %d: no MBR partition\n", d);
+            continue;
+        }
+
+        for (int i = 0; i < np; i++) {
+            /* 只尝试 FAT32 类型（0x0B / 0x0C）。
+             * 其他类型不是 FAT32，跳过，不打日志。 */
+            if (parts[i].type != 0x0B && parts[i].type != 0x0C) {
+                continue;
+            }
+            
+            struct fat32_volume *vol = fat32_mount(dev, parts[i].start_lba);
+            if (!vol) continue;
+
+            char name[VOL_NAME_LEN];
+            if (mounted == 0) {
+                name[0] = 'S'; name[1] = 'Y'; name[2] = 'S'; name[3] = '\0';
+                sys_vol = vol;
+            } else if (mounted - 1 < 26) {
+                name[0] = 'A' + (char)(mounted - 1);
+                name[1] = '\0';
+            } else {
+                /* 超过 26 个卷——VOL_MAX 是 8，不会到这里 */
+                continue;
+            }
+
+            volume_register(name, VOL_FS_FAT32, parts[i].start_lba,
+                            parts[i].sector_count, vol);
+            mounted++;
+        }
+    }
+
+    if (!sys_vol) {
+        panic("no FAT32 volume found");
+    }
+    
+    font_init(sys_vol);
+
+    mouse_init();
+
+    /* PID 1 是用户态 init；WM/DESKTOP/DHCP/SHELL 由 init 启动。 */
+    create_init_task(sys_vol);
+    create_idle_task(sys_vol);
+
+    kprintf("[KERNEL] Processes created. Starting scheduler...\n");
+
+    // kprintf("[TEST] size of task: %d\n", sizeof(struct task));
+
+    /* 构造 ICMP echo request 到网关 10.0.2.2 */
+
+    kprintf("[TASK] sizeof(task)=%d\n", sizeof(struct task));
+    if(sizeof(struct task) > PAGE_SIZE){
+        panic("size of task (%u) bigger than PAGE_SIZE(4096)", sizeof(struct task));
+    }
+    
+
+    scheduler_start();
+
+    while (1) __asm__("hlt");
+}
