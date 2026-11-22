@@ -228,10 +228,9 @@ int ata_write_sector(const struct ata_device *dev, uint32_t lba,
     if (dev->ahci_port != 0xFF) {
         return ahci_write_sectors(dev->ahci_port, lba, 1, buffer);
     }
-    if (g_ata_mode == ATA_MODE_BMIDE) {
-        return ata_bmide_write_sectors(dev, lba, 1, buffer);
-    }
-
+    /* BMIDE 读路径可以在超时后回退 PIO；但 BMIDE 写路径即使返回
+     * 成功，也可能把扇区写成错位数据（实测目录项整体左移 1 字节），
+     * 最终破坏 FAT 目录。写入统一走 PIO，保证目录/文件原子可靠。 */
     uint16_t io = dev->io_base;
     uint8_t drive_sel = 0xE0 | (dev->drive << 4) | ((lba >> 24) & 0x0F);
 
