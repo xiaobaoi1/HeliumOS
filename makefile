@@ -426,7 +426,10 @@ $(BUILD_DIR)/%.ELF: $(BUILD_DIR)/%.o $(BUILD_DIR)/crt0.o $(LIBC_OBJS) $$(EXTRA_O
 libc.a: $(LIBC_OBJS)
 	ar rcs $(BUILD_DIR)/libc.a $(LIBC_OBJS)
 
-tcc-prepare: libc.a
+tcc-build: libc.a $(BUILD_DIR)/crt0.o
+	bash tools/build_tcc.sh
+
+tcc-prepare: libc.a tcc-build
 	@mkdir -p $(BUILD_DIR)/tcc_sysroot/include
 	@mkdir -p $(BUILD_DIR)/tcc_sysroot/lib
 	# 拷贝头文件
@@ -434,11 +437,11 @@ tcc-prepare: libc.a
 	# 拷贝 crt0.o 和 libc.a
 	cp $(BUILD_DIR)/crt0.o $(BUILD_DIR)/tcc_sysroot/lib/
 	cp $(BUILD_DIR)/libc.a $(BUILD_DIR)/tcc_sysroot/lib/
-	cp $(THIRD_PARTY)/tcc/libtcc1.a $(BUILD_DIR)/tcc_sysroot/lib/
+	cp $(BUILD_DIR)/tcc/libtcc1.a $(BUILD_DIR)/tcc_sysroot/lib/
 
 
-$(BUILD_DIR)/TCC.ELF: $(THIRD_PARTY)/tcc/tcc.out $(THIRD_PARTY)/tcc/libtcc.a $(THIRD_PARTY)/tcc/libtcc1.a $(BUILD_DIR)/crt0.o libc.a
-	gcc -m32 -static -nostdlib     -Wl,-T,user/linker.ld     -Wl,--start-group     $(THIRD_PARTY)/tcc/tcc.out     $(THIRD_PARTY)/tcc/libtcc.a     $(BUILD_DIR)/crt0.o     $(BUILD_DIR)/libc.a     -Wl,--end-group     $(LIBGCC)     -o $@
+$(BUILD_DIR)/TCC.ELF: tcc-build
+	@test -f $@ || { echo "TCC.ELF missing after tcc-build"; exit 1; }
 
 tcc: $(BUILD_DIR)/TCC.ELF
 
@@ -463,5 +466,5 @@ third_party: $(BUILD_DIR)/bearssl/libbearssl.a $(SEVENZ_OBJS)
 image: $(DISK_IMG)
 
 # 声明伪目标
-.PHONY: all kernel user third_party image run run-iso run-disk debug debug-disk clean gdb pack run-net run-tcp $(DISK_IMG)
+.PHONY: all kernel user third_party tcc-build image run run-iso run-disk debug debug-disk clean gdb pack run-net run-tcp $(DISK_IMG)
 -include $(wildcard $(BUILD_DIR)/*.d)

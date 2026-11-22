@@ -1,5 +1,31 @@
 #include "math.h"
 
+/* x86 long double 的完整数学函数不在 HeliumOS libc 范围内；
+ * TCC 主要用于编译期常量折叠，按 double 精度即可。 */
+
+double ldexp(double x, int exp) {
+    while (exp > 0) { x *= 2.0; exp--; }
+    while (exp < 0) { x *= 0.5; exp++; }
+    return x;
+}
+
+double frexp(double x, int *exp) {
+    int e = 0;
+    if (x == 0.0) { if (exp) *exp = 0; return 0.0; }
+    while (x >= 1.0) { x *= 0.5; e++; }
+    while (x < 0.5) { x *= 2.0; e--; }
+    if (exp) *exp = e;
+    return x;
+}
+
+long double ldexpl(long double x, int exp) {
+    return (long double)ldexp((double)x, exp);
+}
+
+long double frexpl(long double x, int *exp) {
+    return (long double)frexp((double)x, exp);
+}
+
 double fabs(double x) { return x < 0 ? -x : x; }
 
 double floor(double x) {

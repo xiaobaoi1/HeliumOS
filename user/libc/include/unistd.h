@@ -57,6 +57,7 @@ int     rmdir(const char *path);
 int     unlink(const char *pathname);
 int     unlinkat(int dirfd, const char *pathname, int flags);
 int     chdir(const char *path);
+int     execvp(const char *file, char *const argv[]);
 char   *getcwd(char *buf, size_t size);
 
 long    pread(int fd, void *buf, size_t count, unsigned int offset);
