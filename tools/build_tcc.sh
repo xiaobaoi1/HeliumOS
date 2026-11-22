@@ -45,6 +45,7 @@ cat > "$SRC/config.h" <<EOF
 
 #define CONFIG_TCC_PREDEFS 1
 #define CONFIG_TCC_STATIC 1
+#define CONFIG_TCC_BACKTRACE 0
 EOF
 
 cat > "$SRC/config.mak" <<EOF
