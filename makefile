@@ -322,6 +322,7 @@ debug-disk: $(DISK_IMG)
 # ==================== 清理 ====================
 clean:
 	rm -rf $(BUILD_DIR) $(ISO) $(DISK_IMG)
+	-$(MAKE) -C $(THIRD_PARTY)/tinycc clean >/dev/null 2>&1 || true
 
 gdb: $(ISO)
 	gdb-multiarch -ex "target remote localhost:1234" -ex "symbol-file build/kernel.elf" build/kernel.elf
