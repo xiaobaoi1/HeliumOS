@@ -1,4 +1,5 @@
 #include "syscall.h"
+#include "signal.h"
 #include "stdio.h"
 #include "string.h"
 #include "stdlib.h"
@@ -91,6 +92,7 @@ static void open_photo_file(const char *path);
 static struct fm_win *open_folder_window(const char *path);
 static void desktop_refresh_icons(void);
 static void toggle_safeguard(void);
+static void close_menu_request(void);
 static void shm_publish(struct shm_hdr *h);
 static void shm_mark_rect(struct shm_hdr *h, int x0, int y0, int x1, int y1);
 static void open_context_menu(int x, int y);
@@ -229,9 +231,9 @@ static void draw_file_icon(int idx) {
     }
 
     if (f->is_dir) {
-        icon_draw_folder_large(g_wall_pixels, g_W, ix, iy, ICON_SIZE);
+        icon_draw_folder_large(g_wall_pixels, g_W, g_H, ix, iy, ICON_SIZE);
     } else if (f->is_exec) {
-        icon_draw_exec_large(g_wall_pixels, g_W, ix, iy, ICON_SIZE);
+        icon_draw_exec_large(g_wall_pixels, g_W, g_H, ix, iy, ICON_SIZE);
     } else {
         gfx_fill_rect(g_wall_pixels, g_W, g_H, ix, iy, ICON_SIZE, ICON_SIZE, 0xFFFFFF);
         for (int j = 8; j < ICON_SIZE - 4; j += 8) {
@@ -280,9 +282,9 @@ static void draw_file_icon(int idx) {
         }
     }
 
-    gfx_draw_text(g_wall_pixels, g_W, tx + 1, ly + 1, label,
+    gfx_draw_text(g_wall_pixels, g_W, g_H, tx + 1, ly + 1, label,
                   0x000000, GFX_BG_TRANSPARENT);
-    gfx_draw_text(g_wall_pixels, g_W, tx, ly, label,
+    gfx_draw_text(g_wall_pixels, g_W, g_H, tx, ly, label,
                   0xFFFFFF, GFX_BG_TRANSPARENT);
 }
 
@@ -392,11 +394,11 @@ static int g_fm_shm_gen = 0;
 
 static void fm_paint_icon(struct mui_surface *s, int x, int y, int icon) {
     if (icon == MUI_LIST_ICON_DIR)
-        icon_draw_folder_small(s->pixels, s->w, x, y);
+        icon_draw_folder_small(s->pixels, s->w, s->h, x, y);
     else if (icon == MUI_LIST_ICON_EXEC)
-        icon_draw_exec_small(s->pixels, s->w, x, y);
+        icon_draw_exec_small(s->pixels, s->w, s->h, x, y);
     else
-        icon_draw_file_small(s->pixels, s->w, x, y);
+        icon_draw_file_small(s->pixels, s->w, s->h, x, y);
 }
 
 static void draw_fm_menu(struct fm_win *w);
@@ -2331,6 +2333,7 @@ static void desk_load_files(void) {
 }
 
 static void toggle_safeguard(void) {
+    if (g_menu_visible) close_menu_request();
     g_show_artifacts = !g_show_artifacts;
     desk_sel_clear();
     g_last_clicked_file = -1;
@@ -2601,9 +2604,9 @@ static void draw_window_items(void) {
         int iy = (PANEL_H - 16) / 2;
         
         if (strstr(g_win_list[i].title, "Files") != NULL) {
-            icon_draw_folder_small(g_panel_pixels, g_W, ix, iy);
+            icon_draw_folder_small(g_panel_pixels, g_W, PANEL_H, ix, iy);
         } else {
-            icon_draw_exec_small(g_panel_pixels, g_W, ix, iy);
+            icon_draw_exec_small(g_panel_pixels, g_W, PANEL_H, ix, iy);
         }
 
         char label[64];
@@ -2624,7 +2627,7 @@ static void draw_window_items(void) {
         }
         label[k] = '\0';
         
-        gfx_draw_text(g_panel_pixels, g_W, text_x, (PANEL_H - 16) / 2, label, COL_PANEL_FG, bg);
+        gfx_draw_text(g_panel_pixels, g_W, PANEL_H, text_x, (PANEL_H - 16) / 2, label, COL_PANEL_FG, bg);
         
         x += WIN_ITEM_W;
     }
@@ -2638,13 +2641,13 @@ static void draw_clock_region(void) {
     if (rtc_get_time(&t) == 0) {
         char buf[16];
         snprintf(buf, sizeof(buf), "%02d:%02d:%02d", t.hour, t.minute, t.second);
-        gfx_draw_text(g_panel_pixels, g_W, x0 + 4, (PANEL_H - 16) / 2, buf, COL_PANEL_FG, COL_PANEL);
+        gfx_draw_text(g_panel_pixels, g_W, PANEL_H, x0 + 4, (PANEL_H - 16) / 2, buf, COL_PANEL_FG, COL_PANEL);
     }
 }
 
 static void draw_panel(void) {
     gfx_fill_rect(g_panel_pixels, g_W, PANEL_H, 0, 0, g_W, PANEL_H, COL_PANEL);
-    gfx_draw_text(g_panel_pixels, g_W, 8, (PANEL_H - 16) / 2, "\xE5\xBC\x80\xE5\xA7\x8B", COL_PANEL_FG, COL_PANEL);
+    gfx_draw_text(g_panel_pixels, g_W, PANEL_H, 8, (PANEL_H - 16) / 2, "\xE5\xBC\x80\xE5\xA7\x8B", COL_PANEL_FG, COL_PANEL);
     draw_window_items();
     draw_clock_region();
     shm_mark_rect(g_panel_hdr, 0, 0, g_W, PANEL_H);
@@ -2715,7 +2718,7 @@ static void draw_menu(int hover) {
         int y = MENU_PAD + i * MENU_ITEM_H;
         unsigned int bg = (i == hover) ? COL_MENU_HL : COL_MENU_BG;
         if (i == hover) gfx_fill_rect(g_menu_pixels, g_menu_w, g_menu_h, 0, y, g_menu_w, MENU_ITEM_H, bg);
-        gfx_draw_text(g_menu_pixels, g_menu_w, 8, y + (MENU_ITEM_H - 16) / 2, labels[i], COL_MENU_FG, bg);
+        gfx_draw_text(g_menu_pixels, g_menu_w, g_menu_h, 8, y + (MENU_ITEM_H - 16) / 2, labels[i], COL_MENU_FG, bg);
     }
     shm_mark_rect(g_menu_hdr, 0, 0, g_menu_w, g_menu_h);
     shm_publish(g_menu_hdr);
@@ -2736,15 +2739,6 @@ static void spawn_term_argv(int cw, int ch, int x, int y,
     int fds[2];
     if (pipe_named(ev_name, fds) < 0) return;
     pipe_close(fds[0]); pipe_close(fds[1]);
-
-    struct wm_request req;
-    memset(&req, 0, sizeof(req));
-    req.magic = WM_MAGIC; req.type = WM_REQ_CREATE; req.kind = WM_KIND_NORMAL;
-    req.x = x; req.y = y; req.w = cw; req.h = ch; req.owner_pid = proc_getpid();
-    strncpy(req.shm_name, shm_name, sizeof(req.shm_name) - 1);
-    strncpy(req.ev_name, ev_name, sizeof(req.ev_name) - 1);
-    strncpy(req.title, title ? title : "Terminal", sizeof(req.title) - 1);
-    if (pipe_write(g_inbox_w, &req, sizeof(req)) != sizeof(req)) return;
 
     char arg_w[8], arg_h[8];
     snprintf(arg_w, sizeof(arg_w), "%d", cw);
@@ -2768,7 +2762,35 @@ static void spawn_term_argv(int cw, int ch, int x, int y,
         .in_pipe = -1, .out_pipe = -1, .err_pipe = -1, .in_pty = -1, .out_pty = -1, .err_pty = -1,
         .flags = 0, .envp = 0, .out_pid = 0, .child_class = CLASS_USER, .child_caps = 0,
     };
-    proc_spawn("TERM", argv, &sp);
+
+    /* 先 spawn TERM，拿到子进程 pid，再创建 WM 窗口。
+     * 否则窗口 owner 是 desktop；desktop 被关闭/重启时
+     * cleanup_dead_windows() 会把所有已打开的终端一起清掉。 */
+    int h = proc_spawn("TERM", argv, &sp);
+    if (h < 0) {
+        sys_shm_unlink(shm_name);
+        pipe_unlink(ev_name);
+        return;
+    }
+
+    struct wm_request req;
+    memset(&req, 0, sizeof(req));
+    req.magic = WM_MAGIC; req.type = WM_REQ_CREATE; req.kind = WM_KIND_NORMAL;
+    req.x = x; req.y = y; req.w = cw; req.h = ch;
+    req.owner_pid = sp.out_pid ? sp.out_pid : proc_getpid();
+    strncpy(req.shm_name, shm_name, sizeof(req.shm_name) - 1);
+    strncpy(req.ev_name, ev_name, sizeof(req.ev_name) - 1);
+    strncpy(req.title, title ? title : "Terminal", sizeof(req.title) - 1);
+    if (pipe_write(g_inbox_w, &req, sizeof(req)) != sizeof(req)) {
+        int ph = proc_open(sp.out_pid, PROC_TERMINATE);
+        if (ph >= 0) {
+            proc_kill(ph, SIGTERM);
+            proc_close(ph);
+        }
+        sys_shm_unlink(shm_name);
+        pipe_unlink(ev_name);
+        return;
+    }
     term_slot++;
 }
 

@@ -87,14 +87,16 @@ void proc_free_pcb(struct task *t) {
     remove_task_from_queue(&blocked_list_head, &blocked_list_tail, t);
     remove_task_from_queue(&ready_queue_head, &ready_queue_tail, t);
 
-    /* 释放 VMA 节点 */
-    vma_free_all(t);
-
-    /* 释放用户地址空间 */
+    /* 释放用户地址空间。
+     * 必须先于 vma_free_all：vmm 需要 VMA 判断 shm/filemap 共享页，
+     * 否则会把 WM/其他进程仍在使用的共享页当私有页释放。 */
     if (t->pgd) {
-        vmm_free_process_address_space(t->pgd);
+        vmm_free_process_address_space(t->pgd, t->vma_list);
         t->pgd = NULL;
     }
+
+    /* 释放 VMA 节点 */
+    vma_free_all(t);
 
     /* 释放内核栈 */
     if (t->kernel_stack_phys) {

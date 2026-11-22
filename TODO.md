@@ -198,6 +198,12 @@
 - ~~F5~~ RTC 已做
 - ~~F6~~ 关机 / 重启已做
 - ~~F9~~ FAT32 LFN 已实现
+- ~~H5~~ `vmm_map_user_page` 已有重复映射检查和旧映射保留
+- ~~H15~~ ACPI RSDT/XSDT/FADT checksum 已检查
+- ~~H16~~ XSDT 地址 > 4GB 已跳过
+- ~~F8~~ 内核 heap 大对象路径已支持，单对象上限 4MB
+- ~~H6~~ `sys_spawn` 失败路径已核对，当前清理路径一致
+- ~~H10~~ `wait_target == NULL` 通配语义已补注释
 
 ### 字段说明
 
@@ -211,6 +217,10 @@
 
 ### 第一批：低风险正确性（`fix/low-risk-correctness`）
 
+> init：用户态 `/INIT` 已作为 PID 1 启动，负责拉起 WM/DESKTOP/DHCP；内核不再直接创建这些服务，交互 Shell 由桌面 Terminal 启动。
+>
+> 另外修复：进程退出时不再把 shm/filemap 共享页当私有页释放，避免 desktop/WM 重启后使用悬空页。
+
 - [x] K4：`sys_mmap(MAP_FILE)` 拒绝非页对齐 offset 和越界 offset
 - [x] K5：旧版 `spawn_params` 缺省字段初始化为 INHERIT/-1
 - [x] U1：`term_resize` 用进程号生成唯一 shm 名
@@ -223,15 +233,18 @@
 - [x] U18：任务栏窗口列表按 `tab_seq` 排序，修复 tab2/tab1/tab3 顺序错乱
 - [x] U19：关闭 tab 时仅在关闭当前 tab 后切换剩余 tab，避免误切换/整组消失
 - [x] U20：新建 tab 的 WM owner_pid 改为子 TERM pid，避免父 TERM 退出时 cleanup 误删后续 tab
+- [x] U21：桌面启动的 Terminal 窗口 owner_pid 改为 TERM pid；desktop 重启不再清掉已打开终端
+- [x] U22：进程退出只释放私有页，保留 shm/filemap 共享页；desktop 重启不再访问悬空页
+- [x] U23：WM 状态快照到 `wm-state` shm，并复用旧 `wm-inbox`；WM 重启后恢复仍存活的客户端窗口
 
 ### 后续批次
 
-- [ ] U2：PTY master 的 slave EOF 检测
-- [ ] U3：WM `push_window_list` / `send_event` 的 pipe 满保护
-- [ ] U5/U6：桌面图标和文字绘制的 `ph` 边界检查
-- [ ] U7：shm counter 的 i386 原子性
-- [ ] U8：`toggle_safeguard` 关闭右键菜单
-- [ ] U9：稳定窗口 ID，避免 slot 复用误操作
+- [x] U2：PTY master 的 slave EOF 检测
+- [x] U3：WM `push_window_list` / `send_event` 的 pipe 满保护
+- [x] U5/U6：桌面图标和文字绘制的 `ph` 边界检查
+- [x] U7：shm counter 的 i386 原子性（32 位 counter + padding）
+- [x] U8：`toggle_safeguard` 关闭右键菜单
+- [x] U9：稳定窗口 ID，避免 slot 复用误操作
 - [ ] U12：resize 失败路径的 shm 清理/ack
 - [ ] K1/K2：TCP 流控和 accept 队列泄漏
 - [ ] K6：`kfree` double-free 检测（加固，暂缓）
