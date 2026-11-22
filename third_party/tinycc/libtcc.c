@@ -888,6 +888,10 @@ LIBTCCAPI TCCState *tcc_new(void)
     s->warn_discarded_qualifiers = 1;
     s->ms_extensions = 1;
     s->unwind_tables = 1;
+#ifdef CONFIG_TCC_STATIC
+    /* HeliumOS has no dynamic loader: produce static executables by default. */
+    s->static_link = 1;
+#endif
 
 #ifdef CHAR_IS_UNSIGNED
     s->char_is_unsigned = 1;
