@@ -85,6 +85,14 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
+echo "=== host tcc smoke test ===" | tee -a "$LOG"
+printf 'int main(void) { return 0; }\n' > "$OUT/smoke.c"
+if ! "$SRC/tcc" -c "$OUT/smoke.c" -o "$OUT/smoke.o" >>"$LOG" 2>&1; then
+    echo "build_tcc: host tcc smoke test failed" >&2
+    tail -40 "$LOG" >&2
+    exit 1
+fi
+
 echo "=== build libtcc1.a ===" | tee -a "$LOG"
 # HeliumOS does not need tcov/backtrace/bounds-check runtime.  Build the
 # minimal runtime object that the original HeliumOS port used.
