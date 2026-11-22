@@ -586,7 +586,10 @@ static void tcc_split_path(TCCState *s, void *p_ary, int *p_nb_ary, const char *
         CString str;
 
         cstr_new(&str);
-        for (p = in; c = *p, c != '\0' && c != PATHSEP[0]; ++p) {
+        /* HeliumOS 使用 "SYS:/LIB" 形式的卷路径；不要把卷名后的 ':' 当作
+         * 路径列表分隔符。只有 ':' 后面不是路径分隔符时才拆分。 */
+        for (p = in; c = *p, c != '\0' &&
+             (c != PATHSEP[0] || p[1] == '/' || p[1] == '\\'); ++p) {
             if (c == '{' && p[1] && p[2] == '}') {
                 c = p[1], p += 2;
                 if (c == 'B')
