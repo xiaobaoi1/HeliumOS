@@ -98,9 +98,9 @@ void proc_free_pcb(struct task *t) {
     /* 释放 VMA 节点 */
     vma_free_all(t);
 
-    /* 释放内核栈 */
+    /* 释放内核栈（KERNEL_STACK_PAGES 页连续内存） */
     if (t->kernel_stack_phys) {
-        pmm_free_page(t->kernel_stack_phys);
+        pmm_free_pages(t->kernel_stack_phys, KERNEL_STACK_PAGES);
         t->kernel_stack_phys = 0;
     }
 

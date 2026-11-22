@@ -276,7 +276,7 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd,
     }
     memset(task, 0, PAGE_SIZE);
 
-    uint32_t kernel_stack = pmm_alloc_page();
+    uint32_t kernel_stack = pmm_alloc_pages(KERNEL_STACK_PAGES);
     if (!kernel_stack) {
         pmm_free_page((uint32_t)task);
         return NULL;
@@ -284,7 +284,7 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd,
 
     uint32_t stack_low = pmm_alloc_page();
     if (!stack_low) {
-        pmm_free_page(kernel_stack);
+        pmm_free_pages(kernel_stack, KERNEL_STACK_PAGES);
         pmm_free_page((uint32_t)task);
         return NULL;
     }
@@ -292,7 +292,7 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd,
     uint32_t stack_high = pmm_alloc_page();
     if (!stack_high) {
         pmm_free_page(stack_low);
-        pmm_free_page(kernel_stack);
+        pmm_free_pages(kernel_stack, KERNEL_STACK_PAGES);
         pmm_free_page((uint32_t)task);
         return NULL;
     }
@@ -303,7 +303,7 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd,
         /* 理论上不可达。此处释放已分配资源，返回失败。 */
         pmm_free_page(stack_high);
         pmm_free_page(stack_low);
-        pmm_free_page(kernel_stack);
+        pmm_free_pages(kernel_stack, KERNEL_STACK_PAGES);
         pmm_free_page((uint32_t)task);
         return NULL;
     }
@@ -508,7 +508,7 @@ struct task *task_create(uint32_t entry_point, uint32_t *pgd,
 
 
     /* 10. 构造内核栈（iret 帧的 user esp 指向 argc 位置） */
-    uint32_t *sp = (uint32_t*)(task->kernel_stack_phys + 4096);
+    uint32_t *sp = (uint32_t*)(task->kernel_stack_phys + KERNEL_STACK_SIZE);
 
     /* iret 帧 */
     *(--sp) = 0x23;                    /* ss */

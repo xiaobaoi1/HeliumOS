@@ -4,6 +4,8 @@
 ; ====================================================================
 
 %define PAGE_SIZE 4096
+; 与 kernel/include/task.h 的 KERNEL_STACK_PAGES 保持一致（4 页 = 16KB）
+%define KERNEL_STACK_SIZE 16384
 
 section .multiboot
 align 4
@@ -292,7 +294,7 @@ switch_to:
 
     ; 更新 TSS.esp0（在切栈前，用当前栈）
     mov ecx, [eax + 16]          ; next->kernel_stack_phys
-    add ecx, 4096                ; 栈顶
+    add ecx, KERNEL_STACK_SIZE   ; 栈顶
     push eax                     ; 保存 next
     push ecx                     ; 参数
     call tss_set_kernel_stack
