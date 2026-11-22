@@ -32,64 +32,69 @@ static void icons_load(void) {
 
 /* 壁纸/图标绘制是裸像素缓冲，这里临时包一个 surface 交给 mui_bmp_blit。 */
 static void icon_blit(struct mui_bitmap *img, unsigned int *pixels, int pw,
-                      int px, int py, int size) {
-    if (!img->pixels || !pixels || pw <= 0 || size <= 0) return;
+                      int ph, int px, int py, int size) {
+    if (!img->pixels || !pixels || pw <= 0 || ph <= 0 || size <= 0) return;
 
     struct mui_surface s;
     memset(&s, 0, sizeof(s));
     s.pixels = pixels;
     s.w = pw;
-    s.h = 9999;
+    s.h = ph;
     s.hdr = NULL;
     mui_bmp_blit(img, &s, px, py, size, size);
 }
 
 /* ==================== 图标渲染 ==================== */
 
-static void icon_draw_folder_large(unsigned int *pixels, int pw, int px, int py, int size) {
+static void icon_draw_folder_large(unsigned int *pixels, int pw, int ph,
+                                   int px, int py, int size) {
     if (g_img_folder.pixels) {
-        icon_blit(&g_img_folder, pixels, pw, px, py, size);
+        icon_blit(&g_img_folder, pixels, pw, ph, px, py, size);
         return;
     }
     int mid = size / 2;
     int q = size / 4;
-    gfx_fill_rect(pixels, pw, 9999, px, py, mid, q, 0xD4A017);
-    gfx_fill_rect(pixels, pw, 9999, px, py + q, size, size - q, 0xFFCA28);
-    gfx_fill_rect(pixels, pw, 9999, px + size/4, py + size*2/3, size/2, size/3, 0x1E88E5);
-    gfx_fill_rect(pixels, pw, 9999, px + size*1/3, py + size*5/6, size/3, 1, 0x0D47A1);
+    gfx_fill_rect(pixels, pw, ph, px, py, mid, q, 0xD4A017);
+    gfx_fill_rect(pixels, pw, ph, px, py + q, size, size - q, 0xFFCA28);
+    gfx_fill_rect(pixels, pw, ph, px + size/4, py + size*2/3, size/2, size/3, 0x1E88E5);
+    gfx_fill_rect(pixels, pw, ph, px + size*1/3, py + size*5/6, size/3, 1, 0x0D47A1);
 }
 
-static void icon_draw_exec_large(unsigned int *pixels, int pw, int px, int py, int size) {
+static void icon_draw_exec_large(unsigned int *pixels, int pw, int ph,
+                                 int px, int py, int size) {
     if (g_img_exec.pixels) {
-        icon_blit(&g_img_exec, pixels, pw, px, py, size);
+        icon_blit(&g_img_exec, pixels, pw, ph, px, py, size);
         return;
     }
-    gfx_fill_rect(pixels, pw, 9999, px, py, size, size, 0xE0E0E0);
-    gfx_fill_rect(pixels, pw, 9999, px + 4, py + 4, size - 8, size - 8, 0x424242);
+    gfx_fill_rect(pixels, pw, ph, px, py, size, size, 0xE0E0E0);
+    gfx_fill_rect(pixels, pw, ph, px + 4, py + 4, size - 8, size - 8, 0x424242);
 }
 
-static void icon_draw_folder_small(unsigned int *pixels, int pw, int px, int py) {
+static void icon_draw_folder_small(unsigned int *pixels, int pw, int ph,
+                                   int px, int py) {
     if (g_img_folder.pixels) {
-        icon_blit(&g_img_folder, pixels, pw, px, py, 16);
+        icon_blit(&g_img_folder, pixels, pw, ph, px, py, 16);
         return;
     }
-    gfx_fill_rect(pixels, pw, 9999, px, py, 8, 4, 0xD4A017);
-    gfx_fill_rect(pixels, pw, 9999, px, py + 4, 16, 12, 0xFFCA28);
-    gfx_fill_rect(pixels, pw, 9999, px + 4, py + 10, 8, 6, 0x1E88E5);
-    gfx_fill_rect(pixels, pw, 9999, px + 6, py + 13, 4, 1, 0x0D47A1);
+    gfx_fill_rect(pixels, pw, ph, px, py, 8, 4, 0xD4A017);
+    gfx_fill_rect(pixels, pw, ph, px, py + 4, 16, 12, 0xFFCA28);
+    gfx_fill_rect(pixels, pw, ph, px + 4, py + 10, 8, 6, 0x1E88E5);
+    gfx_fill_rect(pixels, pw, ph, px + 6, py + 13, 4, 1, 0x0D47A1);
 }
 
-static void icon_draw_exec_small(unsigned int *pixels, int pw, int px, int py) {
+static void icon_draw_exec_small(unsigned int *pixels, int pw, int ph,
+                                 int px, int py) {
     if (g_img_exec.pixels) {
-        icon_blit(&g_img_exec, pixels, pw, px, py, 16);
+        icon_blit(&g_img_exec, pixels, pw, ph, px, py, 16);
         return;
     }
-    gfx_fill_rect(pixels, pw, 9999, px + 2, py + 2, 12, 12, 0x424242);
+    gfx_fill_rect(pixels, pw, ph, px + 2, py + 2, 12, 12, 0x424242);
 }
 
-static void icon_draw_file_small(unsigned int *pixels, int pw, int px, int py) {
-    gfx_fill_rect(pixels, pw, 9999, px + 2, py, 12, 16, 0xFFFFFF);
+static void icon_draw_file_small(unsigned int *pixels, int pw, int ph,
+                                 int px, int py) {
+    gfx_fill_rect(pixels, pw, ph, px + 2, py, 12, 16, 0xFFFFFF);
     for (int y = 4; y < 14; y += 4)
-        gfx_fill_rect(pixels, pw, 9999, px + 4, py + y, 8, 1, 0x9E9E9E);
+        gfx_fill_rect(pixels, pw, ph, px + 4, py + y, 8, 1, 0x9E9E9E);
 }
 #endif

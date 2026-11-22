@@ -236,7 +236,7 @@
 
 - [x] U2：PTY master 的 slave EOF 检测
 - [x] U3：WM `push_window_list` / `send_event` 的 pipe 满保护
-- [ ] U5/U6：桌面图标和文字绘制的 `ph` 边界检查
+- [x] U5/U6：桌面图标和文字绘制的 `ph` 边界检查
 - [ ] U7：shm counter 的 i386 原子性
 - [ ] U8：`toggle_safeguard` 关闭右键菜单
 - [x] U9：稳定窗口 ID，避免 slot 复用误操作

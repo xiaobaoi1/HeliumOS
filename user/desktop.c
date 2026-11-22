@@ -229,9 +229,9 @@ static void draw_file_icon(int idx) {
     }
 
     if (f->is_dir) {
-        icon_draw_folder_large(g_wall_pixels, g_W, ix, iy, ICON_SIZE);
+        icon_draw_folder_large(g_wall_pixels, g_W, g_H, ix, iy, ICON_SIZE);
     } else if (f->is_exec) {
-        icon_draw_exec_large(g_wall_pixels, g_W, ix, iy, ICON_SIZE);
+        icon_draw_exec_large(g_wall_pixels, g_W, g_H, ix, iy, ICON_SIZE);
     } else {
         gfx_fill_rect(g_wall_pixels, g_W, g_H, ix, iy, ICON_SIZE, ICON_SIZE, 0xFFFFFF);
         for (int j = 8; j < ICON_SIZE - 4; j += 8) {
@@ -280,9 +280,9 @@ static void draw_file_icon(int idx) {
         }
     }
 
-    gfx_draw_text(g_wall_pixels, g_W, tx + 1, ly + 1, label,
+    gfx_draw_text(g_wall_pixels, g_W, g_H, tx + 1, ly + 1, label,
                   0x000000, GFX_BG_TRANSPARENT);
-    gfx_draw_text(g_wall_pixels, g_W, tx, ly, label,
+    gfx_draw_text(g_wall_pixels, g_W, g_H, tx, ly, label,
                   0xFFFFFF, GFX_BG_TRANSPARENT);
 }
 
@@ -392,11 +392,11 @@ static int g_fm_shm_gen = 0;
 
 static void fm_paint_icon(struct mui_surface *s, int x, int y, int icon) {
     if (icon == MUI_LIST_ICON_DIR)
-        icon_draw_folder_small(s->pixels, s->w, x, y);
+        icon_draw_folder_small(s->pixels, s->w, s->h, x, y);
     else if (icon == MUI_LIST_ICON_EXEC)
-        icon_draw_exec_small(s->pixels, s->w, x, y);
+        icon_draw_exec_small(s->pixels, s->w, s->h, x, y);
     else
-        icon_draw_file_small(s->pixels, s->w, x, y);
+        icon_draw_file_small(s->pixels, s->w, s->h, x, y);
 }
 
 static void draw_fm_menu(struct fm_win *w);
@@ -2601,9 +2601,9 @@ static void draw_window_items(void) {
         int iy = (PANEL_H - 16) / 2;
         
         if (strstr(g_win_list[i].title, "Files") != NULL) {
-            icon_draw_folder_small(g_panel_pixels, g_W, ix, iy);
+            icon_draw_folder_small(g_panel_pixels, g_W, PANEL_H, ix, iy);
         } else {
-            icon_draw_exec_small(g_panel_pixels, g_W, ix, iy);
+            icon_draw_exec_small(g_panel_pixels, g_W, PANEL_H, ix, iy);
         }
 
         char label[64];
@@ -2624,7 +2624,7 @@ static void draw_window_items(void) {
         }
         label[k] = '\0';
         
-        gfx_draw_text(g_panel_pixels, g_W, text_x, (PANEL_H - 16) / 2, label, COL_PANEL_FG, bg);
+        gfx_draw_text(g_panel_pixels, g_W, PANEL_H, text_x, (PANEL_H - 16) / 2, label, COL_PANEL_FG, bg);
         
         x += WIN_ITEM_W;
     }
@@ -2638,13 +2638,13 @@ static void draw_clock_region(void) {
     if (rtc_get_time(&t) == 0) {
         char buf[16];
         snprintf(buf, sizeof(buf), "%02d:%02d:%02d", t.hour, t.minute, t.second);
-        gfx_draw_text(g_panel_pixels, g_W, x0 + 4, (PANEL_H - 16) / 2, buf, COL_PANEL_FG, COL_PANEL);
+        gfx_draw_text(g_panel_pixels, g_W, PANEL_H, x0 + 4, (PANEL_H - 16) / 2, buf, COL_PANEL_FG, COL_PANEL);
     }
 }
 
 static void draw_panel(void) {
     gfx_fill_rect(g_panel_pixels, g_W, PANEL_H, 0, 0, g_W, PANEL_H, COL_PANEL);
-    gfx_draw_text(g_panel_pixels, g_W, 8, (PANEL_H - 16) / 2, "\xE5\xBC\x80\xE5\xA7\x8B", COL_PANEL_FG, COL_PANEL);
+    gfx_draw_text(g_panel_pixels, g_W, PANEL_H, 8, (PANEL_H - 16) / 2, "\xE5\xBC\x80\xE5\xA7\x8B", COL_PANEL_FG, COL_PANEL);
     draw_window_items();
     draw_clock_region();
     shm_mark_rect(g_panel_hdr, 0, 0, g_W, PANEL_H);
@@ -2715,7 +2715,7 @@ static void draw_menu(int hover) {
         int y = MENU_PAD + i * MENU_ITEM_H;
         unsigned int bg = (i == hover) ? COL_MENU_HL : COL_MENU_BG;
         if (i == hover) gfx_fill_rect(g_menu_pixels, g_menu_w, g_menu_h, 0, y, g_menu_w, MENU_ITEM_H, bg);
-        gfx_draw_text(g_menu_pixels, g_menu_w, 8, y + (MENU_ITEM_H - 16) / 2, labels[i], COL_MENU_FG, bg);
+        gfx_draw_text(g_menu_pixels, g_menu_w, g_menu_h, 8, y + (MENU_ITEM_H - 16) / 2, labels[i], COL_MENU_FG, bg);
     }
     shm_mark_rect(g_menu_hdr, 0, 0, g_menu_w, g_menu_h);
     shm_publish(g_menu_hdr);
