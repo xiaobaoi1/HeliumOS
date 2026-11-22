@@ -204,3 +204,34 @@
 - H 前缀：加固项（防御 / 正确性 / 边界）
 - F 前缀：功能项（新能力）
 - 优先级：低 = 不主动做，遇到再做；中 = 到某规模前必做
+
+---
+
+## 2026-11-22 修复批次
+
+### 第一批：低风险正确性（`fix/low-risk-correctness`）
+
+- [x] K4：`sys_mmap(MAP_FILE)` 拒绝非页对齐 offset 和越界 offset
+- [x] K5：旧版 `spawn_params` 缺省字段初始化为 INHERIT/-1
+- [x] U1：`term_resize` 用进程号生成唯一 shm 名
+- [x] U10：目录重复项从 `break` 改为 `continue`
+- [x] U11：`WM_REQ_SET_CURSOR` 更新同一进程全部窗口
+- [x] U15：`shm_layout.h` 增加 `_Static_assert`
+- [x] U16：`make run` 改为硬盘镜像，新增 `make run-iso`
+- [x] K7/U13/U14：注释和 `ufont_width` 契约修正
+- [x] U17：任务栏点击 tab 条目改为 `activate_tab`，避免多个 tab 叠放/整组消失
+- [x] U18：任务栏窗口列表按 `tab_seq` 排序，修复 tab2/tab1/tab3 顺序错乱
+- [x] U19：关闭 tab 时仅在关闭当前 tab 后切换剩余 tab，避免误切换/整组消失
+- [x] U20：新建 tab 的 WM owner_pid 改为子 TERM pid，避免父 TERM 退出时 cleanup 误删后续 tab
+
+### 后续批次
+
+- [ ] U2：PTY master 的 slave EOF 检测
+- [ ] U3：WM `push_window_list` / `send_event` 的 pipe 满保护
+- [ ] U5/U6：桌面图标和文字绘制的 `ph` 边界检查
+- [ ] U7：shm counter 的 i386 原子性
+- [ ] U8：`toggle_safeguard` 关闭右键菜单
+- [ ] U9：稳定窗口 ID，避免 slot 复用误操作
+- [ ] U12：resize 失败路径的 shm 清理/ack
+- [ ] K1/K2：TCP 流控和 accept 队列泄漏
+- [ ] K6：`kfree` double-free 检测（加固，暂缓）

@@ -321,6 +321,18 @@ static struct window *tab_nth(int group, int n) {
     return NULL;
 }
 
+/* 关闭当前 tab 后，优先接管“下一个”tab；没有下一个再回到第一个。 */
+static struct window *tab_after(int group, int seq) {
+    struct window *best = NULL;
+    for (int i = 0; i < MAX_WINDOWS; i++) {
+        struct window *w = &g_wins[i];
+        if (!w->used || tab_group_of(w) != group) continue;
+        if (w->tab_seq <= seq) continue;
+        if (!best || w->tab_seq < best->tab_seq) best = w;
+    }
+    return best ? best : tab_nth(group, 0);
+}
+
 /* 第 n 个 tab 的横向起点；超出 limit 后返回 limit（用于命中测试与绘制一致） */
 static int tab_x_at(int start, int idx) {
     return start + idx * (TAB_W + TAB_GAP);
@@ -628,9 +640,21 @@ static void push_window_list(void) {
     struct window *dock = find_by_kind(WM_KIND_DOCK);
     if (!dock || dock->event_w < 0) return;
 
+    /* 按 tab_seq（创建顺序）排序，而不是 g_wins 槽位顺序。
+     * 槽位会复用，直接按 slot 遍历会让任务栏出现
+     * tab2 / tab1 / tab3 这种和标题栏不一致的顺序。 */
+    struct window *ordered[MAX_WINDOWS];
     int n = 0;
     for (int i = 0; i < MAX_WINDOWS; i++) {
-        if (g_wins[i].used && g_wins[i].kind == WM_KIND_NORMAL) n++;
+        if (!g_wins[i].used || g_wins[i].kind != WM_KIND_NORMAL) continue;
+        struct window *w = &g_wins[i];
+        int pos = n;
+        while (pos > 0 && ordered[pos - 1]->tab_seq > w->tab_seq) {
+            ordered[pos] = ordered[pos - 1];
+            pos--;
+        }
+        ordered[pos] = w;
+        n++;
     }
     if (n > MAX_WINDOWS) n = MAX_WINDOWS;
 
@@ -643,17 +667,14 @@ static void push_window_list(void) {
     ev->extra = 0;
 
     int off = sizeof(struct wm_event);
-    int count = 0;
-    for (int i = 0; i < MAX_WINDOWS && count < n; i++) {
-        struct window *w = &g_wins[i];
-        if (!w->used || w->kind != WM_KIND_NORMAL) continue;
+    for (int i = 0; i < n; i++) {
+        struct window *w = ordered[i];
         struct wm_window_entry *e = (struct wm_window_entry*)(buf + off);
-        e->id = (uint32_t)i;
+        e->id = (uint32_t)(w - g_wins);
         e->minimized = (uint32_t)w->minimized;
         memset(e->title, 0, 32);
         strncpy(e->title, w->title, 31);
         off += sizeof(struct wm_window_entry);
-        count++;
     }
 
     pipe_write(dock->event_w, buf, off);
@@ -984,7 +1005,9 @@ static void destroy_window(struct window *w) {
     win_bbox(w, &x0, &y0, &x1, &y1);
 
     int tab_group = tab_group_of(w);
-    int was_max   = w->maximized;                    /* 新增 */
+    int tab_seq = w->tab_seq;
+    int was_max   = w->maximized;
+    int was_active = (w->minimized == 0);
 
     if (w->kind == WM_KIND_POPUP) {
         send_event(w, WM_EV_CLOSE, 0, 0, 0, 0);
@@ -1006,16 +1029,31 @@ static void destroy_window(struct window *w) {
     if (g_dragging == w) g_dragging = NULL;
 
     if (tab_group) {
-        struct window *next = tab_nth(tab_group, 0);
-        if (next) {
-            next->minimized = 0;
-            next->z = g_next_z++;
-            apply_maximized_state(next, was_max);    /* 新增 */
-            if (!was_max) {                          /* 改 */
-                next->x = x0;                        /*   窗口化接管：保持原逻辑 */
-                next->y = y0;
-            }                                        /*   全屏接管：位置由 helper 设 (0,0) */
-            set_focus(next);
+        /* 关闭非活动 tab 时不要强行把第一个 tab 切出来；
+         * 只有关闭当前可见 tab（或组里已经没有可见 tab）时
+         * 才选择剩余 tab 接管窗口。 */
+        int have_active = 0;
+        for (int i = 0; i < MAX_WINDOWS; i++) {
+            struct window *o = &g_wins[i];
+            if (o->used && o != w && tab_group_of(o) == tab_group &&
+                !o->minimized) {
+                have_active = 1;
+                break;
+            }
+        }
+
+        if (was_active || !have_active) {
+            struct window *next = tab_after(tab_group, tab_seq);
+            if (next) {
+                next->minimized = 0;
+                next->z = g_next_z++;
+                apply_maximized_state(next, was_max);
+                if (!was_max) {
+                    next->x = x0;
+                    next->y = y0;
+                }
+                set_focus(next);
+            }
         }
     }
     forget_window_buttons(w);
@@ -1423,7 +1461,20 @@ static void handle_inbox(void) {
             struct window *w = &g_wins[req.win_id];
             if (!w->used || w->kind != WM_KIND_NORMAL) continue;
 
-            if (req.action == WM_ACTION_MINIMIZE) {
+            /* tab 组内部只有一个 tab 是可见的。任务栏里的 tab 条目
+             * 必须走 activate_tab：否则 restore 只显示目标 tab，
+             * 已经可见的 tab 不会被隐藏，造成两个 tab 叠在一起；
+             * 而 minimize 当前 tab 会隐藏整个 tab 组。 */
+            if (tab_group_of(w) != 0) {
+                if (req.action == WM_ACTION_MINIMIZE ||
+                    req.action == WM_ACTION_RESTORE ||
+                    req.action == WM_ACTION_RAISE) {
+                    activate_tab(w);
+                } else if (req.action == WM_ACTION_MAXIMIZE) {
+                    if (w->maximized) unmaximize_window(w);
+                    else              maximize_window(w);
+                }
+            } else if (req.action == WM_ACTION_MINIMIZE) {
                 minimize_window(w);
             } else if (req.action == WM_ACTION_RESTORE) {
                 if (w->minimized) restore_window(w);
@@ -1469,11 +1520,12 @@ static void handle_inbox(void) {
             int rem = sizeof(req) - 8;
             if (pipe_avail(g_inbox_rd) < rem) break;
             if (pipe_read(g_inbox_rd, (char*)&req + 8, rem) != rem) break;
+            /* 同一进程可能拥有多个窗口（tab、文件管理器等），
+             * 光标请求应作用于该进程的全部窗口，而不是第一个。 */
             for (int i = 0; i < MAX_WINDOWS; i++) {
                 if (g_wins[i].used &&
                     g_wins[i].owner_pid == (int)req.owner_pid) {
                     g_wins[i].cursor = req.cursor;
-                    break;
                 }
             }
         } else {

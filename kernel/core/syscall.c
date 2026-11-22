@@ -410,8 +410,13 @@ static uint32_t sys_mmap(uint32_t addr, uint32_t length, uint32_t prot,
         struct fs_handle *h = &cur->fs_handles[fd];
         if (h->obj_type != FS_OBJ_FILE) return EINVAL;
 
+        /* MAP_FILE 的 offset 必须是页对齐；当前 VMA 只按页记录
+         * filemap_offset，非对齐值会被静默截断成错误的页。 */
+        if (offset & 0xFFFu) return EINVAL;
+
         uint32_t file_size = h->u.fat32_file.file_size;
-        if (file_size == 0 || file_size < length) length = file_size; /* 限制长度 */
+        if (file_size == 0 || offset >= file_size) return EINVAL;
+        if (file_size - offset < length) length = file_size - offset;
         length = (length + 0xFFF) & ~0xFFFu;
 
         struct file_mapping *fm = file_map_get(h->vol, h->u.fat32_file.first_cluster, h->u.fat32_file.file_size);
@@ -491,7 +496,15 @@ static int sys_spawn(const char *path, char *const argv[], void *params_user) {
     uint32_t child_caps  = 0;
 
     if (params_user) {
-        struct spawn_params p = {0};
+        struct spawn_params p;
+        /* 旧版 spawn_params 可能只覆盖前几个字段。先填入安全默认值，
+         * 再拷贝用户提供的部分，避免缺省字段变成 fd 0。 */
+        memset(&p, 0, sizeof(p));
+        p.in_fd = SPAWN_FD_INHERIT;
+        p.out_fd = SPAWN_FD_INHERIT;
+        p.err_fd = SPAWN_FD_INHERIT;
+        p.in_pipe = p.out_pipe = p.err_pipe = -1;
+        p.in_pty = p.out_pty = p.err_pty = -1;
         if (check_user_range((uint32_t)params_user, sizeof(uint32_t)) < 0)
             return EFAULT;
         uint32_t user_size;

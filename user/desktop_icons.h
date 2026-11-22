@@ -20,7 +20,7 @@ static void icons_pin(struct mui_bitmap *img, unsigned int *dst) {
     if (!img->pixels) return;
     if (img->w <= 0 || img->h <= 0 || img->w * img->h > 256 * 256) return;
     memcpy(dst, img->pixels, (size_t)img->w * img->h * 4);
-    img->pixels = dst;       /* 原 mmap 缓冲留给进程生命周期 */
+    img->pixels = dst;       /* 原加载缓冲不在这里释放，数据已复制到 BSS */
 }
 
 static void icons_load(void) {

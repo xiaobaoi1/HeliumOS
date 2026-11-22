@@ -41,7 +41,7 @@ static int fs_read_dir(const char *path, struct fs_entry_info *entries, int max_
         for (int k = 0; k < count; k++) {
             if (strcmp(entries[k].name, ent.name) == 0) { dup = 1; break; }
         }
-        if (dup) break;
+        if (dup) continue;
 
         strncpy(entries[count].name, ent.name, sizeof(entries[0].name) - 1);
         entries[count].is_dir = (ent.attributes & 0x10) != 0;

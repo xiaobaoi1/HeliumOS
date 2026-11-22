@@ -768,6 +768,57 @@ static void test_slot_null(void) {
     }
 }
 
+/* 旧版 spawn_params：只提供 size + in_fd。
+ * 未覆盖的 out_fd 必须是 INHERIT，而不是 0（父进程 fs handle 0）。 */
+static void test_spawn_old_params(void) {
+    section("old spawn_params defaults");
+
+    const char *path = "SYS:/SPAWN_OLD.TXT";
+    int fd = fs_open(path, FS_O_WRONLY | FS_O_CREAT | FS_O_TRUNC);
+    if (fd != 0) {
+        printf("  [SKIP] first fs handle is %d, need 0\n", fd);
+        if (fd >= 0) fs_close(fd);
+        fs_unlink(path);
+        return;
+    }
+
+    struct old_spawn_params {
+        unsigned int size;
+        int in_fd;
+    } old = { sizeof(old), SPAWN_FD_INHERIT };
+
+    char *argv[] = { "ECHO", "SPW", NULL };
+    int h = proc_spawn("SYS:/ECHO", argv, (struct spawn_params *)&old);
+    if (h < 0) {
+        printf("  [SKIP] cannot spawn ECHO: %d\n", h);
+        fs_close(fd);
+        fs_unlink(path);
+        return;
+    }
+
+    int status = 0;
+    proc_wait(h, &status, 10000);
+    proc_close(h);
+    fs_close(fd);
+
+    int rfd = fs_open(path, FS_O_RDONLY);
+    char buf[64];
+    int n = 0;
+    if (rfd >= 0) {
+        n = fs_read(rfd, buf, sizeof(buf) - 1);
+        fs_close(rfd);
+    }
+    if (n < 0) n = 0;
+    buf[n] = '\0';
+
+    if (strstr(buf, "SPW") != NULL)
+        fail("old spawn_params out_fd", "child wrote to parent fd 0");
+    else
+        ok("old spawn_params out_fd inherited");
+
+    fs_unlink(path);
+}
+
 /* ---------- 主入口 ---------- */
 
 int main(int argc, char **argv) {
@@ -799,6 +850,7 @@ int main(int argc, char **argv) {
     test_spawn_stress();
     test_dev_vga();
     test_slot_null();
+    test_spawn_old_params();
 
     printf("\n");
     // tty_set_color(C_YELLOW, C_BLACK);

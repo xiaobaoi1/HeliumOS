@@ -292,9 +292,12 @@ $(DISK_IMG): $(KERNEL_ELF) $(USER_ELFS) $(USER_LIB_SOS) tcc-prepare $(BUILD_DIR)
 	
 
 # ==================== 运行目标 ====================
-# 默认运行 DISK
-run: $(ISO)
-	$(QEMU) -cdrom $(ISO) -serial stdio 
+# 默认运行 DISK（仅 ISO 没有硬盘，内核会 panic）
+run: run-disk
+
+# 旧式 ISO 启动入口，保留用于兼容
+run-iso: $(ISO)
+	$(QEMU) -cdrom $(ISO) -serial stdio
 
 # 运行硬盘镜像（测试文件系统时使用）
 run-disk: $(DISK_IMG)
@@ -460,5 +463,5 @@ third_party: $(BUILD_DIR)/bearssl/libbearssl.a $(SEVENZ_OBJS)
 image: $(DISK_IMG)
 
 # 声明伪目标
-.PHONY: all kernel user third_party image run run-disk debug debug-disk clean gdb pack run-net run-tcp $(DISK_IMG)
+.PHONY: all kernel user third_party image run run-iso run-disk debug debug-disk clean gdb pack run-net run-tcp $(DISK_IMG)
 -include $(wildcard $(BUILD_DIR)/*.d)

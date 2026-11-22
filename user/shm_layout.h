@@ -34,6 +34,9 @@ struct shm_hdr {
     volatile uint32_t pub_y1;
 };
 
+_Static_assert(sizeof(struct shm_hdr) == SHM_HDR_SIZE,
+               "shm_hdr must match SHM_HDR_SIZE");
+
 static inline uint32_t shm_total_size(int w, int h) {
     return SHM_HDR_SIZE + (uint32_t)w * (uint32_t)h * 4;
 }
