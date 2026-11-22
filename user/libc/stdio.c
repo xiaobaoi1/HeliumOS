@@ -16,12 +16,13 @@ struct __helio_file {
     unsigned int offset;    /* 当前文件偏移 */
     unsigned int pos;
     unsigned int buf_len;
+    int fd_is_libc;         /* 1 = fd 是 libc fd；0 = fd 是内核 fs_handle */
     char buf[FILE_BUF_SIZE];
 };
 
-FILE _stdin = {1, -1, 0, 0, 0, 0, 0, {0}};
-FILE _stdout = {2, -1, 0, 0, 0, 0, 0, {0}};
-FILE _stderr = {3, -1, 0, 0, 0, 0, 0, {0}};
+FILE _stdin = {1, -1, 0, 0, 0, 0, 0, 0, {0}};
+FILE _stdout = {2, -1, 0, 0, 0, 0, 0, 0, {0}};
+FILE _stderr = {3, -1, 0, 0, 0, 0, 0, 0, {0}};
 
 FILE *stdin = &_stdin;
 FILE *stdout = &_stdout;
@@ -45,6 +46,7 @@ FILE *fopen(const char *path, const char *mode) {
     f->offset = 0;
     f->pos = 0;
     f->buf_len = 0;
+    f->fd_is_libc = 0;      /* fopen() 保存的是 fs_handle */
     return f;
 }
 
@@ -66,6 +68,7 @@ FILE *fdopen(int fd, const char *mode) {
     f->offset = 0;
     f->pos = 0;
     f->buf_len = 0;
+    f->fd_is_libc = 1;      /* fdopen() 保存的是 libc fd */
     return f;
 }
 
@@ -73,7 +76,11 @@ int fflush(FILE *stream) {
     if (!stream) return 0;
     if (stream->type != 0) return 0;
     if (stream->buf_len > 0) {
-        int w = fs_write(stream->fd, stream->buf, stream->buf_len);
+        int w;
+        if (stream->fd_is_libc)
+            w = write(stream->fd, stream->buf, stream->buf_len);
+        else
+            w = fs_write(stream->fd, stream->buf, stream->buf_len);
         if (w != (int)stream->buf_len) stream->err = 1;
         else stream->offset += stream->buf_len;
         stream->buf_len = 0;
@@ -88,7 +95,10 @@ int fclose(FILE *stream) {
         return 0;
     }
     fflush(stream);
-    fs_close(stream->fd);
+    if (stream->fd_is_libc)
+        close(stream->fd);
+    else
+        fs_close(stream->fd);
     free(stream);
     return 0;
 }
@@ -117,14 +127,18 @@ unsigned int fread(void *ptr, unsigned int size, unsigned int nmemb, FILE *strea
     }
     
     if (stream->pos == stream->buf_len && total - done >= FILE_BUF_SIZE) {
-        int r = fs_read(stream->fd, dst + done, total - done);
+        int r = stream->fd_is_libc
+              ? read(stream->fd, dst + done, total - done)
+              : fs_read(stream->fd, dst + done, total - done);
         if (r <= 0) { stream->eof = 1; return done / size; }
         stream->offset += (done + r);
         return (done + r) / size;
     }
     
     stream->pos = 0;
-    int r = fs_read(stream->fd, stream->buf, FILE_BUF_SIZE);
+    int r = stream->fd_is_libc
+          ? read(stream->fd, stream->buf, FILE_BUF_SIZE)
+          : fs_read(stream->fd, stream->buf, FILE_BUF_SIZE);
     if (r <= 0) { stream->eof = 1; return done / size; }
     stream->buf_len = r;
     
@@ -175,7 +189,11 @@ int fseek(FILE *stream, long offset, int whence) {
     if (new_off < 0) return -1;
     
     if (stream->type == 0) {
-        if (fs_seek(stream->fd, new_off) < 0) return -1;
+        if (stream->fd_is_libc) {
+            if (lseek(stream->fd, new_off, SEEK_SET) < 0) return -1;
+        } else {
+            if (fs_seek(stream->fd, new_off) < 0) return -1;
+        }
     }
     
     stream->offset = new_off;
@@ -273,6 +291,7 @@ FILE *__stdio_create_from_handle(int handle, unsigned int offset) {
     f->offset = offset;
     f->pos = 0;
     f->buf_len = 0;
+    f->fd_is_libc = 0;      /* 参数是内核 fs_handle */
     return f;
 }
 
