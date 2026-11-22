@@ -91,6 +91,7 @@ static void open_photo_file(const char *path);
 static struct fm_win *open_folder_window(const char *path);
 static void desktop_refresh_icons(void);
 static void toggle_safeguard(void);
+static void close_menu_request(void);
 static void shm_publish(struct shm_hdr *h);
 static void shm_mark_rect(struct shm_hdr *h, int x0, int y0, int x1, int y1);
 static void open_context_menu(int x, int y);
@@ -2331,6 +2332,7 @@ static void desk_load_files(void) {
 }
 
 static void toggle_safeguard(void) {
+    if (g_menu_visible) close_menu_request();
     g_show_artifacts = !g_show_artifacts;
     desk_sel_clear();
     g_last_clicked_file = -1;

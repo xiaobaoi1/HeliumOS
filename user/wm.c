@@ -93,8 +93,8 @@ struct window {
 
     int shm_idx;
     unsigned int *pixels;
-    volatile uint64_t *counter;         /* 跨进程同步，必须 volatile */
-    uint64_t last_seen;
+    volatile uint32_t *counter;         /* 跨进程同步，必须 volatile */
+    uint32_t last_seen;
     struct shm_hdr *shm;
 
     unsigned int map_addr;
@@ -1781,7 +1781,7 @@ int main(int argc, char **argv) {
             if (!w->used) continue;
             if (w->minimized) { w->last_seen = *w->counter; shm_clear_pub(w); continue; }
 
-            uint64_t c = *w->counter;
+            uint32_t c = *w->counter;
             if (drag_win) { w->last_seen = c; shm_clear_pub(w); continue; }
 
             int pub_empty = 1;

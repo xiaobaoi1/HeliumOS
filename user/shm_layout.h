@@ -6,7 +6,7 @@
 /*
  * 窗口 shm 布局（term/app 与 WM 共享）：
  *
- *   offset 0:  uint64_t counter          每次发布后 ++
+ *   offset 0:  uint32_t counter          每次发布后 ++（i386 原子）
  *   offset 8:  uint32_t cur_x0..cur_y1   term 正在累积的脏区（WM 不读）
  *   offset 24: uint32_t pub_x0..pub_y1   已发布脏区（WM 读）
  *   offset 40: uint32_t pixels[w*h]      像素（32bpp）
@@ -23,7 +23,8 @@
 #define SHM_DIRTY_EMPTY  0xFFFFFFFFu
 
 struct shm_hdr {
-    volatile uint64_t counter;
+    volatile uint32_t counter;
+    volatile uint32_t counter_pad;   /* 保持 SHM_HDR_SIZE == 40 */
     volatile uint32_t cur_x0;
     volatile uint32_t cur_y0;
     volatile uint32_t cur_x1;
