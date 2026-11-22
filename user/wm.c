@@ -1256,6 +1256,8 @@ static void handle_mouse_press(int mx, int my,
 
         if (my >= by && my < by + CTRL_BTN_SIZE) {
             if (mx >= bx_close && mx < bx_close + CTRL_BTN_SIZE) {
+                dprintf(2, "WM: CLICK_CLOSE win id=%d title=%s\n",
+                        (int)(hit - g_wins), hit->title);
                 send_event(hit, WM_EV_CLOSE_REQUEST, 0, 0, 0, 0);
                 hit->closing = 1;
                 hit->close_tick = g_wm_tick;
@@ -1284,6 +1286,8 @@ static void handle_mouse_press(int mx, int my,
                 if (plus_hit) {
                     send_event(hit, WM_EV_NEW_TAB, 0, 0, 0, 0);
                 } else if (clicked && close_hit) {
+                    dprintf(2, "WM: CLICK_TAB_CLOSE win id=%d title=%s\n",
+                            (int)(clicked - g_wins), clicked->title);
                     send_event(clicked, WM_EV_CLOSE_REQUEST, 0, 0, 0, 0);
                     clicked->closing = 1;
                     clicked->close_tick = g_wm_tick;
@@ -1768,6 +1772,8 @@ int main(int argc, char **argv) {
             struct window *w = &g_wins[i];
             if (!w->used || !w->closing) continue;
             if (g_wm_tick - w->close_tick > 500) {
+                dprintf(2, "WM: CLOSE_TIMEOUT id=%d title=%s\n",
+                        (int)(w - g_wins), w->title);
                 destroy_window(w);
             }
         }

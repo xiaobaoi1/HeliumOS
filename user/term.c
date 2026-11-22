@@ -1049,6 +1049,8 @@ int main(int argc, char **argv) {
             } else if (ev.type == WM_EV_NEW_TAB) {
                 term_spawn_tab();
             } else if (ev.type == WM_EV_CLOSE_REQUEST) {
+                dprintf(2, "term: CLOSE pid=%d shm=%s\n",
+                        (int)proc_getpid(), g_my_shm_name);
                 struct wm_destroy_request dr;
                 dr.magic = WM_MAGIC;
                 dr.type = WM_REQ_DESTROY;
