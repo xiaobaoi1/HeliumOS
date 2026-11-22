@@ -2,6 +2,8 @@
 #include "syscall.h"
 #include "stdlib.h"
 #include "string.h"
+#include "errno.h"
+#include "unistd.h"
 #include <stdarg.h>
 
 #define FILE_BUF_SIZE 512
@@ -51,7 +53,11 @@ FILE *fdopen(int fd, const char *mode) {
     if (fd < 0) return NULL;
 
     FILE *f = (FILE*)malloc(sizeof(FILE));
-    if (!f) return NULL;
+    if (!f) {
+        errno = ENOMEM;
+        close(fd);
+        return NULL;
+    }
 
     f->type = 0;
     f->fd = fd;
